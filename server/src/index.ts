@@ -12,7 +12,6 @@ import { promptsRouter } from './prompts';
 import { presetsRouter } from './presets';
 import { preferencesRouter } from './preferences';
 import { automationsRouter, initScheduler } from './automations';
-import { uploadsRouter, serveUpload } from './uploads';
 import { adminRouter } from './admin';
 import { logger } from './logger';
 
@@ -83,14 +82,7 @@ app.route('/api/prompts', promptsRouter);
 app.route('/api/presets', presetsRouter);
 app.route('/api/preferences', preferencesRouter);
 app.route('/api/automations', automationsRouter);
-app.route('/api/uploads', uploadsRouter);
 app.route('/api/admin', adminRouter);
-
-// Auth-gated /uploads/* static serving
-app.get('/uploads/:filename{.+}', requireAuth, async (c) => {
-  const filename = c.req.param('filename');
-  return serveUpload(filename);
-});
 
 // Health check
 app.get('/health', async (c) => {
