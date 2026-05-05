@@ -5,12 +5,7 @@ export interface ContentPart {
   text: string;
 }
 
-export interface ImageContentPart {
-  type: 'image_url';
-  image_url: { url: string };
-}
-
-export type MessageContentPart = ContentPart | ImageContentPart;
+export type MessageContentPart = ContentPart;
 
 export interface ToolCall {
   id: string;
