@@ -49,6 +49,14 @@
 
 <style>
   .msg-content { max-width: 100%; min-width: 0; }
+
+  .msg-content.user {
+    background: var(--accent-subtle);
+    border: 1px solid rgba(124, 106, 247, 0.2);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+  }
+
   .user-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; }
   .image-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   .msg-image { max-width: 280px; max-height: 200px; border-radius: var(--radius-sm); object-fit: cover; cursor: pointer; }
