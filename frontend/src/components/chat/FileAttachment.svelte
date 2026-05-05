@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { api } from '$lib/api'; // still used for image uploads
   import { toast } from '../ui/Toast.svelte';
   import type { Attachment } from '$lib/types';
 
@@ -36,7 +35,9 @@
     'pdf','docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
   ]);
 
-  const MAX_TEXT_BYTES = 512 * 1024;   // 512 KB
+  const MAX_TEXT_BYTES = 512 * 1024;    // 512 KB
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;  // 10 MB
+  const MAX_BINARY_BYTES = 20 * 1024 * 1024; // 20 MB
 
   function isTextFile(file: File): boolean {
     if (file.type.startsWith('text/')) return true;
@@ -56,7 +57,11 @@
     try {
       for (const file of Array.from(files)) {
         if (file.type.startsWith('image/')) {
-          const { url } = await api.uploads.upload(file);
+          if (file.size > MAX_IMAGE_BYTES) {
+            toast(`${file.name} is too large (max 10 MB for images)`, 'error');
+            continue;
+          }
+          const url = await readAsDataUrl(file);
           onAdd({ type: 'image', name: file.name, url });
         } else if (isTextFile(file)) {
           if (file.size > MAX_TEXT_BYTES) {
@@ -66,7 +71,12 @@
           const content = await readText(file);
           onAdd({ type: 'text_file', name: file.name, content });
         } else if (isBinaryDocument(file)) {
-          onAdd({ type: 'file', name: file.name });
+          if (file.size > MAX_BINARY_BYTES) {
+            toast(`${file.name} is too large (max 20 MB for documents)`, 'error');
+            continue;
+          }
+          const url = await readAsDataUrl(file);
+          onAdd({ type: 'file', name: file.name, url });
         } else {
           toast(`Unsupported file type: ${file.name}`, 'error');
         }
@@ -84,6 +94,15 @@
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = () => reject(new Error('Failed to read file'));
       reader.readAsText(file);
+    });
+  }
+
+  function readAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
     });
   }
 
