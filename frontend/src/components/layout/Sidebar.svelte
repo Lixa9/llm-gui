@@ -17,10 +17,9 @@
     doSearch(searchQuery);
   }
 
-  async function newChat() {
-    const conv = await conversationsStore.create();
-    conversationsStore.setActive(conv.id);
-    window.location.hash = `#/chat/${conv.id}`;
+  function newChat() {
+    conversationsStore.setActive(null);
+    window.location.hash = '#/chat';
   }
 
   async function newFolder() {
