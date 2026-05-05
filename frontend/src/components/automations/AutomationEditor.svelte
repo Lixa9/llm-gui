@@ -2,6 +2,7 @@
   import Modal from '../ui/Modal.svelte';
   import Button from '../ui/Button.svelte';
   import Select from '../ui/Select.svelte';
+  import ModelPicker from '../chat/ModelPicker.svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import type { Automation, AutomationType, ScheduleUnit, ScheduledDefinition, PipelineDefinition, PipelineStep } from '$lib/types';
 
@@ -22,8 +23,6 @@
   let userPrompt = $state('');
   let steps = $state<PipelineStep[]>([{ model: '', system_prompt: '', user_prompt: '' }]);
   let saving = $state(false);
-
-  const modelOptions = $derived(modelsStore.models.map(m => ({ value: m.id, label: m.display_name })));
 
   const unitOptions = [
     { value: 'hours', label: 'hours' },
@@ -109,7 +108,7 @@
     </div>
     <div class="field">
       <label class="label" for="ae-model">Model</label>
-      <Select id="ae-model" bind:value={model} options={modelOptions} />
+      <ModelPicker bind:value={model} />
     </div>
     <div class="field">
       <label class="label" for="ae-sysprompt">System prompt</label>
@@ -129,7 +128,7 @@
               <button class="step-remove" onclick={() => removeStep(i)}>✕</button>
             {/if}
           </div>
-          <Select bind:value={step.model} options={modelOptions} />
+          <ModelPicker bind:value={step.model} />
           <textarea class="textarea" bind:value={step.system_prompt} rows={2} placeholder="System prompt…"></textarea>
           <textarea class="textarea" bind:value={step.user_prompt} rows={2} placeholder="User prompt…"></textarea>
         </div>
