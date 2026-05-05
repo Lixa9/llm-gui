@@ -70,9 +70,19 @@ Each message (user and assistant) has a context menu with:
 - **Delete**: remove this message and all subsequent messages in the conversation
 - **Fork from here**: create a new conversation containing all messages up to and including this one; the fork appears in the sidebar with a link back to the parent
 
-### Image Input
+### File Attachments
 
-The message composer accepts image attachments (drag-and-drop or file picker). Images are encoded as base64 `image_url` content parts and sent to LiteLLM as a multipart message. The UI displays a thumbnail inline. Whether the model supports images is a LiteLLM concern — the frontend passes the content structure through unchanged.
+The message composer accepts file attachments via drag-and-drop or a file picker. Three categories are handled:
+
+| Category | Formats | How it's sent |
+|---|---|---|
+| **Images** | jpg, png, gif, webp, svg, … | Uploaded to `/data/uploads/`, sent as `image_url` content part |
+| **Text files** | txt, md, csv, json, xml, yaml, html, and most code file extensions | Read client-side (max 512 KB), injected inline as `[File: name]\ncontent` text block — no server upload |
+| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Uploaded to `/data/uploads/`, sent as `image_url` content part with the server URL |
+
+Text files are inlined directly into the message so models that don't support file URLs still see the content. Binary documents are passed by URL — models that support PDF or Office file inputs (e.g. via LiteLLM's file handling) will process them; models that don't will return an error visible in the composer.
+
+All uploaded files are content-addressed (SHA-256) and deduplicated in `/data/uploads/`. The endpoint is auth-gated.
 
 ### Tool Call Display
 

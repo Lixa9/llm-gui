@@ -2,12 +2,12 @@
   import ModelPicker from './ModelPicker.svelte';
   import PromptPicker from './PromptPicker.svelte';
   import PresetPicker from './PresetPicker.svelte';
-  import ImageAttachment from './ImageAttachment.svelte';
+  import FileAttachment from './FileAttachment.svelte';
   import { chatStore } from '../../stores/chat.svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import { promptsStore } from '../../stores/prompts.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
-  import type { MessageContentPart, ChatPayload } from '$lib/types';
+  import type { MessageContentPart, ChatPayload, Attachment } from '$lib/types';
 
   interface Props {
     conversationId: string | null;
@@ -20,7 +20,7 @@
   let text = $state('');
   let selectedModel = $state('');
   let selectedPromptId = $state('');
-  let imageUrls = $state<string[]>([]);
+  let attachments = $state<Attachment[]>([]);
 
   $effect(() => {
     if (!selectedModel && preferencesStore.defaultModelId) {
@@ -40,9 +40,11 @@
 
   function buildContent(): MessageContentPart[] {
     const parts: MessageContentPart[] = [];
-    if (imageUrls.length > 0) {
-      for (const url of imageUrls) {
-        parts.push({ type: 'image_url', image_url: { url } });
+    for (const att of attachments) {
+      if (att.type === 'image' || att.type === 'file') {
+        parts.push({ type: 'image_url', image_url: { url: att.url } });
+      } else {
+        parts.push({ type: 'text', text: `[File: ${att.name}]\n${att.content}` });
       }
     }
     if (text.trim()) {
@@ -74,7 +76,7 @@
     };
 
     text = '';
-    imageUrls = [];
+    attachments = [];
     onSend(payload);
   }
 
@@ -103,10 +105,10 @@
   </div>
 
   <div class="composer-input-row">
-    <ImageAttachment
-      urls={imageUrls}
-      onAdd={(url) => imageUrls = [...imageUrls, url]}
-      onRemove={(url) => imageUrls = imageUrls.filter(u => u !== url)}
+    <FileAttachment
+      {attachments}
+      onAdd={(a) => attachments = [...attachments, a]}
+      onRemove={(name) => attachments = attachments.filter(a => a.name !== name)}
     />
     <textarea
       class="composer-textarea"
@@ -119,7 +121,7 @@
     {#if streaming}
       <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
     {:else}
-      <button class="send-btn" onclick={send} disabled={!text.trim() && imageUrls.length === 0} title="Send">
+      <button class="send-btn" onclick={send} disabled={!text.trim() && attachments.length === 0} title="Send">
         ↑ Send
       </button>
     {/if}

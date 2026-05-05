@@ -1,5 +1,20 @@
 export type Role = 'admin' | 'user';
 
+// File attachments in the composer
+export interface UploadedAttachment {
+  type: 'image' | 'file';  // 'file' covers PDF, Office, OpenDocument, and other binaries
+  name: string;
+  url: string;        // /uploads/... server path
+}
+
+export interface TextFileAttachment {
+  type: 'text_file';
+  name: string;
+  content: string;    // read client-side, injected as text content part
+}
+
+export type Attachment = UploadedAttachment | TextFileAttachment;
+
 export interface User {
   sub: string;
   email: string;
