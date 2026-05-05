@@ -1,42 +1,21 @@
 <script lang="ts">
-  import ModelPicker from './ModelPicker.svelte';
-  import PromptPicker from './PromptPicker.svelte';
-  import PresetPicker from './PresetPicker.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import { chatStore } from '../../stores/chat.svelte';
-  import { modelsStore } from '../../stores/models.svelte';
   import { promptsStore } from '../../stores/prompts.svelte';
-  import { preferencesStore } from '../../stores/preferences.svelte';
   import type { MessageContentPart, ChatPayload, Attachment } from '$lib/types';
 
   interface Props {
     conversationId: string | null;
+    selectedModel: string;
+    selectedPromptId: string;
     onSend: (payload: ChatPayload) => void;
     onStop: () => void;
     streaming: boolean;
   }
-  let { conversationId, onSend, onStop, streaming }: Props = $props();
+  let { conversationId, selectedModel, selectedPromptId, onSend, onStop, streaming }: Props = $props();
 
   let text = $state('');
-  let selectedModel = $state('');
-  let selectedPromptId = $state('');
   let attachments = $state<Attachment[]>([]);
-
-  $effect(() => {
-    if (!selectedModel && preferencesStore.defaultModelId) {
-      selectedModel = preferencesStore.defaultModelId;
-    } else if (!selectedModel && modelsStore.models.length > 0) {
-      selectedModel = modelsStore.models[0].id;
-    }
-  });
-
-  function handlePresetSelect(presetId: string) {
-    if (!presetId) return;
-    const preset = modelsStore.presets.find(p => p.id === presetId);
-    if (preset) {
-      selectedModel = preset.base_model_id;
-    }
-  }
 
   function buildContent(): MessageContentPart[] {
     const parts: MessageContentPart[] = [];
@@ -44,10 +23,9 @@
       if (att.type === 'image') {
         parts.push({ type: 'image_url', image_url: { url: att.url } });
       } else if (att.type === 'file') {
-        // Binary document — content is not extractable client-side; tell the AI the file name
         parts.push({ type: 'text', text: `[Attached file: ${att.name}]` });
       } else {
-        parts.push({ type: 'text', text: `[File: ${att.name}]\n${att.content}` });
+        parts.push({ type: 'text', text: `<file name="${att.name}">\n${att.content}\n</file>` });
       }
     }
     if (text.trim()) {
@@ -92,21 +70,6 @@
 </script>
 
 <div class="composer">
-  <div class="composer-pickers">
-    <div class="picker-group">
-      <span class="picker-label">Model</span>
-      <ModelPicker bind:value={selectedModel} />
-    </div>
-    <div class="picker-group">
-      <span class="picker-label">Prompt</span>
-      <PromptPicker bind:value={selectedPromptId} />
-    </div>
-    <div class="picker-group">
-      <span class="picker-label">Preset</span>
-      <PresetPicker onselect={handlePresetSelect} />
-    </div>
-  </div>
-
   <div class="composer-input-row">
     <FileAttachment
       {attachments}
@@ -136,24 +99,8 @@
     border-top: 1px solid var(--border);
     background: var(--bg-surface);
     padding: 10px 16px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
     flex-shrink: 0;
   }
-
-  .composer-pickers {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .picker-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-  .picker-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
   .composer-input-row {
     display: flex;

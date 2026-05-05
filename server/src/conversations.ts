@@ -113,6 +113,14 @@ conversationsRouter.patch('/:id', async (c) => {
   return c.json(serializeConversation(updated));
 });
 
+// Delete all (user's own conversations)
+conversationsRouter.delete('/', (c) => {
+  const user = c.get('user') as SessionPayload;
+  const db = getDb();
+  db.query('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
+  return c.body(null, 204);
+});
+
 // Delete
 conversationsRouter.delete('/:id', (c) => {
   const user = c.get('user') as SessionPayload;

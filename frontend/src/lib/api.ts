@@ -51,6 +51,7 @@ export const api = {
     update: (id: string, data: Partial<Pick<Conversation, 'title' | 'folder_id' | 'pinned' | 'custom_system_prompt'>>) =>
       patch<Conversation>(`/api/conversations/${id}`, data),
     delete: (id: string) => del<void>(`/api/conversations/${id}`),
+    deleteAll: () => del<void>('/api/conversations'),
     duplicate: (id: string) => post<Conversation>(`/api/conversations/${id}/duplicate`),
     fork: (id: string, messageId: string) =>
       post<Conversation>(`/api/conversations/${id}/fork`, { message_id: messageId }),
