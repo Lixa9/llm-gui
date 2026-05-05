@@ -17,13 +17,46 @@
   let { conversationId }: Props = $props();
 
   let editingMessage = $state<Message | null>(null);
-  let selectedModel = $state('');
-  // '__preset__' = system prompt comes from the active preset; '' = none; else = library prompt ID
-  let selectedPromptId = $state('');
-  let selectedPresetId = $state('');
+
+  // Override state — null means "use derived/auto value"
+  let _presetId = $state<string | null>(null);
+  let _modelId = $state<string | null>(null);
+  let _promptId = $state<string | null>(null);
   let skipNextLoad = false;
 
-  // Resolved system prompt values passed to Composer
+  // Derived picker values — always correct regardless of async load order
+  const selectedPresetId = $derived.by((): string => {
+    if (_presetId !== null) return _presetId;
+    if (!conversationId) {
+      const defId = preferencesStore.defaultPresetId;
+      if (defId && modelsStore.presets.length > 0) {
+        if (modelsStore.presets.find(p => p.id === defId)) return defId;
+      }
+      return '';
+    }
+    return conversationsStore.list.find(c => c.id === conversationId)?.preset_id ?? '';
+  });
+
+  const selectedModel = $derived.by((): string => {
+    if (_modelId !== null) return _modelId;
+    if (selectedPresetId) {
+      const preset = modelsStore.presets.find(p => p.id === selectedPresetId);
+      if (preset) return preset.base_model_id;
+    }
+    if (conversationId) {
+      const conv = conversationsStore.list.find(c => c.id === conversationId);
+      if (conv?.model_id) return conv.model_id;
+    }
+    return preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
+  });
+
+  const selectedPromptId = $derived.by((): string => {
+    if (_promptId !== null) return _promptId;
+    if (selectedPresetId) return '__preset__';
+    if (!conversationId) return '';
+    return conversationsStore.list.find(c => c.id === conversationId)?.system_prompt_id ?? '';
+  });
+
   const systemPromptText = $derived(
     selectedPromptId === '__preset__'
       ? (modelsStore.presets.find(p => p.id === selectedPresetId)?.system_prompt ?? '')
@@ -35,57 +68,26 @@
     selectedPromptId && selectedPromptId !== '__preset__' ? selectedPromptId : undefined
   );
 
-  // Label shown in PromptPicker when a preset is active
   const activePresetLabel = $derived(
     selectedPresetId
       ? (modelsStore.presets.find(p => p.id === selectedPresetId)?.name ?? '')
       : undefined
   );
 
-  // Load/restore settings when switching to an existing conversation.
-  // skipNextLoad is true when we just created the conversation — settings are
-  // already correct from the new-chat state, no need to read them back.
+  // Reset overrides when conversation changes so $derived reads from the new context
   $effect(() => {
-    if (!conversationId) {
+    const cid = conversationId;
+    _presetId = null;
+    _modelId = null;
+    _promptId = null;
+    if (!cid) {
       chatStore.clear();
       return;
     }
     if (!skipNextLoad) {
-      const conv = conversationsStore.list.find(c => c.id === conversationId);
-      if (conv) {
-        selectedModel = conv.model_id ?? preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
-        selectedPresetId = conv.preset_id ?? '';
-        selectedPromptId = conv.preset_id ? '__preset__' : (conv.system_prompt_id ?? '');
-      }
-      chatStore.loadMessages(conversationId);
+      chatStore.loadMessages(cid);
     }
     skipNextLoad = false;
-  });
-
-  // Apply default preset on new chat screen — re-runs whenever defaults or presets load
-  $effect(() => {
-    if (conversationId) return;
-    const defaultPresetId = preferencesStore.defaultPresetId;
-    const presets = modelsStore.presets;
-    if (defaultPresetId && presets.length > 0) {
-      const preset = presets.find(p => p.id === defaultPresetId);
-      if (preset) {
-        selectedPresetId = defaultPresetId;
-        selectedModel = preset.base_model_id;
-        selectedPromptId = '__preset__';
-        return;
-      }
-    }
-    selectedPresetId = '';
-    selectedPromptId = '';
-  });
-
-  // Fallback: set model when none is selected yet
-  $effect(() => {
-    if (!selectedModel) {
-      if (preferencesStore.defaultModelId) selectedModel = preferencesStore.defaultModelId;
-      else if (modelsStore.models.length > 0) selectedModel = modelsStore.models[0].id;
-    }
   });
 
   function saveConvSettings() {
@@ -100,36 +102,30 @@
   }
 
   function handleModelChange(newModel: string) {
-    selectedModel = newModel;
     if (selectedPresetId) {
       const preset = modelsStore.presets.find(p => p.id === selectedPresetId);
       if (preset && preset.base_model_id !== newModel) {
-        selectedPresetId = '';
-        if (selectedPromptId === '__preset__') selectedPromptId = '';
+        _presetId = '';
+        _promptId = '';
       }
     }
+    _modelId = newModel;
     saveConvSettings();
   }
 
   function handlePresetChange(presetId: string) {
-    selectedPresetId = presetId;
-    if (presetId) {
-      const preset = modelsStore.presets.find(p => p.id === presetId);
-      if (preset) {
-        selectedModel = preset.base_model_id;
-        selectedPromptId = '__preset__';
-      }
-    } else {
-      selectedPromptId = '';
-    }
+    _presetId = presetId;
+    _modelId = null;
+    _promptId = null;
     saveConvSettings();
   }
 
   function handlePromptChange(promptId: string) {
-    selectedPromptId = promptId;
     if (promptId !== '__preset__' && selectedPresetId) {
-      selectedPresetId = '';
+      if (_modelId === null) _modelId = selectedModel;
+      _presetId = '';
     }
+    _promptId = promptId;
     saveConvSettings();
   }
 
@@ -207,15 +203,15 @@
   <div class="chat-toolbar">
     <div class="picker-group">
       <span class="picker-label">Prompt</span>
-      <PromptPicker bind:value={selectedPromptId} onchange={handlePromptChange} presetLabel={activePresetLabel} />
+      <PromptPicker value={selectedPromptId} onchange={handlePromptChange} presetLabel={activePresetLabel} />
     </div>
     <div class="picker-group">
       <span class="picker-label">Model</span>
-      <ModelPicker bind:value={selectedModel} onchange={handleModelChange} />
+      <ModelPicker value={selectedModel} onchange={handleModelChange} />
     </div>
     <div class="picker-group">
       <span class="picker-label">Preset</span>
-      <PresetPicker bind:value={selectedPresetId} onchange={handlePresetChange} />
+      <PresetPicker value={selectedPresetId} onchange={handlePresetChange} />
     </div>
   </div>
 
