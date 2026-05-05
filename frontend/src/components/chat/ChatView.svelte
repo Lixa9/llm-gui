@@ -42,19 +42,23 @@
       : undefined
   );
 
-  // Load/restore settings when switching to an existing conversation
+  // Load/restore settings when switching to an existing conversation.
+  // skipNextLoad is true when we just created the conversation — settings are
+  // already correct from the new-chat state, no need to read them back.
   $effect(() => {
     if (!conversationId) {
       chatStore.clear();
       return;
     }
-    const conv = conversationsStore.list.find(c => c.id === conversationId);
-    if (conv) {
-      selectedModel = conv.model_id ?? preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
-      selectedPresetId = conv.preset_id ?? '';
-      selectedPromptId = conv.preset_id ? '__preset__' : (conv.system_prompt_id ?? '');
+    if (!skipNextLoad) {
+      const conv = conversationsStore.list.find(c => c.id === conversationId);
+      if (conv) {
+        selectedModel = conv.model_id ?? preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
+        selectedPresetId = conv.preset_id ?? '';
+        selectedPromptId = conv.preset_id ? '__preset__' : (conv.system_prompt_id ?? '');
+      }
+      chatStore.loadMessages(conversationId);
     }
-    if (!skipNextLoad) chatStore.loadMessages(conversationId);
     skipNextLoad = false;
   });
 
