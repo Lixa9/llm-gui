@@ -52,7 +52,7 @@ LiteLLM proxy  ← external container, user's existing setup
 
 | View | Purpose |
 |---|---|
-| **Chat** | Streaming message display with stop button; tool call accordion (collapsed by default); per-message actions (edit, regenerate, copy to clipboard, delete, fork from here); image attachment input; model / preset picker; prompt picker |
+| **Chat** | Streaming message display with stop button; tool call accordion (collapsed by default); per-message actions (edit, regenerate, copy to clipboard, delete, fork from here); image attachment input; searchable model picker; preset picker; prompt picker |
 | **Conversations** | Sidebar with folder tree + full-text search across message content; per-conversation actions: pin, duplicate, move to folder, delete, rename; forked conversations shown with origin link |
 | **Prompt Library** | Personal named system prompts (create, edit, delete) + read-only admin-seeded prompts from `prompts.yaml`; all displayed in cleartext; select when starting a conversation |
 | **Model Presets** | Create/edit/delete personal model presets (base model + system prompt + display name); selecting a preset in the composer pre-fills the model and system prompt for that conversation |
@@ -78,9 +78,9 @@ The message composer accepts file attachments via drag-and-drop or a file picker
 |---|---|---|
 | **Images** | jpg, png, gif, webp, svg, … | Uploaded to `/data/uploads/`, sent as `image_url` content part with the server URL |
 | **Text files** | txt, md, csv, json, xml, yaml, html, and most code file extensions | Read client-side (max 512 KB), injected inline as `[File: name]\ncontent` text block — no server upload |
-| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Read client-side (max 20 MB), base64-encoded, sent as `image_url` content part with a `data:mimetype;base64,...` URL — no server upload |
+| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Shown as a chip in the composer; the AI is told the filename via a `[Attached file: name.ext]` text annotation — content is not extracted client-side |
 
-Binary documents are sent as inline base64 data so the inference engine receives the actual file content rather than a URL it may not be able to fetch. Models that support the relevant format (e.g. Claude and GPT-4o for PDF) will process the content; models that don't will return an error visible in the composer.
+Binary documents cannot be meaningfully read by the inference engine without server-side text extraction, which is not implemented. Attaching a PDF or Word file records its presence in the conversation but does not give the model access to the content. For document Q&A, upload files directly to LiteLLM's `/files` endpoint or use a RAG pipeline upstream.
 
 Images are still uploaded to the server so they can be displayed as thumbnails in the chat history and referenced across sessions. Upload files are content-addressed (SHA-256), deduplicated in `/data/uploads/`, and served auth-gated.
 

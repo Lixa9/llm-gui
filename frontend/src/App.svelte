@@ -37,16 +37,8 @@
     const onHashChange = () => { hash = window.location.hash; };
     window.addEventListener('hashchange', onHashChange);
 
-    // Boot sequence
-    authStore.init().then(() => {
-      if (!authStore.user) return;
-      return Promise.all([
-        conversationsStore.load(),
-        modelsStore.load(),
-        promptsStore.load(),
-        preferencesStore.load(),
-      ]);
-    });
+    // Boot sequence — just resolve auth; store loading is driven by the $effect below
+    authStore.init();
 
     // Sync active conversation from URL
     const syncActive = () => {
@@ -62,6 +54,16 @@
       window.removeEventListener('hashchange', onHashChange);
       window.removeEventListener('hashchange', syncActive);
     };
+  });
+
+  // Load all stores once the user is authenticated (covers both initial load and post-login)
+  $effect(() => {
+    if (authStore.user) {
+      conversationsStore.load();
+      modelsStore.load();
+      promptsStore.load();
+      preferencesStore.load();
+    }
   });
 </script>
 

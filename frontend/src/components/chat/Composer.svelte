@@ -41,8 +41,11 @@
   function buildContent(): MessageContentPart[] {
     const parts: MessageContentPart[] = [];
     for (const att of attachments) {
-      if (att.type === 'image' || att.type === 'file') {
+      if (att.type === 'image') {
         parts.push({ type: 'image_url', image_url: { url: att.url } });
+      } else if (att.type === 'file') {
+        // Binary document — content is not extractable client-side; tell the AI the file name
+        parts.push({ type: 'text', text: `[Attached file: ${att.name}]` });
       } else {
         parts.push({ type: 'text', text: `[File: ${att.name}]\n${att.content}` });
       }
