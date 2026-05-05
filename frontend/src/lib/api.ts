@@ -103,21 +103,7 @@ export const api = {
     runs: (id: string) => get<AutomationRun[]>(`/api/automations/${id}/runs`),
   },
 
-  uploads: {
-    upload: async (file: File): Promise<{ url: string }> => {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/uploads', {
-        method: 'POST',
-        body: fd,
-        credentials: 'same-origin',
-      });
-      if (!res.ok) throw new HttpError(res.status, res.statusText);
-      return res.json() as Promise<{ url: string }>;
-    },
-  },
-
-  preferences: {
+preferences: {
     get: () => get<UserPreferences>('/api/preferences'),
     set: (key: string, value: string) => put<void>(`/api/preferences/${key}`, { value }),
   },

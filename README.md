@@ -1,6 +1,6 @@
 # LLM Chat Frontend — Design Document
 
-> This file is a design document, not a usage guide. It describes the architecture, data model, configuration, and implementation decisions behind this project.
+> **Work in progress.** This is a design document, not a usage guide. It describes the architecture, data model, configuration, and implementation decisions behind this project. Some features described here are planned but not yet implemented.
 
 ## Context
 
@@ -52,7 +52,7 @@ LiteLLM proxy  ← external container, user's existing setup
 
 | View | Purpose |
 |---|---|
-| **Chat** | Streaming message display with stop button; tool call accordion (collapsed by default); per-message actions (edit, regenerate, copy to clipboard, delete, fork from here); image attachment input; searchable model picker; preset picker; prompt picker |
+| **Chat** | Streaming message display with stop button; tool call accordion (collapsed by default); per-message actions (edit, regenerate, copy to clipboard, delete, fork from here); searchable model picker; preset picker; prompt picker |
 | **Conversations** | Sidebar with folder tree + full-text search across message content; per-conversation actions: pin, duplicate, move to folder, delete, rename; forked conversations shown with origin link |
 | **Prompt Library** | Personal named system prompts (create, edit, delete) + read-only admin-seeded prompts from `prompts.yaml`; all displayed in cleartext; select when starting a conversation |
 | **Model Presets** | Create/edit/delete personal model presets (base model + system prompt + display name); selecting a preset in the composer pre-fills the model and system prompt for that conversation |
@@ -72,17 +72,7 @@ Each message (user and assistant) has a context menu with:
 
 ### File Attachments
 
-The message composer accepts file attachments via drag-and-drop or a file picker. Three categories are handled:
-
-| Category | Formats | How it's sent |
-|---|---|---|
-| **Images** | jpg, png, gif, webp, svg, … | Uploaded to `/data/uploads/`, sent as `image_url` content part with the server URL |
-| **Text files** | txt, md, csv, json, xml, yaml, html, and most code file extensions | Read client-side (max 512 KB), injected inline as `[File: name]\ncontent` text block — no server upload |
-| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Shown as a chip in the composer; the AI is told the filename via a `[Attached file: name.ext]` text annotation — content is not extracted client-side |
-
-Binary documents cannot be meaningfully read by the inference engine without server-side text extraction, which is not implemented. Attaching a PDF or Word file records its presence in the conversation but does not give the model access to the content. For document Q&A, upload files directly to LiteLLM's `/files` endpoint or use a RAG pipeline upstream.
-
-Images are still uploaded to the server so they can be displayed as thumbnails in the chat history and referenced across sessions. Upload files are content-addressed (SHA-256), deduplicated in `/data/uploads/`, and served auth-gated.
+> **Not yet implemented.** File and image attachments are planned but currently not available in the composer. The server-side upload endpoint (`/api/uploads`) exists but is not wired to the UI.
 
 ### Tool Call Display
 
@@ -297,15 +287,13 @@ Only user-generated data lives in the DB. All config is YAML.
 | `conversation_folders` | `id`, `owner_sub`, `name`, `parent_id` (FK → self, nullable for root folders), `created_at` |
 | `model_presets` | `id`, `owner_sub`, `name`, `base_model_id`, `system_prompt` (text), `created_at` |
 | `conversations` | `id`, `owner_sub`, `title`, `title_auto` (bool), `model_id`, `system_prompt_id` (FK nullable — library prompt), `custom_system_prompt` (text nullable — one-off inline prompt; takes precedence over `system_prompt_id`), `folder_id` (FK → `conversation_folders`, nullable), `pinned` (bool, default false), `forked_from_id` (FK nullable), `forked_at_message_id` (FK nullable), `created_at` |
-| `messages` | `id`, `conversation_id`, `role`, `content` (JSON multipart — text + image_url parts), `tool_calls` (JSON), `tool_results` (JSON), `model`, `tokens_in`, `tokens_out`, `status` (done/aborted), `timestamp`, `edited_at` (nullable — set when content is manually edited; triggers "edited" indicator in UI) |
+| `messages` | `id`, `conversation_id`, `role`, `content` (JSON array of text parts), `tool_calls` (JSON), `tool_results` (JSON), `model`, `tokens_in`, `tokens_out`, `status` (done/aborted), `timestamp`, `edited_at` (nullable — set when content is manually edited; triggers "edited" indicator in UI) |
 | `messages_fts` | FTS5 virtual table over `messages.content`; kept in sync via SQLite triggers; search scoped to `owner_sub` via join |
 | `system_prompts` | `id`, `owner_sub` (null = admin-seeded from YAML), `name`, `content` (plaintext), `visible_to` (JSON roles array, null = personal), `created_at`, `deleted_at` (nullable — soft-delete for YAML-removed entries) |
 | `automations` | `id`, `owner_sub` (null = system/YAML-seeded), `name`, `type` (scheduled/pipeline), `definition` (JSON), `enabled`, `created_at`, `deleted_at` (nullable) |
 | `automation_runs` | `id`, `automation_id`, `started_at`, `conversation_id`, `status`, `error` |
 
-**Image storage**: images are not stored as base64 in SQLite. On upload, the server writes the file to `/data/uploads/[sha256].[ext]` and stores the path in the `content` JSON part (`{"type": "image_url", "image_url": {"url": "/uploads/[sha256].[ext]"}}`). The server serves `/uploads/*` as static files (auth-gated). This keeps SQLite lean.
-
-**Forking**: when a user forks from message N, a new conversation row is inserted with `forked_from_id` and `forked_at_message_id` set. Messages up to N are copied into the new conversation (image paths are shared, not duplicated). The sidebar displays a "forked from [parent title]" indicator.
+**Forking**: when a user forks from message N, a new conversation row is inserted with `forked_from_id` and `forked_at_message_id` set. Messages up to N are copied into the new conversation. The sidebar displays a "forked from [parent title]" indicator.
 
 **Duplicate**: duplicating a conversation copies all messages into a new conversation row with no `forked_from_id` set (it is a standalone copy, not a fork). Title gets " (copy)" appended; `title_auto = false`.
 
@@ -400,7 +388,7 @@ LiteLLM's streaming format for tool calls follows the OpenAI delta protocol (`to
 
 ### File attachments and RAG
 
-Image attachments are in scope (stored in `/data/uploads/`, sent as `image_url` content parts). Document RAG (PDFs, text files) is out of scope — if LiteLLM exposes a `/files` endpoint the user can upload there directly; otherwise RAG is a LiteLLM-side concern.
+> **Not yet implemented.** File and image attachments are planned for a future release. Document RAG is out of scope for this container — if LiteLLM exposes a `/files` endpoint the user can upload there directly; otherwise RAG is a LiteLLM-side concern.
 
 ### YAML write-back and read-only mounts
 

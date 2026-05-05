@@ -13,20 +13,7 @@
   const text = $derived(
     streaming && streamingText != null
       ? streamingText
-      : content
-          .filter((p): p is import('$lib/types').ContentPart => p.type === 'text')
-          .map(p => p.text)
-          .join('\n'),
-  );
-
-  const images = $derived(
-    content.filter((p): p is import('$lib/types').ImageContentPart =>
-      p.type === 'image_url' && (
-        p.image_url.url.startsWith('/') ||
-        /^https?:\/\//.test(p.image_url.url) ||
-        p.image_url.url.startsWith('data:image/')
-      )
-    ),
+      : content.filter(p => p.type === 'text').map(p => p.text).join('\n'),
   );
 
   const rendered = $derived(role === 'assistant' ? renderMarkdown(text) : null);
@@ -36,13 +23,6 @@
   {#if role === 'assistant'}
     <div class="prose" class:streaming>{@html rendered}</div>
   {:else}
-    {#if images.length > 0}
-      <div class="image-grid">
-        {#each images as img}
-          <img src={img.image_url.url} alt="attachment" class="msg-image" />
-        {/each}
-      </div>
-    {/if}
     <span class="user-text">{text}</span>
   {/if}
 </div>
@@ -58,7 +38,5 @@
   }
 
   .user-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; }
-  .image-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-  .msg-image { max-width: 280px; max-height: 200px; border-radius: var(--radius-sm); object-fit: cover; cursor: pointer; }
   .prose { font-size: 14px; }
 </style>
