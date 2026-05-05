@@ -15,4 +15,15 @@
   }
 
   export function getToasts() { return toasts; }
+
+  export async function withToast<T>(fn: () => Promise<T>, successMsg?: string): Promise<T> {
+    try {
+      const result = await fn();
+      if (successMsg) toast(successMsg, 'success');
+      return result;
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      throw e;
+    }
+  }
 </script>

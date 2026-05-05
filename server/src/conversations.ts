@@ -66,9 +66,9 @@ conversationsRouter.post('/', async (c) => {
   const db = getDb();
   const id = generateId();
   db.query(
-    `INSERT INTO conversations (id, owner_sub, model_id, system_prompt_id, custom_system_prompt, folder_id)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, user.sub, body.model_id ?? null, body.system_prompt_id ?? null, body.custom_system_prompt ?? null, body.folder_id ?? null);
+    `INSERT INTO conversations (id, owner_sub, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, user.sub, body.model_id ?? null, body.preset_id ?? null, body.system_prompt_id ?? null, body.custom_system_prompt ?? null, body.folder_id ?? null);
   const row = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(id)!;
   return c.json(serializeConversation(row), 201);
 });
@@ -103,6 +103,8 @@ conversationsRouter.patch('/:id', async (c) => {
   if (body.pinned !== undefined) { updates.push('pinned=?'); vals.push(body.pinned ? 1 : 0); }
   if (body.custom_system_prompt !== undefined) { updates.push('custom_system_prompt=?'); vals.push(body.custom_system_prompt); }
   if (body.model_id !== undefined) { updates.push('model_id=?'); vals.push(body.model_id); }
+  if (body.preset_id !== undefined) { updates.push('preset_id=?'); vals.push(body.preset_id); }
+  if (body.system_prompt_id !== undefined) { updates.push('system_prompt_id=?'); vals.push(body.system_prompt_id); }
 
   if (updates.length > 0) {
     vals.push(id);
@@ -141,9 +143,9 @@ conversationsRouter.post('/:id/duplicate', (c) => {
 
   const newId = generateId();
   db.query(
-    `INSERT INTO conversations (id, owner_sub, title, model_id, system_prompt_id, custom_system_prompt, folder_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(newId, user.sub, `${src.title} (copy)`, src.model_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
+    `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(newId, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
 
   // Copy messages
   const msgs = db.query<MessageRow, [string]>('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp').all(src.id);
@@ -170,9 +172,9 @@ conversationsRouter.post('/:id/fork', async (c) => {
 
   const newId = generateId();
   db.query(
-    `INSERT INTO conversations (id, owner_sub, title, model_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(newId, user.sub, `Fork of: ${src.title}`, src.model_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
+    `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(newId, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
 
   // Copy messages up to and including the fork point
   const msgs = db.query<MessageRow, [string]>(
