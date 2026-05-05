@@ -1,0 +1,12 @@
+prompts:
+  - name: "Concise assistant"
+    content: "You are a helpful assistant. Keep responses short and to the point."
+    visible_to: [admin, user]
+
+  - name: "Code reviewer"
+    content: "You are an expert code reviewer. Focus on correctness, security, and clarity."
+    visible_to: [admin, user]
+
+  - name: "Raw debug mode"
+    content: "Respond with no formatting. Output raw information only."
+    visible_to: [admin]

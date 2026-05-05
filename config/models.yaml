@@ -1,0 +1,20 @@
+models:
+  - id: "gpt-4o"
+    display_name: "GPT-4o"
+    show_tool_calls: true
+    allowed_roles: [admin, user]
+
+  - id: "gpt-4o-mini"
+    display_name: "GPT-4o Mini"
+    show_tool_calls: true
+    allowed_roles: [admin, user]
+
+  - id: "claude-opus-4-7"
+    display_name: "Claude Opus"
+    show_tool_calls: false
+    allowed_roles: [admin, user]
+
+  - id: "claude-sonnet-4-6"
+    display_name: "Claude Sonnet"
+    show_tool_calls: true
+    allowed_roles: [admin, user]
