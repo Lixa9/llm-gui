@@ -1,8 +1,7 @@
 <script lang="ts">
-  import FileAttachment from './FileAttachment.svelte';
   import { chatStore } from '../../stores/chat.svelte';
   import { promptsStore } from '../../stores/prompts.svelte';
-  import type { MessageContentPart, ChatPayload, Attachment } from '$lib/types';
+  import type { ChatPayload } from '$lib/types';
 
   interface Props {
     conversationId: string | null;
@@ -15,30 +14,10 @@
   let { conversationId, selectedModel, selectedPromptId, onSend, onStop, streaming }: Props = $props();
 
   let text = $state('');
-  let attachments = $state<Attachment[]>([]);
-
-  function buildContent(): MessageContentPart[] {
-    const parts: MessageContentPart[] = [];
-    for (const att of attachments) {
-      if (att.type === 'image') {
-        parts.push({ type: 'image_url', image_url: { url: att.url } });
-      } else if (att.type === 'file') {
-        // Label so the AI knows the filename, then the raw base64 data for models that can read it
-        parts.push({ type: 'text', text: `[Attached file: ${att.name}]` });
-        parts.push({ type: 'image_url', image_url: { url: att.url } });
-      } else {
-        parts.push({ type: 'text', text: `<file name="${att.name}">\n${att.content}\n</file>` });
-      }
-    }
-    if (text.trim()) {
-      parts.push({ type: 'text', text: text.trim() });
-    }
-    return parts;
-  }
 
   function send() {
-    const content = buildContent();
-    if (content.length === 0 || !selectedModel) return;
+    const trimmed = text.trim();
+    if (!trimmed || !selectedModel) return;
 
     const systemPrompt = selectedPromptId
       ? promptsStore.prompts.find(p => p.id === selectedPromptId)?.content
@@ -55,11 +34,10 @@
         tool_calls: m.tool_calls ?? undefined,
         tool_results: m.tool_results ?? undefined,
       })),
-      new_user_message: { content },
+      new_user_message: { content: [{ type: 'text', text: trimmed }] },
     };
 
     text = '';
-    attachments = [];
     onSend(payload);
   }
 
@@ -72,28 +50,21 @@
 </script>
 
 <div class="composer">
-  <div class="composer-input-row">
-    <FileAttachment
-      {attachments}
-      onAdd={(a) => attachments = [...attachments, a]}
-      onRemove={(name) => attachments = attachments.filter(a => a.name !== name)}
-    />
-    <textarea
-      class="composer-textarea"
-      bind:value={text}
-      placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-      rows={1}
-      onkeydown={handleKeydown}
-      disabled={streaming}
-    ></textarea>
-    {#if streaming}
-      <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
-    {:else}
-      <button class="send-btn" onclick={send} disabled={!text.trim() && attachments.length === 0} title="Send">
-        ↑ Send
-      </button>
-    {/if}
-  </div>
+  <textarea
+    class="composer-textarea"
+    bind:value={text}
+    placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+    rows={1}
+    onkeydown={handleKeydown}
+    disabled={streaming}
+  ></textarea>
+  {#if streaming}
+    <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
+  {:else}
+    <button class="send-btn" onclick={send} disabled={!text.trim()} title="Send">
+      ↑ Send
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -101,13 +72,10 @@
     border-top: 1px solid var(--border);
     background: var(--bg-surface);
     padding: 10px 16px 14px;
-    flex-shrink: 0;
-  }
-
-  .composer-input-row {
     display: flex;
     align-items: flex-end;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .composer-textarea {

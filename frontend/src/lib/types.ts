@@ -1,17 +1,5 @@
 export type Role = 'admin' | 'user';
 
-// File attachments in the composer
-export type UploadedAttachment =
-  | { type: 'image'; name: string; url: string }  // base64 data URL, sent as image_url
-  | { type: 'file'; name: string; url: string };  // base64 data URL, sent with text annotation + image_url
-
-export interface TextFileAttachment {
-  type: 'text_file';
-  name: string;
-  content: string;    // read client-side, injected as text content part
-}
-
-export type Attachment = UploadedAttachment | TextFileAttachment;
 
 export interface User {
   sub: string;
@@ -25,12 +13,7 @@ export interface ContentPart {
   text: string;
 }
 
-export interface ImageContentPart {
-  type: 'image_url';
-  image_url: { url: string };
-}
-
-export type MessageContentPart = ContentPart | ImageContentPart;
+export type MessageContentPart = ContentPart;
 
 export interface ToolCall {
   id: string;
