@@ -16,7 +16,7 @@ services:
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
       # OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
       # Only needed if LiteLLM requires authentication
-      # LITELLM_API_KEY: ${LITELLM_API_KEY}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
       # Optional — enable a local admin account (omit both to disable)
       # Accepts plain text or an argon2/bcrypt hash for LOCAL_ADMIN_PASSWORD
       LOCAL_ADMIN_USERNAME: admin

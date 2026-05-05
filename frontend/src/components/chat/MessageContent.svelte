@@ -20,7 +20,13 @@
   );
 
   const images = $derived(
-    content.filter((p): p is import('$lib/types').ImageContentPart => p.type === 'image_url'),
+    content.filter((p): p is import('$lib/types').ImageContentPart =>
+      p.type === 'image_url' && (
+        p.image_url.url.startsWith('/') ||
+        /^https?:\/\//.test(p.image_url.url) ||
+        p.image_url.url.startsWith('data:image/')
+      )
+    ),
   );
 
   const rendered = $derived(role === 'assistant' ? renderMarkdown(text) : null);

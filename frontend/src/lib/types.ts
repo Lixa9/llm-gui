@@ -1,11 +1,9 @@
 export type Role = 'admin' | 'user';
 
 // File attachments in the composer
-export interface UploadedAttachment {
-  type: 'image' | 'file';  // 'file' covers PDF, Office, OpenDocument, and other binaries
-  name: string;
-  url: string;        // /uploads/... server path
-}
+export type UploadedAttachment =
+  | { type: 'image'; name: string; url: string }  // uploaded to /data/uploads/, sent as image_url
+  | { type: 'file'; name: string };               // binary doc noted by name only, sent as text annotation
 
 export interface TextFileAttachment {
   type: 'text_file';
