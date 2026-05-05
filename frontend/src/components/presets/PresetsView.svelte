@@ -1,8 +1,10 @@
 <script lang="ts">
   import { modelsStore } from '../../stores/models.svelte';
+  import { preferencesStore } from '../../stores/preferences.svelte';
   import PresetEditor from './PresetEditor.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Button from '../ui/Button.svelte';
+  import Badge from '../ui/Badge.svelte';
   import type { ModelPreset } from '$lib/types';
   import { toast } from '../ui/Toast.svelte';
 
@@ -40,6 +42,11 @@
   function modelName(id: string) {
     return modelsStore.models.find(m => m.id === id)?.display_name ?? id;
   }
+
+  function toggleDefault(preset: ModelPreset) {
+    const isDefault = preferencesStore.defaultPresetId === preset.id;
+    preferencesStore.set('default_preset_id', isDefault ? '' : preset.id);
+  }
 </script>
 
 <div class="view">
@@ -54,12 +61,20 @@
     <div class="preset-grid">
       {#each modelsStore.presets as preset (preset.id)}
         <div class="preset-card">
-          <div class="preset-name">{preset.name}</div>
+          <div class="preset-name">
+            {preset.name}
+            {#if preferencesStore.defaultPresetId === preset.id}
+              <Badge variant="accent">Default</Badge>
+            {/if}
+          </div>
           <div class="preset-model">{modelName(preset.base_model_id)}</div>
           {#if preset.system_prompt}
             <div class="preset-prompt">{preset.system_prompt}</div>
           {/if}
           <div class="preset-actions">
+            <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
+              {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
+            </Button>
             <Button variant="ghost" size="sm" onclick={() => { editing = preset; editorOpen = true; }}>Edit</Button>
             <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
           </div>

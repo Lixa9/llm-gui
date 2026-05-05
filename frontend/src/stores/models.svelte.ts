@@ -1,4 +1,5 @@
 import { api } from '$lib/api';
+import { makeCrud } from '$lib/crud';
 import type { ModelInfo, ModelPreset } from '$lib/types';
 
 function createModelsStore() {
@@ -11,27 +12,15 @@ function createModelsStore() {
     presets = p;
   }
 
-  async function createPreset(data: Pick<ModelPreset, 'name' | 'base_model_id' | 'system_prompt'>) {
-    const p = await api.presets.create(data);
-    presets = [...presets, p];
-    return p;
-  }
-
-  async function updatePreset(id: string, data: Partial<Pick<ModelPreset, 'name' | 'base_model_id' | 'system_prompt'>>) {
-    const p = await api.presets.update(id, data);
-    presets = presets.map(x => x.id === id ? p : x);
-    return p;
-  }
-
-  async function deletePreset(id: string) {
-    await api.presets.delete(id);
-    presets = presets.filter(p => p.id !== id);
-  }
+  const presetCrud = makeCrud(api.presets, () => presets, (v) => { presets = v; });
 
   return {
     get models() { return models; },
     get presets() { return presets; },
-    load, createPreset, updatePreset, deletePreset,
+    load,
+    createPreset: presetCrud.create,
+    updatePreset: presetCrud.update,
+    deletePreset: presetCrud.remove,
   };
 }
 

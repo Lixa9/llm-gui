@@ -51,6 +51,7 @@ export interface ConversationRow {
   title: string;
   title_auto: number;
   model_id: string | null;
+  preset_id: string | null;
   system_prompt_id: string | null;
   custom_system_prompt: string | null;
   folder_id: string | null;

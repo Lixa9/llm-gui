@@ -1,4 +1,5 @@
 import { api } from '$lib/api';
+import { makeCrud } from '$lib/crud';
 import type { Automation, AutomationRun } from '$lib/types';
 
 function createAutomationsStore() {
@@ -9,22 +10,7 @@ function createAutomationsStore() {
     automations = await api.automations.list();
   }
 
-  async function create(data: Pick<Automation, 'name' | 'type' | 'definition'>) {
-    const a = await api.automations.create(data);
-    automations = [...automations, a];
-    return a;
-  }
-
-  async function update(id: string, data: Partial<Pick<Automation, 'name' | 'definition' | 'enabled'>>) {
-    const a = await api.automations.update(id, data);
-    automations = automations.map(x => x.id === id ? a : x);
-    return a;
-  }
-
-  async function remove(id: string) {
-    await api.automations.delete(id);
-    automations = automations.filter(a => a.id !== id);
-  }
+  const crud = makeCrud(api.automations, () => automations, (v) => { automations = v; });
 
   async function trigger(id: string) {
     const run = await api.automations.trigger(id);
@@ -43,7 +29,7 @@ function createAutomationsStore() {
   return {
     get automations() { return automations; },
     get runsByAutomation() { return runsByAutomation; },
-    load, create, update, remove, trigger, loadRuns,
+    load, ...crud, trigger, loadRuns,
   };
 }
 

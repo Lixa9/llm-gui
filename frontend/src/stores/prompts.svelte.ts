@@ -1,4 +1,5 @@
 import { api } from '$lib/api';
+import { makeCrud } from '$lib/crud';
 import type { SystemPrompt } from '$lib/types';
 
 function createPromptsStore() {
@@ -11,28 +12,13 @@ function createPromptsStore() {
     prompts = await api.prompts.list();
   }
 
-  async function create(data: Pick<SystemPrompt, 'name' | 'content'>) {
-    const p = await api.prompts.create(data);
-    prompts = [...prompts, p];
-    return p;
-  }
-
-  async function update(id: string, data: Partial<Pick<SystemPrompt, 'name' | 'content'>>) {
-    const p = await api.prompts.update(id, data);
-    prompts = prompts.map(x => x.id === id ? p : x);
-    return p;
-  }
-
-  async function remove(id: string) {
-    await api.prompts.delete(id);
-    prompts = prompts.filter(p => p.id !== id);
-  }
+  const crud = makeCrud(api.prompts, () => prompts, (v) => { prompts = v; });
 
   return {
     get prompts() { return prompts; },
     get personal() { return personal; },
     get system() { return system; },
-    load, create, update, remove,
+    load, ...crud,
   };
 }
 

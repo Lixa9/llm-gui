@@ -1,17 +1,17 @@
 <script lang="ts">
   import { chatStore } from '../../stores/chat.svelte';
-  import { promptsStore } from '../../stores/prompts.svelte';
   import type { ChatPayload } from '$lib/types';
 
   interface Props {
     conversationId: string | null;
     selectedModel: string;
-    selectedPromptId: string;
+    systemPromptText: string;
+    systemPromptId: string | undefined;
     onSend: (payload: ChatPayload) => void;
     onStop: () => void;
     streaming: boolean;
   }
-  let { conversationId, selectedModel, selectedPromptId, onSend, onStop, streaming }: Props = $props();
+  let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming }: Props = $props();
 
   let text = $state('');
 
@@ -19,15 +19,11 @@
     const trimmed = text.trim();
     if (!trimmed || !selectedModel) return;
 
-    const systemPrompt = selectedPromptId
-      ? promptsStore.prompts.find(p => p.id === selectedPromptId)?.content
-      : undefined;
-
     const payload: ChatPayload = {
       conversation_id: conversationId,
       model: selectedModel,
-      system_prompt: systemPrompt,
-      system_prompt_id: selectedPromptId || undefined,
+      system_prompt: systemPromptText || undefined,
+      system_prompt_id: systemPromptId,
       messages: chatStore.messages.map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,

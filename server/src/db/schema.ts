@@ -65,6 +65,7 @@ export function applySchema(db: Database): void {
       title TEXT NOT NULL DEFAULT 'New conversation',
       title_auto INTEGER NOT NULL DEFAULT 0,
       model_id TEXT,
+      preset_id TEXT REFERENCES model_presets(id) ON DELETE SET NULL,
       system_prompt_id TEXT REFERENCES system_prompts(id) ON DELETE SET NULL,
       custom_system_prompt TEXT,
       folder_id TEXT REFERENCES conversation_folders(id) ON DELETE SET NULL,
@@ -74,6 +75,9 @@ export function applySchema(db: Database): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+
+  // Migration for existing databases
+  try { db.run('ALTER TABLE conversations ADD COLUMN preset_id TEXT REFERENCES model_presets(id) ON DELETE SET NULL'); } catch { /* column already exists */ }
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_conv_owner ON conversations(owner_sub, created_at DESC)`);
 

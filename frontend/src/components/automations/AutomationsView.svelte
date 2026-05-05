@@ -6,7 +6,7 @@
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { Automation } from '$lib/types';
-  import { toast } from '../ui/Toast.svelte';
+  import { toast, withToast } from '../ui/Toast.svelte';
   import { onMount } from 'svelte';
 
   onMount(() => automationsStore.load());
@@ -52,7 +52,7 @@
   }
 
   async function toggleEnabled(a: Automation) {
-    await automationsStore.update(a.id, { enabled: !a.enabled });
+    await withToast(() => automationsStore.update(a.id, { enabled: !a.enabled }));
   }
 </script>
 
@@ -110,7 +110,8 @@
   message={`Delete "${deleting?.name}"?`}
   confirmLabel="Delete"
   onconfirm={async () => {
-    if (deleting) await automationsStore.remove(deleting.id);
+    const id = deleting?.id;
+    if (id) await withToast(() => automationsStore.remove(id), 'Automation deleted');
     deleting = null;
   }}
   oncancel={() => deleting = null}

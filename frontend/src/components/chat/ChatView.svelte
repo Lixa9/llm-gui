@@ -8,6 +8,7 @@
   import { chatStore } from '../../stores/chat.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import { modelsStore } from '../../stores/models.svelte';
+  import { promptsStore } from '../../stores/prompts.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
   import type { Message, ChatPayload } from '$lib/types';
   import { toast } from '../ui/Toast.svelte';
@@ -17,40 +18,126 @@
 
   let editingMessage = $state<Message | null>(null);
   let selectedModel = $state('');
+  // '__preset__' = system prompt comes from the active preset; '' = none; else = library prompt ID
   let selectedPromptId = $state('');
+  let selectedPresetId = $state('');
   let skipNextLoad = false;
 
-  // Set default model once models are available
+  // Resolved system prompt values passed to Composer
+  const systemPromptText = $derived(
+    selectedPromptId === '__preset__'
+      ? (modelsStore.presets.find(p => p.id === selectedPresetId)?.system_prompt ?? '')
+      : selectedPromptId
+        ? (promptsStore.prompts.find(p => p.id === selectedPromptId)?.content ?? '')
+        : ''
+  );
+  const systemPromptId = $derived(
+    selectedPromptId && selectedPromptId !== '__preset__' ? selectedPromptId : undefined
+  );
+
+  // Label shown in PromptPicker when a preset is active
+  const activePresetLabel = $derived(
+    selectedPresetId
+      ? (modelsStore.presets.find(p => p.id === selectedPresetId)?.name ?? '')
+      : undefined
+  );
+
+  // Load/restore settings when switching to an existing conversation
   $effect(() => {
-    if (!selectedModel && preferencesStore.defaultModelId) {
-      selectedModel = preferencesStore.defaultModelId;
-    } else if (!selectedModel && modelsStore.models.length > 0) {
-      selectedModel = modelsStore.models[0].id;
+    if (!conversationId) {
+      chatStore.clear();
+      return;
+    }
+    const conv = conversationsStore.list.find(c => c.id === conversationId);
+    if (conv) {
+      selectedModel = conv.model_id ?? preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
+      selectedPresetId = conv.preset_id ?? '';
+      selectedPromptId = conv.preset_id ? '__preset__' : (conv.system_prompt_id ?? '');
+    }
+    if (!skipNextLoad) chatStore.loadMessages(conversationId);
+    skipNextLoad = false;
+  });
+
+  // Apply default preset on new chat screen — re-runs whenever defaults or presets load
+  $effect(() => {
+    if (conversationId) return;
+    const defaultPresetId = preferencesStore.defaultPresetId;
+    const presets = modelsStore.presets;
+    if (defaultPresetId && presets.length > 0) {
+      const preset = presets.find(p => p.id === defaultPresetId);
+      if (preset) {
+        selectedPresetId = defaultPresetId;
+        selectedModel = preset.base_model_id;
+        selectedPromptId = '__preset__';
+        return;
+      }
+    }
+    selectedPresetId = '';
+    selectedPromptId = '';
+  });
+
+  // Fallback: set model when none is selected yet
+  $effect(() => {
+    if (!selectedModel) {
+      if (preferencesStore.defaultModelId) selectedModel = preferencesStore.defaultModelId;
+      else if (modelsStore.models.length > 0) selectedModel = modelsStore.models[0].id;
     }
   });
 
-  function handlePresetSelect(presetId: string) {
-    if (!presetId) return;
-    const preset = modelsStore.presets.find(p => p.id === presetId);
-    if (preset) selectedModel = preset.base_model_id;
+  function saveConvSettings() {
+    if (!conversationId) return;
+    const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
+    conversationsStore.update(conversationId, {
+      model_id: selectedModel,
+      preset_id: selectedPresetId || null,
+      system_prompt_id: (!selectedPresetId && selectedPromptId && selectedPromptId !== '__preset__') ? selectedPromptId : null,
+      custom_system_prompt: preset?.system_prompt || null,
+    });
   }
 
-  $effect(() => {
-    if (conversationId) {
-      if (skipNextLoad) { skipNextLoad = false; return; }
-      chatStore.loadMessages(conversationId);
-    } else {
-      chatStore.clear();
+  function handleModelChange(newModel: string) {
+    selectedModel = newModel;
+    if (selectedPresetId) {
+      const preset = modelsStore.presets.find(p => p.id === selectedPresetId);
+      if (preset && preset.base_model_id !== newModel) {
+        selectedPresetId = '';
+        if (selectedPromptId === '__preset__') selectedPromptId = '';
+      }
     }
-  });
+    saveConvSettings();
+  }
+
+  function handlePresetChange(presetId: string) {
+    selectedPresetId = presetId;
+    if (presetId) {
+      const preset = modelsStore.presets.find(p => p.id === presetId);
+      if (preset) {
+        selectedModel = preset.base_model_id;
+        selectedPromptId = '__preset__';
+      }
+    } else {
+      selectedPromptId = '';
+    }
+    saveConvSettings();
+  }
+
+  function handlePromptChange(promptId: string) {
+    selectedPromptId = promptId;
+    if (promptId !== '__preset__' && selectedPresetId) {
+      selectedPresetId = '';
+    }
+    saveConvSettings();
+  }
 
   async function handleSend(payload: ChatPayload) {
     let convId = conversationId;
     if (!convId) {
+      const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
       const conv = await conversationsStore.create({
         model_id: payload.model,
+        preset_id: selectedPresetId || undefined,
         system_prompt_id: payload.system_prompt_id,
-        custom_system_prompt: payload.system_prompt,
+        custom_system_prompt: preset?.system_prompt || payload.system_prompt || undefined,
       });
       convId = conv.id;
       conversationsStore.setActive(convId);
@@ -71,6 +158,8 @@
         const payload: ChatPayload = {
           conversation_id: conversationId,
           model: messages[idx]?.model ?? selectedModel,
+          system_prompt: systemPromptText || undefined,
+          system_prompt_id: systemPromptId,
           messages: history.map(m => ({
             role: m.role as 'user' | 'assistant',
             content: m.content,
@@ -98,6 +187,8 @@
     const payload: ChatPayload = {
       conversation_id: conversationId,
       model: msg.model ?? history.find(m => m.model)?.model ?? selectedModel,
+      system_prompt: systemPromptText || undefined,
+      system_prompt_id: systemPromptId,
       messages: history.slice(0, history.indexOf(lastUser)).map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -111,16 +202,16 @@
 <div class="chat-view">
   <div class="chat-toolbar">
     <div class="picker-group">
-      <span class="picker-label">Model</span>
-      <ModelPicker bind:value={selectedModel} />
+      <span class="picker-label">Prompt</span>
+      <PromptPicker bind:value={selectedPromptId} onchange={handlePromptChange} presetLabel={activePresetLabel} />
     </div>
     <div class="picker-group">
-      <span class="picker-label">Prompt</span>
-      <PromptPicker bind:value={selectedPromptId} />
+      <span class="picker-label">Model</span>
+      <ModelPicker bind:value={selectedModel} onchange={handleModelChange} />
     </div>
     <div class="picker-group">
       <span class="picker-label">Preset</span>
-      <PresetPicker onselect={handlePresetSelect} />
+      <PresetPicker bind:value={selectedPresetId} onchange={handlePresetChange} />
     </div>
   </div>
 
@@ -141,7 +232,8 @@
   <Composer
     {conversationId}
     {selectedModel}
-    {selectedPromptId}
+    {systemPromptText}
+    {systemPromptId}
     streaming={chatStore.streaming}
     onSend={handleSend}
     onStop={chatStore.stop}

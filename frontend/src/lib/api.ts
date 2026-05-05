@@ -45,10 +45,10 @@ export const api = {
 
   conversations: {
     list: () => get<Conversation[]>('/api/conversations'),
-    create: (data: { model_id?: string; system_prompt_id?: string; custom_system_prompt?: string; folder_id?: string }) =>
+    create: (data: { model_id?: string; preset_id?: string; system_prompt_id?: string; custom_system_prompt?: string; folder_id?: string }) =>
       post<Conversation>('/api/conversations', data),
     get: (id: string) => get<Conversation>(`/api/conversations/${id}`),
-    update: (id: string, data: Partial<Pick<Conversation, 'title' | 'folder_id' | 'pinned' | 'custom_system_prompt'>>) =>
+    update: (id: string, data: Partial<Pick<Conversation, 'title' | 'folder_id' | 'pinned' | 'custom_system_prompt' | 'model_id' | 'preset_id' | 'system_prompt_id'>>) =>
       patch<Conversation>(`/api/conversations/${id}`, data),
     delete: (id: string) => del<void>(`/api/conversations/${id}`),
     deleteAll: () => del<void>('/api/conversations'),

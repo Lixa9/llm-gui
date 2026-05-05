@@ -3,8 +3,9 @@
 
   interface Props {
     value?: string;
+    onchange?: (value: string) => void;
   }
-  let { value = $bindable('') }: Props = $props();
+  let { value = $bindable(''), onchange }: Props = $props();
 
   let query = $state('');
   let open = $state(false);
@@ -22,6 +23,7 @@
 
   function pick(id: string) {
     value = id;
+    onchange?.(id);
     query = '';
     open = false;
   }
