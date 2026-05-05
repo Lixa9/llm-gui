@@ -56,6 +56,13 @@ function createConversationsStore() {
     }
   }
 
+  async function removeAll() {
+    await api.conversations.deleteAll();
+    list = [];
+    activeId = null;
+    window.location.hash = '#/chat';
+  }
+
   async function duplicate(id: string) {
     const copy = await api.conversations.duplicate(id);
     list = [copy, ...list];
@@ -111,7 +118,7 @@ function createConversationsStore() {
     get searchResults() { return searchResults; },
     get searching() { return searching; },
     load, create, update, rename, pin, move,
-    remove, duplicate, fork, search, updateTitle, setActive,
+    remove, removeAll, duplicate, fork, search, updateTitle, setActive,
     createFolder, renameFolder, deleteFolder,
   };
 }

@@ -27,6 +27,13 @@
     const name = prompt('Folder name:');
     if (name?.trim()) await conversationsStore.createFolder(name.trim());
   }
+
+  async function deleteAllChats() {
+    const count = conversationsStore.list.length;
+    if (!count) return;
+    const ok = confirm(`Delete all ${count} conversation${count === 1 ? '' : 's'}? This cannot be undone.`);
+    if (ok) await conversationsStore.removeAll();
+  }
 </script>
 
 <aside class="sidebar" class:collapsed>
@@ -80,6 +87,9 @@
 
     <div class="sidebar-footer">
       <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
+      {#if conversationsStore.list.length > 0}
+        <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
+      {/if}
     </div>
   {/if}
 </aside>
@@ -176,4 +186,6 @@
     text-align: left;
   }
   .sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .sidebar-footer-btn.danger { color: var(--danger); opacity: 0.7; }
+  .sidebar-footer-btn.danger:hover { background: var(--bg-hover); color: var(--danger); opacity: 1; }
 </style>
