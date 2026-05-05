@@ -23,7 +23,9 @@
       if (att.type === 'image') {
         parts.push({ type: 'image_url', image_url: { url: att.url } });
       } else if (att.type === 'file') {
+        // Label so the AI knows the filename, then the raw base64 data for models that can read it
         parts.push({ type: 'text', text: `[Attached file: ${att.name}]` });
+        parts.push({ type: 'image_url', image_url: { url: att.url } });
       } else {
         parts.push({ type: 'text', text: `<file name="${att.name}">\n${att.content}\n</file>` });
       }

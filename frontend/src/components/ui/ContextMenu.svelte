@@ -30,7 +30,7 @@
       if (rect.bottom > window.innerHeight) top = untrack(() => y) - rect.height;
     }
     const close = () => onclose();
-    document.addEventListener('mousedown', close, { once: true });
+    document.addEventListener('click', close, { once: true });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') onclose(); }, { once: true });
   });
 </script>

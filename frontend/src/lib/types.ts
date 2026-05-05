@@ -2,8 +2,8 @@ export type Role = 'admin' | 'user';
 
 // File attachments in the composer
 export type UploadedAttachment =
-  | { type: 'image'; name: string; url: string }  // uploaded to /data/uploads/, sent as image_url
-  | { type: 'file'; name: string };               // binary doc noted by name only, sent as text annotation
+  | { type: 'image'; name: string; url: string }  // base64 data URL, sent as image_url
+  | { type: 'file'; name: string; url: string };  // base64 data URL, sent with text annotation + image_url
 
 export interface TextFileAttachment {
   type: 'text_file';
