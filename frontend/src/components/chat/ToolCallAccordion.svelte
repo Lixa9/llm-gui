@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import type { ToolCall, ToolResult } from '$lib/types';
   import Accordion from '../ui/Accordion.svelte';
 
@@ -10,7 +9,7 @@
   }
   let { toolCall, toolResult = null, showByDefault = false }: Props = $props();
 
-  let open = $state(untrack(() => showByDefault));
+  let open = $state(showByDefault);
 
   const argsPreview = $derived(() => {
     try {

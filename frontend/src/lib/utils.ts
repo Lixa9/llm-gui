@@ -31,18 +31,6 @@ export function formatDate(ts: number): string {
   });
 }
 
-export async function copyToClipboard(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
-}
-
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-export function generateId(): string {
-  return crypto.randomUUID();
-}
-
 export function truncateTitle(s: string, n = 60): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
