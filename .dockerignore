@@ -1,0 +1,9 @@
+frontend/node_modules
+frontend/dist
+frontend/.svelte-kit
+server/node_modules
+**/.env
+**/*.env.local
+.git
+.gitignore
+*.md

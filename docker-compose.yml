@@ -1,0 +1,30 @@
+services:
+  chat:
+    build: .
+    # Or use a pre-built image:
+    # image: ghcr.io/you/llm-frontend:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - ./config/config.yaml:/app/config/config.yaml
+      - ./config/models.yaml:/app/config/models.yaml
+      - ./config/prompts.yaml:/app/config/prompts.yaml
+      - ./config/automations.yaml:/app/config/automations.yaml
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
+      # OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      # Only needed if LiteLLM requires authentication
+      # LITELLM_API_KEY: ${LITELLM_API_KEY}
+      # Optional — enable a local admin account (omit both to disable)
+      # Accepts plain text or an argon2/bcrypt hash for LOCAL_ADMIN_PASSWORD
+      LOCAL_ADMIN_USERNAME: admin
+      LOCAL_ADMIN_PASSWORD: admin
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "const r = await fetch('http://localhost:3000/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

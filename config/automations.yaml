@@ -1,0 +1,11 @@
+automations: []
+# Example:
+# automations:
+#   - name: daily_digest
+#     type: scheduled
+#     schedule: "0 8 * * 1-5"
+#     visible_to: admin
+#     model: gpt-4o
+#     system_prompt: "You are a concise summarizer."
+#     user_prompt: "Summarize the top tech news today."
+#     output: new_conversation

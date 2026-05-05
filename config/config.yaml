@@ -1,0 +1,35 @@
+app:
+  name: "Chat"
+  base_url: "http://localhost:3000"
+  secret_key: "${SECRET_KEY}"
+
+litellm:
+  base_url: "http://localhost:4000"
+  # api_key is optional — omit if your LiteLLM instance needs no auth
+
+database:
+  path: "/data/chat.db"
+
+# OIDC is only needed if you want SSO login.
+# If you only use the local admin account, these values are never contacted.
+oidc:
+  issuer: "https://auth.example.com"
+  client_id: "chat"
+  client_secret: "placeholder"
+
+rbac:
+  group_claim: "groups"
+  mappings:
+    - oidc_group: "admins"
+      role: admin
+  default_role: user
+
+rate_limits:
+  requests_per_minute: 120
+  requests_per_hour: 1000
+  concurrent_streams: 4
+
+conversation:
+  auto_title: true
+  auto_title_model: "gpt-4o-mini"
+  context_window_tokens: 100000
