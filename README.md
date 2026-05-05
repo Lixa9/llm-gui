@@ -76,13 +76,13 @@ The message composer accepts file attachments via drag-and-drop or a file picker
 
 | Category | Formats | How it's sent |
 |---|---|---|
-| **Images** | jpg, png, gif, webp, svg, … | Uploaded to `/data/uploads/`, sent as `image_url` content part |
+| **Images** | jpg, png, gif, webp, svg, … | Uploaded to `/data/uploads/`, sent as `image_url` content part with the server URL |
 | **Text files** | txt, md, csv, json, xml, yaml, html, and most code file extensions | Read client-side (max 512 KB), injected inline as `[File: name]\ncontent` text block — no server upload |
-| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Uploaded to `/data/uploads/`, sent as `image_url` content part with the server URL |
+| **Binary documents** | pdf, docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp | Read client-side (max 20 MB), base64-encoded, sent as `image_url` content part with a `data:mimetype;base64,...` URL — no server upload |
 
-Text files are inlined directly into the message so models that don't support file URLs still see the content. Binary documents are passed by URL — models that support PDF or Office file inputs (e.g. via LiteLLM's file handling) will process them; models that don't will return an error visible in the composer.
+Binary documents are sent as inline base64 data so the inference engine receives the actual file content rather than a URL it may not be able to fetch. Models that support the relevant format (e.g. Claude and GPT-4o for PDF) will process the content; models that don't will return an error visible in the composer.
 
-All uploaded files are content-addressed (SHA-256) and deduplicated in `/data/uploads/`. The endpoint is auth-gated.
+Images are still uploaded to the server so they can be displayed as thumbnails in the chat history and referenced across sessions. Upload files are content-addressed (SHA-256), deduplicated in `/data/uploads/`, and served auth-gated.
 
 ### Tool Call Display
 
