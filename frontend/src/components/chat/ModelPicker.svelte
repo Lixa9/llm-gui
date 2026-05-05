@@ -3,9 +3,8 @@
 
   interface Props {
     value?: string;
-    onchange?: (modelId: string) => void;
   }
-  let { value = $bindable(''), onchange }: Props = $props();
+  let { value = $bindable('') }: Props = $props();
 
   let query = $state('');
   let open = $state(false);
@@ -25,7 +24,6 @@
     value = id;
     query = '';
     open = false;
-    onchange?.(id);
   }
 
   function handleBlur() {
