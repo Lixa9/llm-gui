@@ -18,6 +18,7 @@
   let editingMessage = $state<Message | null>(null);
   let selectedModel = $state('');
   let selectedPromptId = $state('');
+  let skipNextLoad = false;
 
   // Set default model once models are available
   $effect(() => {
@@ -36,6 +37,7 @@
 
   $effect(() => {
     if (conversationId) {
+      if (skipNextLoad) { skipNextLoad = false; return; }
       chatStore.loadMessages(conversationId);
     } else {
       chatStore.clear();
@@ -52,6 +54,7 @@
       });
       convId = conv.id;
       conversationsStore.setActive(convId);
+      skipNextLoad = true;
       window.location.hash = `#/chat/${convId}`;
     }
     await chatStore.send({ ...payload, conversation_id: convId });

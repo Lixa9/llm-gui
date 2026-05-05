@@ -38,6 +38,24 @@ function createChatStore() {
 
   async function send(payload: ChatPayload) {
     if (streaming) return;
+
+    // Show the user's message immediately without waiting for the server round-trip
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      conversation_id: payload.conversation_id ?? '',
+      role: 'user',
+      content: payload.new_user_message.content,
+      tool_calls: null,
+      tool_results: null,
+      model: null,
+      tokens_in: null,
+      tokens_out: null,
+      status: 'done',
+      timestamp: Date.now(),
+      edited_at: null,
+    };
+    messages = [...messages, userMsg];
+
     streaming = true;
     error = null;
     abortController = new AbortController();

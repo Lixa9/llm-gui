@@ -101,12 +101,16 @@
   .msg-wrapper {
     display: flex;
     gap: 12px;
-    padding: 12px 16px;
+    padding: 10px 16px;
     border-radius: var(--radius);
-    transition: background 0.1s;
   }
-  .msg-wrapper:hover { background: rgba(255,255,255,0.02); }
-  .msg-user { flex-direction: row; }
+  .msg-user { flex-direction: row-reverse; }
+  .msg-user .msg-body {
+    flex: 0 1 auto;
+    max-width: 72%;
+    align-items: flex-end;
+  }
+  .msg-user .msg-header { flex-direction: row-reverse; }
   .msg-assistant .msg-body { flex: 1; min-width: 0; }
 
   .msg-avatar { flex-shrink: 0; padding-top: 2px; }
@@ -124,7 +128,7 @@
   .user-avatar { background: var(--bg-elevated); color: var(--text-secondary); }
   .ai-avatar { background: var(--accent-subtle); color: var(--accent); }
 
-  .msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .msg-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 
   .msg-header {
     display: flex;
