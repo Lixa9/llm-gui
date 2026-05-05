@@ -15,8 +15,6 @@ uploadsRouter.post('/', async (c) => {
   const formData = await c.req.formData();
   const file = formData.get('file') as File | null;
   if (!file) return c.json({ error: 'No file' }, 400);
-  if (!file.type.startsWith('image/')) return c.json({ error: 'Only images allowed' }, 400);
-
   const bytes = await file.arrayBuffer();
   const buf = new Uint8Array(bytes);
 
@@ -26,13 +24,13 @@ uploadsRouter.post('/', async (c) => {
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 
-  const ext = extname(file.name) || `.${file.type.split('/')[1]}`;
+  const ext = extname(file.name) || (file.type ? `.${file.type.split('/')[1]}` : '');
   const filename = `${hashHex}${ext}`;
   const filepath = join(UPLOAD_DIR, filename);
 
   if (!existsSync(filepath)) {
     writeFileSync(filepath, buf);
-    logger.info('Image uploaded', { filename, size: buf.length });
+    logger.info('File uploaded', { filename, size: buf.length, type: file.type });
   }
 
   return c.json({ url: `/uploads/${filename}` }, 201);
@@ -50,6 +48,20 @@ export async function serveUpload(filename: string): Promise<Response> {
   const mime: Record<string, string> = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    txt: 'text/plain', md: 'text/markdown', csv: 'text/csv',
+    json: 'application/json', xml: 'application/xml',
+    html: 'text/html', htm: 'text/html',
+    yaml: 'text/yaml', yml: 'text/yaml',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    doc: 'application/msword',
+    xls: 'application/vnd.ms-excel',
+    ppt: 'application/vnd.ms-powerpoint',
+    odt: 'application/vnd.oasis.opendocument.text',
+    ods: 'application/vnd.oasis.opendocument.spreadsheet',
+    odp: 'application/vnd.oasis.opendocument.presentation',
   };
 
   return new Response(buf, {
