@@ -9,6 +9,7 @@
   }
   let { toolCall, toolResult = null, showByDefault = false }: Props = $props();
 
+  // svelte-ignore state_referenced_locally
   let open = $state(showByDefault);
 
   const argsPreview = $derived(() => {

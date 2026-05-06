@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Conversation, ConversationFolder } from '$lib/types';
+  import type { ConversationFolder } from '$lib/types';
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -8,10 +8,8 @@
 
   interface Props {
     folder: ConversationFolder;
-    allFolders: ConversationFolder[];
-    conversations: Conversation[];
   }
-  let { folder, allFolders, conversations }: Props = $props();
+  let { folder }: Props = $props();
 
   let open = $state(true);
   let menuOpen = $state(false);
@@ -21,8 +19,8 @@
   let renameValue = $state('');
   let dragCounter = $state(0);
 
-  const children = $derived(allFolders.filter(f => f.parent_id === folder.id));
-  const folderConvs = $derived(conversations.filter(c => c.folder_id === folder.id));
+  const children = $derived(conversationsStore.folders.filter(f => f.parent_id === folder.id));
+  const folderConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === folder.id));
   const isDragOver = $derived(dragCounter > 0);
   const isActiveFolder = $derived(conversationsStore.activeFolderId === folder.id);
 
@@ -114,7 +112,7 @@
   {#if open}
     <div class="folder-body">
       {#each children as child (child.id)}
-        <SidebarFolder folder={child} {allFolders} {conversations} />
+        <SidebarFolder folder={child} />
       {/each}
       {#each folderConvs as conv (conv.id)}
         <SidebarConversation conversation={conv} />
