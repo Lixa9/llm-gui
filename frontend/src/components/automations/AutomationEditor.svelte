@@ -90,9 +90,10 @@
 
   {#if type === 'scheduled'}
     <div class="field">
-      <label class="label">Run every</label>
+      <label class="label" for="ae-interval">Run every</label>
       <div class="interval-row">
         <input
+          id="ae-interval"
           class="input interval-input"
           type="number"
           min="1"

@@ -61,8 +61,6 @@ function createChatStore() {
     abortController = new AbortController();
     pending = { role: 'assistant', content: '', tool_calls: [] };
 
-    const isFirstExchange = messages.filter(m => m.role === 'user').length === 0;
-
     try {
       await streamChat(payload, abortController.signal, (event) => {
         if (event.type === 'delta') {

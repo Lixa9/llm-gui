@@ -13,6 +13,7 @@
   let { value = $bindable(''), placeholder, type = 'text', disabled, autofocus, oninput, onkeydown, onfocus, onblur }: Props = $props();
 </script>
 
+<!-- svelte-ignore a11y_autofocus -->
 <input
   {type}
   {placeholder}

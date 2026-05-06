@@ -69,6 +69,8 @@
         <div
           class="no-folder-drop"
           class:drag-over={noFolderDragOver}
+          role="region"
+          aria-label="Drop here to remove from folder"
           ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
           ondragleave={() => { noFolderDragOver = false; }}
           ondrop={onNoFolderDrop}
@@ -86,11 +88,7 @@
         {/if}
       {:else}
         {#each rootFolders as folder (folder.id)}
-          <SidebarFolder
-            {folder}
-            allFolders={conversationsStore.folders}
-            conversations={conversationsStore.sorted}
-          />
+          <SidebarFolder {folder} />
         {/each}
         {#each unfolderedConvs as conv (conv.id)}
           <SidebarConversation conversation={conv} />

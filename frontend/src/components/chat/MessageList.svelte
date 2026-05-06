@@ -21,13 +21,9 @@
   }
 
   $effect(() => {
-    // Watch message count and streaming content
-    const _count = chatStore.allMessages.length;
-    const _pending = chatStore.pending?.content?.length ?? 0;
-    void _count; void _pending;
-    if (atBottom) {
-      setTimeout(scrollToBottom, 0);
-    }
+    chatStore.allMessages.length;
+    chatStore.pending?.content?.length;
+    if (atBottom) setTimeout(scrollToBottom, 0);
   });
 
   function onScroll() {

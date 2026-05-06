@@ -127,6 +127,7 @@
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
+    line-clamp: 3;
   }
   .prompt-actions { display: flex; gap: 6px; margin-top: 4px; }
 </style>

@@ -130,6 +130,7 @@
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+    line-clamp: 2;
   }
   .preset-actions { display: flex; gap: 6px; margin-top: 4px; }
 </style>

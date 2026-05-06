@@ -36,5 +36,5 @@ const PURIFY_CONFIG: DOMPurify.Config = {
 
 export function renderMarkdown(text: string): string {
   const html = marked.parse(text) as string;
-  return DOMPurify.sanitize(html, PURIFY_CONFIG);
+  return DOMPurify.sanitize(html, PURIFY_CONFIG as Parameters<typeof DOMPurify.sanitize>[1]);
 }
