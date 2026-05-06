@@ -7,6 +7,8 @@ function createConversationsStore() {
   let activeId = $state<string | null>(null);
   let searchResults = $state<Conversation[]>([]);
   let searching = $state(false);
+  let activeFolderId = $state<string | null>(null);
+  let draggingConvId = $state<string | null>(null);
 
   const sorted = $derived(
     [...list].sort((a, b) => {
@@ -44,7 +46,7 @@ function createConversationsStore() {
   }
 
   async function move(id: string, folder_id: string | null) {
-    return update(id, { folder_id: folder_id ?? undefined });
+    return update(id, { folder_id });
   }
 
   async function remove(id: string) {
@@ -93,6 +95,14 @@ function createConversationsStore() {
     activeId = id;
   }
 
+  function setActiveFolder(id: string | null) {
+    activeFolderId = id;
+  }
+
+  function setDragging(id: string | null) {
+    draggingConvId = id;
+  }
+
   async function createFolder(name: string, parent_id?: string) {
     const folder = await api.folders.create({ name, parent_id });
     folders = [...folders, folder];
@@ -115,10 +125,12 @@ function createConversationsStore() {
     get sorted() { return sorted; },
     get folders() { return folders; },
     get activeId() { return activeId; },
+    get activeFolderId() { return activeFolderId; },
+    get draggingConvId() { return draggingConvId; },
     get searchResults() { return searchResults; },
     get searching() { return searching; },
     load, create, update, rename, pin, move,
-    remove, removeAll, duplicate, fork, search, updateTitle, setActive,
+    remove, removeAll, duplicate, fork, search, updateTitle, setActive, setActiveFolder, setDragging,
     createFolder, renameFolder, deleteFolder,
   };
 }

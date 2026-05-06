@@ -19,9 +19,12 @@
   let menuY = $state(0);
   let renaming = $state(false);
   let renameValue = $state('');
+  let dragCounter = $state(0);
 
   const children = $derived(allFolders.filter(f => f.parent_id === folder.id));
   const folderConvs = $derived(conversations.filter(c => c.folder_id === folder.id));
+  const isDragOver = $derived(dragCounter > 0);
+  const isActiveFolder = $derived(conversationsStore.activeFolderId === folder.id);
 
   function openMenu(e: MouseEvent) {
     e.preventDefault();
@@ -31,9 +34,46 @@
     menuOpen = true;
   }
 
+  function toggleOpen() {
+    open = !open;
+    if (open) {
+      conversationsStore.setActiveFolder(folder.id);
+    } else {
+      if (conversationsStore.activeFolderId === folder.id) {
+        conversationsStore.setActiveFolder(null);
+      }
+    }
+  }
+
   async function finishRename() {
     if (renameValue.trim()) await conversationsStore.renameFolder(folder.id, renameValue.trim());
     renaming = false;
+  }
+
+  function ondragover(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  }
+
+  function ondragenter(e: DragEvent) {
+    e.preventDefault();
+    dragCounter++;
+  }
+
+  function ondragleave() {
+    dragCounter--;
+  }
+
+  function ondrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    const convId = e.dataTransfer?.getData('text/plain');
+    if (convId) {
+      conversationsStore.move(convId, folder.id);
+      open = true;
+      conversationsStore.setActiveFolder(folder.id);
+    }
   }
 
   const menuItems: MenuItem[] = [
@@ -52,9 +92,15 @@
   {:else}
     <div
       class="folder-header"
-      onclick={() => open = !open}
+      class:drag-over={isDragOver}
+      class:active-folder={isActiveFolder}
+      onclick={toggleOpen}
       oncontextmenu={openMenu}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') open = !open; }}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleOpen(); }}
+      {ondragover}
+      {ondragenter}
+      {ondragleave}
+      {ondrop}
       role="button"
       tabindex="0"
     >
@@ -92,13 +138,20 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 12px;
     border-radius: var(--radius-sm);
     transition: background 0.1s, color 0.1s;
     text-align: left;
   }
-  .folder-header:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .folder-header:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .folder-header.active-folder { color: var(--accent); }
+  .folder-header.drag-over {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    outline: 1px dashed var(--accent);
+    outline-offset: -2px;
+  }
   .folder-arrow { font-size: 9px; width: 10px; }
   .folder-icon { font-size: 12px; }
   .folder-name { flex: 1; font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; font-size: 11px; }

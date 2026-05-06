@@ -133,18 +133,18 @@
     height: 32px;
     padding: 0;
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-subtle, var(--border));
     border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    color: #c0c0c0;
     font-size: 14px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    transition: color 0.1s, border-color 0.1s;
+    transition: color 0.1s, border-color 0.1s, background 0.1s;
   }
-  .expand-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+  .expand-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); background: var(--bg-hover); }
 
   .send-btn {
     padding: 9px 16px;

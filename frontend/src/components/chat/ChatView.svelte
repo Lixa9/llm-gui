@@ -139,6 +139,7 @@
         preset_id: selectedPresetId || undefined,
         system_prompt_id: payload.system_prompt_id,
         custom_system_prompt: preset?.system_prompt || payload.system_prompt || undefined,
+        folder_id: conversationsStore.activeFolderId ?? undefined,
       });
       convId = conv.id;
       conversationsStore.setActive(convId);
