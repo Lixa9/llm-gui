@@ -6,6 +6,7 @@
 
   let searchQuery = $state('');
   let collapsed = $state(false);
+  let noFolderDragOver = $state(false);
 
   const rootFolders = $derived(conversationsStore.folders.filter(f => f.parent_id === null));
   const unfolderedConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === null));
@@ -25,6 +26,13 @@
   async function newFolder() {
     const name = prompt('Folder name:');
     if (name?.trim()) await conversationsStore.createFolder(name.trim());
+  }
+
+  function onNoFolderDrop(e: DragEvent) {
+    e.preventDefault();
+    noFolderDragOver = false;
+    const convId = conversationsStore.draggingConvId;
+    if (convId) conversationsStore.move(convId, null);
   }
 
   async function deleteAllChats() {
@@ -57,6 +65,15 @@
     </div>
 
     <div class="sidebar-body">
+      {#if conversationsStore.draggingConvId !== null}
+        <div
+          class="no-folder-drop"
+          class:drag-over={noFolderDragOver}
+          ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
+          ondragleave={() => { noFolderDragOver = false; }}
+          ondrop={onNoFolderDrop}
+        >No folder</div>
+      {/if}
       {#if isSearching}
         {#if conversationsStore.searching}
           <div class="sidebar-hint">Searching…</div>
@@ -166,6 +183,23 @@
     gap: 1px;
   }
 
+  .no-folder-drop {
+    padding: 5px 8px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: center;
+    margin: 2px 0 4px;
+    cursor: copy;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .no-folder-drop.drag-over {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .sidebar-hint { font-size: 12px; color: var(--text-muted); padding: 8px 8px; }
 
   .sidebar-footer {
@@ -177,14 +211,14 @@
     width: 100%;
     padding: 5px 8px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: #c0c0c0;
     background: transparent;
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
     text-align: left;
   }
-  .sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
-  .sidebar-footer-btn.danger { color: var(--danger); opacity: 0.7; }
-  .sidebar-footer-btn.danger:hover { background: var(--bg-hover); color: var(--danger); opacity: 1; }
+  .sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .sidebar-footer-btn.danger { color: #f07070; }
+  .sidebar-footer-btn.danger:hover { background: var(--bg-hover); color: #f07070; }
 </style>

@@ -26,7 +26,18 @@
 
   function navigate() {
     conversationsStore.setActive(conversation.id);
+    conversationsStore.setActiveFolder(conversation.folder_id);
     window.location.hash = `#/chat/${conversation.id}`;
+  }
+
+  function ondragstart(e: DragEvent) {
+    e.dataTransfer?.setData('text/plain', conversation.id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    conversationsStore.setDragging(conversation.id);
+  }
+
+  function ondragend() {
+    conversationsStore.setDragging(null);
   }
 
   function startRename() {
@@ -65,9 +76,12 @@
   <div
     class="conv-item"
     class:active={isActive}
+    draggable="true"
     onclick={navigate}
     oncontextmenu={openMenu}
     onkeydown={(e) => { if (e.key === 'Enter') navigate(); }}
+    {ondragstart}
+    {ondragend}
     role="button"
     tabindex="0"
     title={conversation.title}
