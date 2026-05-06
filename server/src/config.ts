@@ -117,6 +117,8 @@ export function getConfig(): AppConfig {
 export function reloadConfig(): void {
   logger.info('Reloading config (SIGHUP)');
   loadConfig();
+  // Imported lazily to avoid circular dependency
+  import('./models').then(m => m.invalidateModelCache());
 }
 
 export function isConfigWritable(name: string): boolean {
