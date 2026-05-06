@@ -10,8 +10,9 @@
     onSend: (payload: ChatPayload) => void;
     onStop: () => void;
     streaming: boolean;
+    expanded?: boolean;
   }
-  let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming }: Props = $props();
+  let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming, expanded = $bindable(false) }: Props = $props();
 
   let text = $state('');
 
@@ -34,6 +35,7 @@
     };
 
     text = '';
+    expanded = false;
     onSend(payload);
   }
 
@@ -45,22 +47,29 @@
   }
 </script>
 
-<div class="composer">
+<div class="composer" class:expanded>
   <textarea
     class="composer-textarea"
     bind:value={text}
     placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-    rows={1}
+    rows={3}
     onkeydown={handleKeydown}
     disabled={streaming}
   ></textarea>
-  {#if streaming}
-    <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
-  {:else}
-    <button class="send-btn" onclick={send} disabled={!text.trim()} title="Send">
-      ↑ Send
-    </button>
-  {/if}
+  <div class="composer-controls">
+    <button
+      class="expand-btn"
+      onclick={() => expanded = !expanded}
+      title={expanded ? 'Collapse' : 'Expand'}
+    >{expanded ? '⤡' : '⤢'}</button>
+    {#if streaming}
+      <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
+    {:else}
+      <button class="send-btn" onclick={send} disabled={!text.trim()} title="Send">
+        ↑ Send
+      </button>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -69,9 +78,17 @@
     background: var(--bg-surface);
     padding: 10px 16px 14px;
     display: flex;
+    flex-direction: row;
     align-items: flex-end;
     gap: 8px;
     flex-shrink: 0;
+  }
+
+  .composer.expanded {
+    flex-direction: column;
+    flex: 1;
+    align-items: stretch;
+    min-height: 0;
   }
 
   .composer-textarea {
@@ -87,12 +104,47 @@
     resize: none;
     outline: none;
     transition: border-color 0.15s;
-    min-height: 40px;
+    min-height: 72px;
     max-height: 240px;
     overflow-y: auto;
   }
   .composer-textarea:focus { border-color: var(--accent); }
   .composer-textarea:disabled { opacity: 0.6; }
+
+  .expanded .composer-textarea {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .composer-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .expanded .composer-controls {
+    justify-content: flex-end;
+  }
+
+  .expand-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .expand-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
 
   .send-btn {
     padding: 9px 16px;

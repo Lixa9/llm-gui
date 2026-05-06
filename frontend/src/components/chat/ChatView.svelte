@@ -17,6 +17,7 @@
   let { conversationId }: Props = $props();
 
   let editingMessage = $state<Message | null>(null);
+  let composerExpanded = $state(false);
 
   // Override state — null means "use derived/auto value"
   let _presetId = $state<string | null>(null);
@@ -215,18 +216,20 @@
     </div>
   </div>
 
-  {#if conversationId}
-    <MessageList
-      {conversationId}
-      onEdit={(msg) => editingMessage = msg}
-      onRegenerate={handleRegenerate}
-    />
-  {:else}
-    <div class="chat-welcome">
-      <div class="welcome-icon">✦</div>
-      <h2 class="welcome-title">Start a conversation</h2>
-      <p class="welcome-sub">Select a model above and type a message below.</p>
-    </div>
+  {#if !composerExpanded}
+    {#if conversationId}
+      <MessageList
+        {conversationId}
+        onEdit={(msg) => editingMessage = msg}
+        onRegenerate={handleRegenerate}
+      />
+    {:else}
+      <div class="chat-welcome">
+        <div class="welcome-icon">✦</div>
+        <h2 class="welcome-title">Start a conversation</h2>
+        <p class="welcome-sub">Select a model above and type a message below.</p>
+      </div>
+    {/if}
   {/if}
 
   <Composer
@@ -237,6 +240,7 @@
     streaming={chatStore.streaming}
     onSend={handleSend}
     onStop={chatStore.stop}
+    bind:expanded={composerExpanded}
   />
 </div>
 
