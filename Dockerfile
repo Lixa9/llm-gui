@@ -16,8 +16,9 @@ RUN bun install --production
 COPY server/ .
 COPY --from=build /app/dist ./static
 
-# Copy completion sound to static dir
-# (already included from frontend/static/ via vite build public dir)
+RUN mkdir -p /data && chown -R bun:bun /app /data
+
+USER bun
 
 VOLUME ["/data"]
 EXPOSE 3000

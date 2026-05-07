@@ -19,6 +19,15 @@ const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
 
 // Startup checks
+const KNOWN_WEAK_SECRETS = new Set([
+  'change-me-to-a-random-32-char-string',
+  'changeme',
+  'secret',
+  'mysecret',
+  'supersecret',
+  'password',
+]);
+
 if (!process.env.SECRET_KEY?.trim()) {
   const generated = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex');
   process.env.SECRET_KEY = generated;
@@ -26,6 +35,14 @@ if (!process.env.SECRET_KEY?.trim()) {
     'WARNING: SECRET_KEY not set — using ephemeral generated key. Sessions will not persist across restarts.\n' +
     `  Set SECRET_KEY=${generated} in your environment to make sessions persistent.\n`
   );
+} else if (
+  process.env.SECRET_KEY.length < 32 ||
+  KNOWN_WEAK_SECRETS.has(process.env.SECRET_KEY.trim().toLowerCase())
+) {
+  process.stderr.write(
+    'FATAL: SECRET_KEY is too short or a known default. Set it to a random string of at least 32 characters.\n'
+  );
+  process.exit(1);
 }
 
 // Load config
@@ -60,12 +77,14 @@ app.use('*', async (c, next) => {
   });
 });
 
-// CORS: same-origin only
+// CORS: same-origin only — localhost allowed on any port for dev convenience
+const LOCALHOST_ORIGIN = /^https?:\/\/localhost(:\d+)?$/;
+
 app.use('/api/*', async (c, next) => {
   const origin = c.req.header('origin');
   if (origin) {
     const cfg = getConfig();
-    if (origin !== cfg.app.base_url && !origin.startsWith('http://localhost')) {
+    if (origin !== cfg.app.base_url && !LOCALHOST_ORIGIN.test(origin)) {
       return c.json({ error: 'Forbidden' }, 403);
     }
   }
