@@ -135,6 +135,12 @@ export function getConfigFileContent(name: string): string {
 }
 
 export function writeConfigFile(name: string, content: string): void {
+  // Validate YAML syntax before touching the file on disk
+  const parsed = yaml.load(content);
+  // For the main config, also run schema validation so a bad write can't corrupt app state
+  if (name === 'config.yaml') {
+    configSchema.parse(expandEnv(parsed ?? {}));
+  }
   const path = join(CONFIG_DIR, name);
   const tmp = join(dirname(path), `.${name}.tmp.${Date.now()}`);
   writeFileSync(tmp, content, 'utf8');

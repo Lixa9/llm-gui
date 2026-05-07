@@ -84,17 +84,8 @@ app.route('/api/preferences', preferencesRouter);
 app.route('/api/automations', automationsRouter);
 app.route('/api/admin', adminRouter);
 
-// Health check
-app.get('/health', async (c) => {
-  let litellmOk = false;
-  try {
-    const cfg = getConfig();
-    const r = await fetch(`${cfg.litellm.base_url}/health`, { signal: AbortSignal.timeout(2000) });
-    litellmOk = r.ok;
-  } catch { /* ignore */ }
-
-  return c.json({ status: 'ok', db: true, litellm: litellmOk });
-});
+// Health check — minimal response; does not probe internal services
+app.get('/health', (c) => c.json({ status: 'ok' }));
 
 // SPA fallback — serve index.html for all non-API routes
 app.use('*', serveStatic({ root: STATIC_DIR }));
