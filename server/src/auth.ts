@@ -23,7 +23,11 @@ function getClientIp(c: Context): string {
 function isLoginLocked(ip: string): boolean {
   const entry = loginAttempts.get(ip);
   if (!entry) return false;
+  // Entry exists but lockout hasn't been triggered yet — don't delete, just not locked
+  if (entry.lockedUntil === 0) return false;
+  // Active lockout
   if (entry.lockedUntil > Date.now()) return true;
+  // Lockout expired — clear it
   loginAttempts.delete(ip);
   return false;
 }
