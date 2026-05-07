@@ -11,6 +11,38 @@ import type { Role, SessionPayload } from './types';
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 let _discoveredEndpoints: { token_endpoint: string; end_session_endpoint?: string } | null = null;
 
+// Brute-force protection for local login
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+function getClientIp(c: Context): string {
+  return c.req.header('x-forwarded-for')?.split(',')[0].trim() ?? c.req.header('x-real-ip') ?? 'unknown';
+}
+
+function isLoginLocked(ip: string): boolean {
+  const entry = loginAttempts.get(ip);
+  if (!entry) return false;
+  if (entry.lockedUntil > Date.now()) return true;
+  loginAttempts.delete(ip);
+  return false;
+}
+
+function recordLoginFailure(ip: string): void {
+  const entry = loginAttempts.get(ip) ?? { count: 0, lockedUntil: 0 };
+  entry.count++;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+    entry.count = 0;
+    logger.warn('Local login locked out', { ip });
+  }
+  loginAttempts.set(ip, entry);
+}
+
+function clearLoginFailures(ip: string): void {
+  loginAttempts.delete(ip);
+}
+
 async function discover() {
   if (_discoveredEndpoints) return _discoveredEndpoints;
   const cfg = getConfig().oidc;
@@ -230,19 +262,28 @@ authRouter.post('/local', async (c) => {
   const creds = localAuthCredentials();
   if (!creds) return c.json({ error: 'Local auth disabled' }, 403);
 
+  const ip = getClientIp(c);
+  if (isLoginLocked(ip)) {
+    return c.json({ error: 'Too many failed attempts. Try again later.' }, 429);
+  }
+
   const body = await c.req.json() as { username?: string; password?: string };
   if (!body.username || !body.password) {
     return c.json({ error: 'Missing credentials' }, 400);
   }
 
   if (body.username !== creds.username) {
+    recordLoginFailure(ip);
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
   const valid = await checkLocalPassword(body.password, creds.password);
   if (!valid) {
+    recordLoginFailure(ip);
     return c.json({ error: 'Invalid credentials' }, 401);
   }
+
+  clearLoginFailures(ip);
 
   const db = getDb();
   const sub = 'local:admin';

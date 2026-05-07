@@ -44,7 +44,12 @@ conversationsRouter.get('/search', async (c) => {
   if (!q.trim()) return c.json([]);
 
   const db = getDb();
-  const query = q.trim().split(/\s+/).map(w => `"${w.replace(/"/g, '')}"`).join(' OR ');
+  // Strip FTS5 special chars (quotes, wildcards) so user input is treated as plain words
+  const terms = q.trim().slice(0, 200).split(/\s+/)
+    .map(w => w.replace(/["*]/g, ''))
+    .filter(w => w.length > 0);
+  if (!terms.length) return c.json([]);
+  const query = terms.map(w => `"${w}"`).join(' OR ');
 
   const rows = db.query<ConversationRow, [string, string]>(`
     SELECT DISTINCT conv.* FROM conversations conv

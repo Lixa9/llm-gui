@@ -21,6 +21,9 @@ adminRouter.get('/users', (c) => {
 
 adminRouter.patch('/users/:sub', async (c) => {
   const body = await c.req.json() as { role_override: string | null };
+  if (body.role_override !== null && body.role_override !== 'admin' && body.role_override !== 'user') {
+    return c.json({ error: 'Invalid role' }, 400);
+  }
   const db = getDb();
   db.query('UPDATE users SET role_override=? WHERE sub=?')
     .run(body.role_override ?? null, c.req.param('sub'));
@@ -58,6 +61,10 @@ adminRouter.put('/config/:file', async (c) => {
   if (!isConfigWritable(name)) return c.json({ error: 'Config is read-only' }, 403);
 
   const body = await c.req.json() as { content: string };
-  writeConfigFile(name, body.content);
+  try {
+    writeConfigFile(name, body.content);
+  } catch (e) {
+    return c.json({ error: `Config validation failed: ${(e as Error).message}` }, 400);
+  }
   return c.body(null, 204);
 });

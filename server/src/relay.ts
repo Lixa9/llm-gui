@@ -3,6 +3,7 @@ import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { checkRateLimit, openStream, closeStream } from './ratelimit';
+import { fetchModels } from './models';
 import { logger } from './logger';
 import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
 
@@ -54,6 +55,13 @@ relayRouter.post('/', async (c) => {
   if (!cfg.litellm.base_url) {
     return c.json({ error: 'LiteLLM is not configured. Set litellm.base_url in config.yaml.' }, 503);
   }
+
+  // Validate that the requested model is in the user's allowed list
+  const allowedModels = await fetchModels(user.role);
+  if (allowedModels.length > 0 && !allowedModels.some(m => m.id === body.model)) {
+    return c.json({ error: 'Model not available' }, 400);
+  }
+
   const db = getDb();
 
   // Resolve conversation
