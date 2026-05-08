@@ -1,6 +1,5 @@
-import { readFileSync, accessSync, constants, writeFileSync, renameSync } from 'fs';
+import { readFileSync, accessSync, constants, writeFileSync, renameSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
-import { tmpdir } from 'os';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import type { AppConfig } from './types';
@@ -50,6 +49,62 @@ const configSchema = z.object({
   }).default({}),
 });
 
+const DEFAULT_CONFIGS: Record<string, string> = {
+  'config.yaml': [
+    'app:',
+    '  name: "Chat"',
+    '  base_url: "http://localhost:3000"',
+    '  secret_key: "${SECRET_KEY}"',
+    '',
+    'litellm:',
+    '  base_url: "${LITELLM_BASE_URL}"',
+    '  api_key: "${LITELLM_API_KEY}"',
+    '',
+    'database:',
+    '  path: "/data/chat.db"',
+    '',
+  ].join('\n'),
+  'models.yaml': 'models: []\n',
+  'prompts.yaml': 'prompts: []\n',
+  'automations.yaml': 'automations: []\n',
+};
+
+function scaffoldConfigIfNeeded(): void {
+  // Ensure CONFIG_DIR exists
+  mkdirSync(CONFIG_DIR, { recursive: true });
+
+  // Check if CONFIG_DIR itself is writable
+  let dirWritable = true;
+  try { accessSync(CONFIG_DIR, constants.W_OK); }
+  catch { dirWritable = false; }
+
+  // Find which files are absent
+  const missing: string[] = [];
+  for (const name of CONFIG_FILES) {
+    try { accessSync(join(CONFIG_DIR, name), constants.F_OK); }
+    catch { missing.push(name); }
+  }
+
+  if (missing.length === 0) return;
+
+  if (!dirWritable) {
+    for (const name of missing) {
+      logger.error('Config file missing and directory is read-only', { file: name, path: join(CONFIG_DIR, name) });
+    }
+    process.stderr.write(
+      'FATAL: Missing config files in a read-only config directory. ' +
+      'Mount the missing files or make the config directory writable.\n'
+    );
+    process.exit(1);
+  }
+
+  for (const name of missing) {
+    const filePath = join(CONFIG_DIR, name);
+    writeFileSync(filePath, DEFAULT_CONFIGS[name], 'utf8');
+    logger.info('Created default config file', { file: name, path: filePath });
+  }
+}
+
 function expandEnv(obj: unknown): unknown {
   if (typeof obj === 'string') {
     return obj.replace(/\$\{([^}]+)\}/g, (_, name) => process.env[name] ?? '');
@@ -86,6 +141,7 @@ let _config: AppConfig | null = null;
 const _writability: Record<string, boolean> = {};
 
 export function loadConfig(): AppConfig {
+  scaffoldConfigIfNeeded();
   const mainRaw = loadYaml('config.yaml') as Record<string, unknown>;
   const modelsRaw = loadYaml('models.yaml') as { models?: unknown[] };
   const promptsRaw = loadYaml('prompts.yaml') as { prompts?: unknown[] };
