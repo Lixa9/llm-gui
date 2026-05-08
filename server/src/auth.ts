@@ -97,6 +97,10 @@ async function checkLocalPassword(input: string, stored: string): Promise<boolea
   return crypto.timingSafeEqual(a, b);
 }
 
+function isSecureCookieRequired(): boolean {
+  return getConfig().app.base_url.startsWith('https://');
+}
+
 async function verifySession(token: string): Promise<SessionPayload | null> {
   try {
     const secret = new TextEncoder().encode(getConfig().app.secret_key);
@@ -236,7 +240,7 @@ authRouter.get('/callback', async (c) => {
 
   setCookie(c, 'session', sessionToken, {
     httpOnly: true,
-    secure: true,
+    secure: isSecureCookieRequired(),
     sameSite: 'Lax',
     path: '/',
     maxAge: 86400,
@@ -299,7 +303,7 @@ authRouter.post('/local', async (c) => {
   const sessionToken = await signSession({ sub, email: '', name: creds.username, role: 'admin', method: 'local' });
   setCookie(c, 'session', sessionToken, {
     httpOnly: true,
-    secure: process.env.NODE_ENV !== 'development',
+    secure: isSecureCookieRequired(),
     sameSite: 'Lax',
     path: '/',
     maxAge: 86400,
