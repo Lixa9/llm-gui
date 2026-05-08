@@ -1,8 +1,8 @@
 services:
   chat:
     build: .
-    # Or use the pre-built image from the Gitea registry:
-    # image: git.control.lan/nico/llm-gui:latest
+    # Or use the pre-built image from GitHub Container Registry:
+    # image: ghcr.io/lixa9/llm-gui:latest
     ports:
       - "3000:3000"
     volumes:
