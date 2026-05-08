@@ -1,16 +1,13 @@
 services:
   chat:
     build: .
-    # Or use a pre-built image:
-    # image: ghcr.io/you/llm-frontend:latest
+    # Or use the pre-built image from the Gitea registry:
+    # image: git.control.lan/nico/llm-gui:latest
     ports:
       - "3000:3000"
     volumes:
       - ./data:/data
-      - ./config/config.yaml:/app/config/config.yaml
-      - ./config/models.yaml:/app/config/models.yaml
-      - ./config/prompts.yaml:/app/config/prompts.yaml
-      - ./config/automations.yaml:/app/config/automations.yaml
+      - ./config:/app/config
     environment:
       SECRET_KEY: ${SECRET_KEY}
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
