@@ -17,6 +17,7 @@ jobs:
       - name: Build and push
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           echo "$TOKEN" | docker login git.control.lan \
             -u ${{ github.actor }} --password-stdin
