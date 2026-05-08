@@ -8,6 +8,12 @@ jobs:
   build:
     runs-on: act-1
     steps:
+      - name: Install Docker CLI
+        run: |
+          if ! command -v docker &>/dev/null; then
+            apt-get update -qq && apt-get install -y -qq docker.io
+          fi
+
       - name: Checkout
         run: |
           git config --global http.sslVerify false
