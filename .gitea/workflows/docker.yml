@@ -8,14 +8,9 @@ jobs:
   build:
     runs-on: act-1
     steps:
-      - name: Install Docker CLI
-        run: |
-          if ! command -v docker &>/dev/null; then
-            apt-get update -qq && apt-get install -y -qq docker.io
-          fi
-
       - name: Checkout
         run: |
+          apk add --no-cache git
           git config --global http.sslVerify false
           git clone --depth 1 --branch main \
             https://git.control.lan/Nico/llm-gui.git .
@@ -23,7 +18,6 @@ jobs:
       - name: Build and push
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           echo "$TOKEN" | docker login git.control.lan \
             -u ${{ github.actor }} --password-stdin
