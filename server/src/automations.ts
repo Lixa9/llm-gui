@@ -87,7 +87,7 @@ automationsRouter.post('/:id/trigger', async (c) => {
   if (!row) return c.json({ error: 'Not found' }, 404);
 
   const auto = serializeAutomation(row);
-  const run = await runAutomation(auto);
+  const run = await runAutomation(auto, 'manual');
   return c.json(run, 201);
 });
 
@@ -122,7 +122,7 @@ function scheduleAutomation(auto: ReturnType<typeof serializeAutomation>) {
   if (!expr || !cron.validate(expr)) return;
 
   const task = cron.schedule(expr, () => {
-    runAutomation(auto).catch(e => logger.error('Automation run failed', { id: auto.id, error: String(e) }));
+    runAutomation(auto, 'scheduled').catch(e => logger.error('Automation run failed', { id: auto.id, error: String(e) }));
   });
   scheduledTasks.set(auto.id, task);
 }
@@ -144,10 +144,12 @@ export function initScheduler() {
   logger.info('Automation scheduler initialized', { count: rows.length });
 }
 
-async function runAutomation(auto: ReturnType<typeof serializeAutomation>): Promise<AutomationRunRow> {
+async function runAutomation(auto: ReturnType<typeof serializeAutomation>, source: 'scheduled' | 'manual'): Promise<AutomationRunRow> {
   const db = getDb();
   const cfg = getConfig();
   const runId = generateId();
+
+  logger.info('automation run started', { automation_id: auto.id, name: auto.name, source });
 
   // Create a conversation for this run
   const now = new Date();
@@ -168,6 +170,7 @@ async function runAutomation(auto: ReturnType<typeof serializeAutomation>): Prom
   // Execute asynchronously
   executeAutomationRun(auto, convId, runId).catch(e => {
     db.query('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
+    logger.error('automation run error', { automation_id: auto.id, run_id: runId, error: String(e) });
   });
 
   return db.query<AutomationRunRow, [string]>('SELECT * FROM automation_runs WHERE id=?').get(runId)!;
@@ -176,24 +179,28 @@ async function runAutomation(auto: ReturnType<typeof serializeAutomation>): Prom
 async function executeAutomationRun(auto: ReturnType<typeof serializeAutomation>, convId: string, runId: string) {
   const db = getDb();
   const cfg = getConfig();
+  const start = Date.now();
 
   try {
     if (auto.type === 'scheduled') {
       const def = auto.definition as ScheduledDefinition;
-      await callLiteLLM(convId, def.model, def.system_prompt, def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
+      await callLiteLLM(auto.id, convId, def.model, def.system_prompt, def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
     } else {
       const def = auto.definition as PipelineDefinition;
       for (const step of def.steps ?? []) {
-        await callLiteLLM(convId, step.model, step.system_prompt, step.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
+        await callLiteLLM(auto.id, convId, step.model, step.system_prompt, step.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
       }
     }
     db.query('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
+    logger.info('automation run finished', { automation_id: auto.id, run_id: runId, status: 'done', latency_ms: Date.now() - start });
   } catch (e) {
     db.query('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
+    logger.error('automation run finished', { automation_id: auto.id, run_id: runId, status: 'error', error: String(e), latency_ms: Date.now() - start });
   }
 }
 
 async function callLiteLLM(
+  automationId: string,
   convId: string,
   model: string,
   systemPrompt: string,
@@ -214,6 +221,9 @@ async function callLiteLLM(
   }
   messages.push({ role: 'user', content: userPrompt });
 
+  logger.info('automation llm request', { automation_id: automationId, model });
+  const llmStart = Date.now();
+
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -222,6 +232,8 @@ async function callLiteLLM(
     },
     body: JSON.stringify({ model, messages, stream: false }),
   });
+
+  logger.info('automation llm response', { automation_id: automationId, model, status: res.status, latency_ms: Date.now() - llmStart });
 
   if (!res.ok) throw new Error(`LiteLLM error: ${res.status}`);
 
