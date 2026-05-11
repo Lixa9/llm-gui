@@ -1,7 +1,7 @@
 import type {
   User, Conversation, ConversationFolder, Message, SystemPrompt,
   ModelInfo, ModelPreset, Automation, AutomationRun,
-  UserPreferences, AdminUser, ConfigFile, Role
+  UserPreferences, AdminUser, ConfigFile, Role, UploadResult
 } from './types';
 
 class HttpError extends Error {
@@ -103,7 +103,25 @@ export const api = {
     runs: (id: string) => get<AutomationRun[]>(`/api/automations/${id}/runs`),
   },
 
-preferences: {
+uploads: {
+    upload: async (file: File): Promise<UploadResult> => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/uploads', {
+        method: 'POST',
+        body: form,
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { msg = (await res.json() as { error: string }).error ?? msg; } catch { /* ignore */ }
+        throw new HttpError(res.status, msg);
+      }
+      return res.json() as Promise<UploadResult>;
+    },
+  },
+
+  preferences: {
     get: () => get<UserPreferences>('/api/preferences'),
     set: (key: string, value: string) => put<void>(`/api/preferences/${key}`, { value }),
   },

@@ -156,4 +156,17 @@ export function applySchema(db: Database): void {
       error TEXT
     )
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS uploads (
+      id        TEXT PRIMARY KEY,
+      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      sha256    TEXT NOT NULL,
+      filename  TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size      INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC)`);
 }
