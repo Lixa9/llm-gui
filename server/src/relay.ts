@@ -1,11 +1,42 @@
 import { Hono } from 'hono';
+import { join } from 'path';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { checkRateLimit, openStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
+import { getUploadsDir, MIME_TO_EXT } from './uploads';
 import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
+
+async function resolveContentParts(parts: MessageContentPart[]): Promise<unknown[]> {
+  const db = getDb();
+  const uploadsDir = getUploadsDir();
+  const resolved: unknown[] = [];
+  for (const part of parts) {
+    if (part.type === 'image_url') {
+      const url = part.image_url.url;
+      if (url.startsWith('/api/uploads/')) {
+        const uploadId = url.split('/').pop()!;
+        const row = db.query<{ sha256: string; mime_type: string }, [string]>(
+          'SELECT sha256, mime_type FROM uploads WHERE id=?'
+        ).get(uploadId);
+        if (row) {
+          const ext = MIME_TO_EXT[row.mime_type] ?? '';
+          const filePath = join(uploadsDir, `${row.sha256}${ext}`);
+          const bytes = await Bun.file(filePath).arrayBuffer();
+          const base64 = Buffer.from(bytes).toString('base64');
+          resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${base64}` } });
+        }
+      } else {
+        resolved.push({ type: 'image_url', image_url: { url } });
+      }
+    } else {
+      resolved.push(part);
+    }
+  }
+  return resolved;
+}
 
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
@@ -21,7 +52,10 @@ function estimateTokens(text: string): number {
 }
 
 function extractText(content: MessageContentPart[]): string {
-  return content.filter(p => p.type === 'text').map(p => (p as { type: 'text'; text: string }).text).join('\n');
+  return content
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map(p => p.text)
+    .join('\n');
 }
 
 function sse(data: unknown): Uint8Array {
@@ -108,7 +142,7 @@ relayRouter.post('/', async (c) => {
   for (const msg of trimmed) {
     openaiMessages.push({
       role: msg.role,
-      content: msg.content,
+      content: await resolveContentParts(msg.content),
       ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
         id: tc.id,
         type: 'function',
@@ -116,7 +150,7 @@ relayRouter.post('/', async (c) => {
       })) } : {}),
     });
   }
-  openaiMessages.push({ role: 'user', content: body.new_user_message.content });
+  openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content) });
 
   openStream(user.sub);
 

@@ -13,6 +13,7 @@ import { presetsRouter } from './presets';
 import { preferencesRouter } from './preferences';
 import { automationsRouter, initScheduler } from './automations';
 import { adminRouter } from './admin';
+import { uploadsRouter } from './uploads';
 import { logger } from './logger';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
@@ -102,6 +103,7 @@ app.route('/api/presets', presetsRouter);
 app.route('/api/preferences', preferencesRouter);
 app.route('/api/automations', automationsRouter);
 app.route('/api/admin', adminRouter);
+app.route('/api/uploads', uploadsRouter);
 
 // Health check — minimal response; does not probe internal services
 app.get('/health', (c) => c.json({ status: 'ok' }));
