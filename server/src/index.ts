@@ -117,6 +117,30 @@ app.get('*', async (c) => {
 // Init scheduler
 initScheduler();
 
+// Periodic backend connectivity warning
+const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+function startBackendHealthCheck() {
+  if (!getConfig().litellm.base_url) return;
+  setInterval(async () => {
+    const cfg = getConfig();
+    if (!cfg.litellm.base_url) return;
+    try {
+      const res = await fetch(`${cfg.litellm.base_url}/models`, {
+        headers: cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        logger.warn('backend unreachable', { url: cfg.litellm.base_url, status: res.status });
+      }
+    } catch (e) {
+      logger.warn('backend unreachable', { url: cfg.litellm.base_url, error: (e as Error).message });
+    }
+  }, BACKEND_CHECK_INTERVAL_MS);
+}
+
+startBackendHealthCheck();
+
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);
 

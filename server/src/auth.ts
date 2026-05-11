@@ -246,6 +246,7 @@ authRouter.get('/callback', async (c) => {
     maxAge: 86400,
   });
 
+  logger.info('login success', { method: 'oidc', sub, email, name, role });
   return c.redirect('/');
 });
 
@@ -253,6 +254,7 @@ authRouter.get('/logout', async (c) => {
   const token = getCookie(c, 'session');
   const payload = token ? await verifySession(token) : null;
   deleteCookie(c, 'session', { path: '/' });
+  logger.info('logout', { sub: payload?.sub, method: payload?.method });
   if (payload?.method === 'oidc') {
     const endpoints = await discover().catch(() => null);
     if (endpoints?.end_session_endpoint) {
@@ -280,14 +282,18 @@ authRouter.post('/local', async (c) => {
     return c.json({ error: 'Missing credentials' }, 400);
   }
 
+  logger.info('login attempt', { method: 'local', ip, username: body.username });
+
   if (body.username !== creds.username) {
     recordLoginFailure(ip);
+    logger.warn('login failed', { method: 'local', ip, reason: 'invalid credentials' });
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
   const valid = await checkLocalPassword(body.password, creds.password);
   if (!valid) {
     recordLoginFailure(ip);
+    logger.warn('login failed', { method: 'local', ip, reason: 'invalid credentials' });
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
@@ -309,7 +315,7 @@ authRouter.post('/local', async (c) => {
     maxAge: 86400,
   });
 
-  logger.info('Local admin login', { username: creds.username });
+  logger.info('login success', { method: 'local', ip, username: creds.username });
   return c.json({ ok: true });
 });
 

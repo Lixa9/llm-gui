@@ -72,6 +72,13 @@ relayRouter.post('/', async (c) => {
       .run(convId, user.sub, body.model, body.system_prompt ?? null);
   }
 
+  logger.info('chat request', {
+    user_sub: user.sub,
+    model: body.model,
+    conv_id: convId,
+    message_count: body.messages.length,
+  });
+
   // Persist user message
   const userMsgId = generateId();
   const userContent = JSON.stringify(body.new_user_message.content);
@@ -245,7 +252,7 @@ relayRouter.post('/', async (c) => {
         controller.close();
       } finally {
         closeStream(user.sub);
-        logger.info('Chat relay complete', {
+        logger.info('chat response', {
           user_sub: user.sub,
           model: body.model,
           latency_ms: Date.now() - start,
