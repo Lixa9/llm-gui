@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
-import { logger } from './logger';
 import type { SessionPayload, ConversationRow, MessageRow } from './types';
 
 export const conversationsRouter = new Hono();
@@ -71,31 +70,10 @@ conversationsRouter.post('/', async (c) => {
   const body = await c.req.json() as Partial<ConversationRow>;
   const db = getDb();
   const id = generateId();
-
-  // Validate FK references — treat empty strings and non-existent IDs as null
-  // to avoid a FOREIGN KEY constraint failure when stale IDs are passed.
-  const rawPresetId = body.preset_id || null;
-  const rawPromptId = body.system_prompt_id || null;
-  const rawFolderId = body.folder_id || null;
-
-  const presetId = rawPresetId
-    ? (db.query<{ id: string }, [string]>('SELECT id FROM model_presets WHERE id=?').get(rawPresetId)?.id ?? null)
-    : null;
-  const promptId = rawPromptId
-    ? (db.query<{ id: string }, [string]>('SELECT id FROM system_prompts WHERE id=?').get(rawPromptId)?.id ?? null)
-    : null;
-  const folderId = rawFolderId
-    ? (db.query<{ id: string }, [string]>('SELECT id FROM conversation_folders WHERE id=?').get(rawFolderId)?.id ?? null)
-    : null;
-
-  if (rawPresetId && !presetId) logger.warn('conversation create: unknown preset_id silenced', { preset_id: rawPresetId, user_sub: user.sub });
-  if (rawPromptId && !promptId) logger.warn('conversation create: unknown system_prompt_id silenced', { system_prompt_id: rawPromptId, user_sub: user.sub });
-  if (rawFolderId && !folderId) logger.warn('conversation create: unknown folder_id silenced', { folder_id: rawFolderId, user_sub: user.sub });
-
   db.query(
     `INSERT INTO conversations (id, owner_sub, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, user.sub, body.model_id ?? null, presetId, promptId, body.custom_system_prompt ?? null, folderId);
+  ).run(id, user.sub, body.model_id ?? null, body.preset_id ?? null, body.system_prompt_id ?? null, body.custom_system_prompt ?? null, body.folder_id ?? null);
   const row = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(id)!;
   return c.json(serializeConversation(row), 201);
 });
