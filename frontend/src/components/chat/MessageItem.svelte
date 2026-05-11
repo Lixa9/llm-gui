@@ -8,9 +8,11 @@
   import Badge from '../ui/Badge.svelte';
   import { formatRelativeDate } from '$lib/utils';
   import { modelsStore } from '../../stores/models.svelte';
+  import { conversationsStore } from '../../stores/conversations.svelte';
 
   interface Props {
     message: Message | PendingMessage;
+    conversationId?: string;
     isStreaming?: boolean;
     isPending?: boolean;
     onEdit: (msg: Message) => void;
@@ -18,7 +20,7 @@
     onDelete: (msg: Message) => void;
     onFork: (msg: Message) => void;
   }
-  let { message, isStreaming = false, isPending = false, onEdit, onRegenerate, onDelete, onFork }: Props = $props();
+  let { message, conversationId, isStreaming = false, isPending = false, onEdit, onRegenerate, onDelete, onFork }: Props = $props();
 
   const isFullMessage = $derived('id' in message && !isPending);
 
@@ -37,6 +39,26 @@
       ? [{ type: 'text' as const, text: (message as PendingMessage).content }]
       : (message as Message).content,
   );
+
+  const senderName = $derived.by((): string => {
+    if (message.role !== 'assistant') return 'You';
+    const convId = isPending ? conversationId : (message as Message).conversation_id;
+    if (convId) {
+      const conv = conversationsStore.list.find(c => c.id === convId);
+      if (conv?.preset_id) {
+        const preset = modelsStore.presets.find(p => p.id === conv.preset_id);
+        if (preset?.name) return preset.name;
+      }
+    }
+    if (!isPending) {
+      const modelId = (message as Message).model;
+      if (modelId) {
+        const modelInfo = modelsStore.models.find(m => m.id === modelId);
+        return modelInfo?.display_name ?? modelId;
+      }
+    }
+    return 'Assistant';
+  });
 </script>
 
 <div class="msg-wrapper" class:msg-user={message.role === 'user'} class:msg-assistant={message.role === 'assistant'}>
@@ -50,7 +72,7 @@
 
   <div class="msg-body">
     <div class="msg-header">
-      <span class="msg-role">{message.role === 'user' ? 'You' : 'Assistant'}</span>
+      <span class="msg-role">{senderName}</span>
       {#if isFullMessage}
         {#if (message as Message).edited_at}
           <Badge variant="muted">edited</Badge>
