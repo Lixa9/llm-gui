@@ -9,6 +9,7 @@ export interface PendingMessage {
   role: 'assistant';
   content: string;
   tool_calls: ToolCall[];
+  model: string;
 }
 
 function createChatStore() {
@@ -59,7 +60,7 @@ function createChatStore() {
     streaming = true;
     error = null;
     abortController = new AbortController();
-    pending = { role: 'assistant', content: '', tool_calls: [] };
+    pending = { role: 'assistant', content: '', tool_calls: [], model: payload.model };
 
     try {
       await streamChat(payload, abortController.signal, (event) => {

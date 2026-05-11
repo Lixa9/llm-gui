@@ -50,12 +50,12 @@
         if (preset?.name) return preset.name;
       }
     }
-    if (!isPending) {
-      const modelId = (message as Message).model;
-      if (modelId) {
-        const modelInfo = modelsStore.models.find(m => m.id === modelId);
-        return modelInfo?.display_name ?? modelId;
-      }
+    const modelId = isPending
+      ? (message as PendingMessage).model
+      : (message as Message).model;
+    if (modelId) {
+      const modelInfo = modelsStore.models.find(m => m.id === modelId);
+      return modelInfo?.display_name ?? modelId;
     }
     return 'Assistant';
   });
