@@ -54,6 +54,7 @@
     {#each chatStore.allMessages as message, i (('id' in message ? message.id : `pending-${i}`))}
       <MessageItem
         {message}
+        {conversationId}
         isStreaming={chatStore.streaming}
         isPending={!('id' in message)}
         {onEdit}
