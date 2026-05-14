@@ -10,7 +10,7 @@ adminRouter.use('*', requireRole('admin'));
 adminRouter.get('/users', (c) => {
   const db = getDb();
   const cfg = getConfig();
-  const users = db.query<UserRow, []>('SELECT * FROM users ORDER BY created_at DESC').all();
+  const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC').all() as UserRow[];
 
   const resolved = users.map(u => {
     const role = u.role_override ?? cfg.rbac.default_role;
@@ -25,24 +25,24 @@ adminRouter.patch('/users/:sub', async (c) => {
     return c.json({ error: 'Invalid role' }, 400);
   }
   const db = getDb();
-  db.query('UPDATE users SET role_override=? WHERE sub=?')
+  db.prepare('UPDATE users SET role_override=? WHERE sub=?')
     .run(body.role_override ?? null, c.req.param('sub'));
   return c.body(null, 204);
 });
 
 adminRouter.get('/prompts', (c) => {
   const db = getDb();
-  const rows = db.query<SystemPromptRow, []>(
+  const rows = db.prepare(
     'SELECT * FROM system_prompts WHERE deleted_at IS NULL ORDER BY owner_sub ASC, name ASC'
-  ).all();
+  ).all() as SystemPromptRow[];
   return c.json(rows.map(r => ({ ...r, visible_to: r.visible_to ? JSON.parse(r.visible_to) : null })));
 });
 
 adminRouter.get('/automations', (c) => {
   const db = getDb();
-  const rows = db.query<AutomationRow, []>(
+  const rows = db.prepare(
     'SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY owner_sub ASC, name ASC'
-  ).all();
+  ).all() as AutomationRow[];
   return c.json(rows.map(r => ({ ...r, enabled: r.enabled === 1, definition: JSON.parse(r.definition) })));
 });
 

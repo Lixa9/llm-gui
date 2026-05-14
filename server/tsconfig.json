@@ -7,8 +7,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "verbatimModuleSyntax": true,
-    "types": ["bun-types"]
+    "verbatimModuleSyntax": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]

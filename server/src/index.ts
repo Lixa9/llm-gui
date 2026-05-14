@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
-import { serveStatic } from 'hono/bun';
+import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { getCookie } from 'hono/cookie';
+import { existsSync, readFileSync } from 'fs';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
@@ -110,9 +112,10 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 
 // SPA fallback — serve index.html for all non-API routes
 app.use('*', serveStatic({ root: STATIC_DIR }));
-app.get('*', async (c) => {
-  return Bun.file(`${STATIC_DIR}/index.html`).exists()
-    ? c.html(await Bun.file(`${STATIC_DIR}/index.html`).text())
+app.get('*', (c) => {
+  const indexPath = `${STATIC_DIR}/index.html`;
+  return existsSync(indexPath)
+    ? c.html(readFileSync(indexPath, 'utf-8'))
     : c.text('Not found', 404);
 });
 
@@ -147,7 +150,7 @@ startBackendHealthCheck();
 process.on('SIGHUP', reloadConfig);
 
 // Start server
-const server = Bun.serve({
+const server = serve({
   port: PORT,
   fetch: app.fetch,
 });
@@ -156,6 +159,6 @@ logger.info(`Server started on port ${PORT}`);
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  server.stop();
+  server.close();
   process.exit(0);
 });
