@@ -1,26 +1,43 @@
 # Stage 1: Build Svelte frontend
-FROM node:22-slim AS build
+FROM node:22-alpine AS build-frontend
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-# Stage 2: Node.js runtime
-FROM node:22-slim
+# Stage 2: Build server (compile native addons + bundle TS)
+FROM node:22-alpine AS build-server
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY server/package.json server/package-lock.json* ./
+RUN npm ci
+COPY server/ .
+RUN node_modules/.bin/esbuild src/index.ts \
+      --bundle --platform=node --target=node22 \
+      --packages=external --outfile=dist/index.js
+RUN npm prune --production && \
+    rm -rf node_modules/better-sqlite3/deps \
+           node_modules/better-sqlite3/build/Release/obj.target \
+           node_modules/argon2/build/Release/obj.target \
+           node_modules/.bin/tsx \
+           node_modules/tsx \
+           node_modules/esbuild \
+           node_modules/@esbuild
+
+# Stage 3: Clean runtime image
+FROM node:22-alpine
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends gosu python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache gosu
 
-COPY server/package.json server/package-lock.json* ./
-RUN npm ci --omit=dev
-
-COPY server/ .
-COPY --from=build /app/dist ./static
+COPY --chown=node:node --from=build-server /app/node_modules ./node_modules
+COPY --chown=node:node --from=build-server /app/dist/index.js ./index.js
+COPY --chown=node:node --from=build-frontend /app/dist ./static
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 RUN mkdir -p /data /app/config && \
-    chown -R node:node /app /data && \
+    chown -R node:node /data && \
     chmod +x /docker-entrypoint.sh
 
 VOLUME ["/data"]
@@ -30,4 +47,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node --eval "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || exit 1
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["node_modules/.bin/tsx", "src/index.ts"]
+CMD ["node", "index.js"]
