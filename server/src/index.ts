@@ -69,8 +69,11 @@ reconcileYaml();
 // Build Hono app
 const app = new Hono();
 
-// Compression
-app.use('*', compress());
+// Compression — skip SSE routes to avoid buffering event streams
+app.use('*', async (c, next) => {
+  if (c.req.path === '/api/chat') return next();
+  return compress()(c, next);
+});
 
 // Request logger middleware
 app.use('*', async (c, next) => {

@@ -103,7 +103,7 @@ export const api = {
     runs: (id: string) => get<AutomationRun[]>(`/api/automations/${id}/runs`),
   },
 
-uploads: {
+  uploads: {
     upload: async (file: File): Promise<UploadResult> => {
       const form = new FormData();
       form.append('file', file);

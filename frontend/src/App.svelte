@@ -15,6 +15,7 @@
   import { modelsStore } from './stores/models.svelte';
   import { promptsStore } from './stores/prompts.svelte';
   import { preferencesStore } from './stores/preferences.svelte';
+  import { toast } from './components/ui/Toast.svelte';
 
   // Parse hash route
   let hash = $state(window.location.hash || '#/chat');
@@ -59,9 +60,9 @@
   // Load all stores once the user is authenticated (covers both initial load and post-login)
   $effect(() => {
     if (authStore.user) {
-      conversationsStore.load();
-      modelsStore.load();
-      promptsStore.load();
+      conversationsStore.load().catch(e => toast(`Failed to load conversations: ${(e as Error).message}`, 'error'));
+      modelsStore.load().catch(e => toast(`Failed to load models: ${(e as Error).message}`, 'error'));
+      promptsStore.load().catch(e => toast(`Failed to load prompts: ${(e as Error).message}`, 'error'));
       preferencesStore.load();
     }
   });
