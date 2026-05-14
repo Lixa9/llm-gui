@@ -227,7 +227,7 @@ async function callLiteLLM(
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model, messages, stream: false }),

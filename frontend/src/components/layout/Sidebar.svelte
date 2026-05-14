@@ -3,6 +3,7 @@
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
   import { debounce } from '$lib/utils';
+  import { toast } from '../ui/Toast.svelte';
 
   let searchQuery = $state('');
   let collapsed = $state(false);
@@ -25,7 +26,12 @@
 
   async function newFolder() {
     const name = prompt('Folder name:');
-    if (name?.trim()) await conversationsStore.createFolder(name.trim());
+    if (!name?.trim()) return;
+    try {
+      await conversationsStore.createFolder(name.trim());
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
   }
 
   function onNoFolderDrop(e: DragEvent) {
@@ -39,7 +45,12 @@
     const count = conversationsStore.list.length;
     if (!count) return;
     const ok = confirm(`Delete all ${count} conversation${count === 1 ? '' : 's'}? This cannot be undone.`);
-    if (ok) await conversationsStore.removeAll();
+    if (!ok) return;
+    try {
+      await conversationsStore.removeAll();
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
   }
 </script>
 
@@ -101,9 +112,7 @@
 
     <div class="sidebar-footer">
       <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
-      {#if conversationsStore.list.length > 0}
-        <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
-      {/if}
+      <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
     </div>
   {/if}
 </aside>
