@@ -107,6 +107,10 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+    # To run rootless (Podman or Docker with user namespaces), set the UID and
+    # pre-create the dirs so the container user can write to them:
+    #   mkdir -p data config && chown -R 1000:1000 data config
+    # user: "1000:1000"
 ```
 
 ### 3. Create `config/config.yaml`
