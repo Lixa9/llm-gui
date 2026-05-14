@@ -43,15 +43,11 @@ uploadsRouter.post('/', async (c) => {
   }
 
   const file = formData.get('file');
-  // @hono/node-server may return a Blob rather than a File for form file fields
-  if (!file || (!(file instanceof File) && !(file instanceof Blob))) {
+  if (!file || !(file instanceof File)) {
     return c.json({ error: 'No file provided' }, 400);
   }
 
-  const filename = file instanceof File ? file.name : 'upload';
-  const mimeType = file.type || 'application/octet-stream';
-
-  if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
+  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
     return c.json({ error: `Unsupported file type. Allowed: jpeg, png, gif, webp` }, 415);
   }
 
@@ -64,7 +60,7 @@ uploadsRouter.post('/', async (c) => {
   const hashBuf = await crypto.subtle.digest('SHA-256', bytes);
   const sha256 = Buffer.from(hashBuf).toString('hex');
 
-  const ext = MIME_TO_EXT[mimeType] ?? '';
+  const ext = MIME_TO_EXT[file.type] ?? '';
   const uploadsDir = getUploadsDir();
   mkdirSync(uploadsDir, { recursive: true });
 
@@ -77,11 +73,11 @@ uploadsRouter.post('/', async (c) => {
   const id = generateId();
   db.prepare(
     'INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, user.sub, sha256, filename, mimeType, file.size);
+  ).run(id, user.sub, sha256, file.name, file.type, file.size);
 
-  logger.info('upload', { user_sub: user.sub, id, filename, mime_type: mimeType, size: file.size });
+  logger.info('upload', { user_sub: user.sub, id, filename: file.name, mime_type: file.type, size: file.size });
 
-  return c.json({ id, filename, mime_type: mimeType, size: file.size, url: `/api/uploads/${id}` }, 201);
+  return c.json({ id, filename: file.name, mime_type: file.type, size: file.size, url: `/api/uploads/${id}` }, 201);
 });
 
 uploadsRouter.get('/:id', async (c) => {
