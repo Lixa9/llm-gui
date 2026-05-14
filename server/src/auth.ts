@@ -73,8 +73,13 @@ function resolveRole(groups: string[]): Role {
 }
 
 async function signSession(payload: Omit<SessionPayload, 'exp' | 'iat'>): Promise<string> {
+  const jti = generateId();
+  const expiresAt = Date.now() + 86400 * 1000;
+  const db = getDb();
+  db.prepare('INSERT INTO sessions (id, sub, expires_at) VALUES (?, ?, ?)').run(jti, payload.sub, expiresAt);
+
   const secret = new TextEncoder().encode(getConfig().app.secret_key);
-  return new SignJWT({ ...payload } as Record<string, unknown>)
+  return new SignJWT({ ...payload, jti } as Record<string, unknown>)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('24h')
@@ -111,6 +116,11 @@ async function verifySession(token: string): Promise<SessionPayload | null> {
   try {
     const secret = new TextEncoder().encode(getConfig().app.secret_key);
     const { payload } = await jwtVerify(token, secret);
+    const jti = payload['jti'] as string | undefined;
+    if (!jti) return null;
+    const db = getDb();
+    const row = db.prepare('SELECT id FROM sessions WHERE id=? AND expires_at>?').get(jti, Date.now());
+    if (!row) return null;
     return payload as unknown as SessionPayload;
   } catch {
     return null;
@@ -256,10 +266,17 @@ authRouter.get('/callback', async (c) => {
   return c.redirect('/');
 });
 
+export function purgeExpiredSessions(): void {
+  const db = getDb();
+  const { changes } = db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
+  if (changes > 0) logger.info('Purged expired sessions', { count: changes });
+}
+
 authRouter.get('/logout', async (c) => {
   const token = getCookie(c, 'session');
   const payload = token ? await verifySession(token) : null;
   deleteCookie(c, 'session', { path: '/' });
+  if (payload?.jti) getDb().prepare('DELETE FROM sessions WHERE id=?').run(payload.jti);
   logger.info('logout', { sub: payload?.sub, method: payload?.method });
   if (payload?.method === 'oidc') {
     const endpoints = await discover().catch(() => null);

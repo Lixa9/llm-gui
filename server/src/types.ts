@@ -136,6 +136,7 @@ export interface SessionPayload {
   name: string;
   role: Role;
   method: 'oidc' | 'local';
+  jti: string;
   exp: number;
   iat: number;
 }

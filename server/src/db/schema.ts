@@ -169,4 +169,14 @@ export function applySchema(db: Database.Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_sub ON sessions(sub)`);
 }

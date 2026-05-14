@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
-import { authRouter, requireAuth } from './auth';
+import { authRouter, requireAuth, purgeExpiredSessions } from './auth';
 import { relayRouter } from './relay';
 import { conversationsRouter, foldersRouter } from './conversations';
 import { modelsRouter } from './models';
@@ -149,6 +149,10 @@ function startBackendHealthCheck() {
 }
 
 startBackendHealthCheck();
+
+// Purge expired sessions at startup and every hour
+purgeExpiredSessions();
+setInterval(purgeExpiredSessions, 60 * 60 * 1000);
 
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);
