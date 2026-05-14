@@ -27,13 +27,13 @@ function serializeMessage(row: MessageRow) {
 conversationsRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.query<ConversationRow, [string]>(
+  const rows = db.prepare(
     `SELECT c.*, f.name as folder_name
      FROM conversations c
      LEFT JOIN conversation_folders f ON c.folder_id = f.id
      WHERE c.owner_sub = ?
      ORDER BY c.pinned DESC, c.created_at DESC`
-  ).all(user.sub);
+  ).all(user.sub) as ConversationRow[];
   return c.json(rows.map(serializeConversation));
 });
 
@@ -51,7 +51,7 @@ conversationsRouter.get('/search', async (c) => {
   if (!terms.length) return c.json([]);
   const query = terms.map(w => `"${w}"`).join(' OR ');
 
-  const rows = db.query<ConversationRow, [string, string]>(`
+  const rows = db.prepare(`
     SELECT DISTINCT conv.* FROM conversations conv
     JOIN messages m ON m.conversation_id = conv.id
     JOIN messages_fts fts ON fts.rowid = m.rowid
@@ -59,7 +59,7 @@ conversationsRouter.get('/search', async (c) => {
       AND conv.owner_sub = ?
     ORDER BY rank
     LIMIT 20
-  `).all(query, user.sub);
+  `).all(query, user.sub) as ConversationRow[];
 
   return c.json(rows.map(serializeConversation));
 });
@@ -70,11 +70,11 @@ conversationsRouter.post('/', async (c) => {
   const body = await c.req.json() as Partial<ConversationRow>;
   const db = getDb();
   const id = generateId();
-  db.query(
+  db.prepare(
     `INSERT INTO conversations (id, owner_sub, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(id, user.sub, body.model_id ?? null, body.preset_id ?? null, body.system_prompt_id ?? null, body.custom_system_prompt ?? null, body.folder_id ?? null);
-  const row = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(id)!;
+  const row = db.prepare('SELECT * FROM conversations WHERE id=?').get(id) as ConversationRow;
   return c.json(serializeConversation(row), 201);
 });
 
@@ -82,9 +82,9 @@ conversationsRouter.post('/', async (c) => {
 conversationsRouter.get('/:id', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const row = db.query<ConversationRow, [string, string]>(
+  const row = db.prepare(
     'SELECT * FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as ConversationRow | undefined;
   if (!row) return c.json({ error: 'Not found' }, 404);
   return c.json(serializeConversation(row));
 });
@@ -96,9 +96,9 @@ conversationsRouter.patch('/:id', async (c) => {
   const db = getDb();
   const id = c.req.param('id');
 
-  const existing = db.query<ConversationRow, [string, string]>(
+  const existing = db.prepare(
     'SELECT * FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(id, user.sub);
+  ).get(id, user.sub) as ConversationRow | undefined;
   if (!existing) return c.json({ error: 'Not found' }, 404);
 
   const updates: string[] = [];
@@ -113,10 +113,10 @@ conversationsRouter.patch('/:id', async (c) => {
 
   if (updates.length > 0) {
     vals.push(id);
-    db.query(`UPDATE conversations SET ${updates.join(', ')} WHERE id=?`).run(...vals);
+    db.prepare(`UPDATE conversations SET ${updates.join(', ')} WHERE id=?`).run(...(vals as unknown[]));
   }
 
-  const updated = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(id)!;
+  const updated = db.prepare('SELECT * FROM conversations WHERE id=?').get(id) as ConversationRow;
   return c.json(serializeConversation(updated));
 });
 
@@ -124,7 +124,7 @@ conversationsRouter.patch('/:id', async (c) => {
 conversationsRouter.delete('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  db.query('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
+  db.prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
   return c.body(null, 204);
 });
 
@@ -133,7 +133,7 @@ conversationsRouter.delete('/:id', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
   const id = c.req.param('id');
-  db.query('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
+  db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
   return c.body(null, 204);
 });
 
@@ -141,27 +141,27 @@ conversationsRouter.delete('/:id', (c) => {
 conversationsRouter.post('/:id/duplicate', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const src = db.query<ConversationRow, [string, string]>(
+  const src = db.prepare(
     'SELECT * FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as ConversationRow | undefined;
   if (!src) return c.json({ error: 'Not found' }, 404);
 
   const newId = generateId();
-  db.query(
+  db.prepare(
     `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(newId, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
 
   // Copy messages
-  const msgs = db.query<MessageRow, [string]>('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp').all(src.id);
+  const msgs = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp').all(src.id) as MessageRow[];
   for (const m of msgs) {
-    db.query(
+    db.prepare(
       `INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, tool_results, model, tokens_in, tokens_out, status, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(generateId(), newId, m.role, m.content, m.content_text, m.tool_calls, m.tool_results, m.model, m.tokens_in, m.tokens_out, m.status, m.timestamp);
   }
 
-  const newConv = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(newId)!;
+  const newConv = db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
   return c.json(serializeConversation(newConv), 201);
 });
 
@@ -170,32 +170,31 @@ conversationsRouter.post('/:id/fork', async (c) => {
   const user = c.get('user') as SessionPayload;
   const body = await c.req.json() as { message_id: string };
   const db = getDb();
-  const src = db.query<ConversationRow, [string, string]>(
+  const src = db.prepare(
     'SELECT * FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as ConversationRow | undefined;
   if (!src) return c.json({ error: 'Not found' }, 404);
 
   const newId = generateId();
-  db.query(
+  db.prepare(
     `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(newId, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
 
   // Copy messages up to and including the fork point
-  const msgs = db.query<MessageRow, [string]>(
+  const msgs = db.prepare(
     'SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp'
-  ).all(src.id);
+  ).all(src.id) as MessageRow[];
 
-  let include = true;
   for (const m of msgs) {
-    db.query(
+    db.prepare(
       `INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, tool_results, model, tokens_in, tokens_out, status, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(generateId(), newId, m.role, m.content, m.content_text, m.tool_calls, m.tool_results, m.model, m.tokens_in, m.tokens_out, m.status, m.timestamp);
     if (m.id === body.message_id) break;
   }
 
-  const newConv = db.query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id=?').get(newId)!;
+  const newConv = db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
   return c.json(serializeConversation(newConv), 201);
 });
 
@@ -203,14 +202,14 @@ conversationsRouter.post('/:id/fork', async (c) => {
 conversationsRouter.get('/:id/messages', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const conv = db.query<{ id: string }, [string, string]>(
+  const conv = db.prepare(
     'SELECT id FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as { id: string } | undefined;
   if (!conv) return c.json({ error: 'Not found' }, 404);
 
-  const rows = db.query<MessageRow, [string]>(
+  const rows = db.prepare(
     'SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp'
-  ).all(c.req.param('id'));
+  ).all(c.req.param('id')) as MessageRow[];
   return c.json(rows.map(serializeMessage));
 });
 
@@ -219,17 +218,17 @@ conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
   const user = c.get('user') as SessionPayload;
   const body = await c.req.json() as { content: string };
   const db = getDb();
-  const conv = db.query<{ id: string }, [string, string]>(
+  const conv = db.prepare(
     'SELECT id FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as { id: string } | undefined;
   if (!conv) return c.json({ error: 'Not found' }, 404);
 
   const newContent = JSON.stringify([{ type: 'text', text: body.content }]);
-  db.query(
+  db.prepare(
     'UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?'
   ).run(newContent, body.content, Date.now(), c.req.param('msgId'), c.req.param('id'));
 
-  const row = db.query<MessageRow, [string]>('SELECT * FROM messages WHERE id=?').get(c.req.param('msgId'))!;
+  const row = db.prepare('SELECT * FROM messages WHERE id=?').get(c.req.param('msgId')) as MessageRow;
   return c.json(serializeMessage(row));
 });
 
@@ -237,17 +236,17 @@ conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
 conversationsRouter.delete('/:id/messages/:msgId', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const conv = db.query<{ id: string }, [string, string]>(
+  const conv = db.prepare(
     'SELECT id FROM conversations WHERE id=? AND owner_sub=?'
-  ).get(c.req.param('id'), user.sub);
+  ).get(c.req.param('id'), user.sub) as { id: string } | undefined;
   if (!conv) return c.json({ error: 'Not found' }, 404);
 
-  const msg = db.query<{ timestamp: number }, [string]>(
+  const msg = db.prepare(
     'SELECT timestamp FROM messages WHERE id=?'
-  ).get(c.req.param('msgId'));
+  ).get(c.req.param('msgId')) as { timestamp: number } | undefined;
   if (!msg) return c.body(null, 204);
 
-  db.query(
+  db.prepare(
     'DELETE FROM messages WHERE conversation_id=? AND timestamp >= ?'
   ).run(c.req.param('id'), msg.timestamp);
 
@@ -261,7 +260,7 @@ foldersRouter.use('*', requireAuth);
 foldersRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.query('SELECT * FROM conversation_folders WHERE owner_sub=? ORDER BY name').all(user.sub);
+  const rows = db.prepare('SELECT * FROM conversation_folders WHERE owner_sub=? ORDER BY name').all(user.sub);
   return c.json(rows);
 });
 
@@ -270,9 +269,9 @@ foldersRouter.post('/', async (c) => {
   const body = await c.req.json() as { name: string; parent_id?: string };
   const db = getDb();
   const id = generateId();
-  db.query('INSERT INTO conversation_folders (id, owner_sub, name, parent_id) VALUES (?, ?, ?, ?)')
+  db.prepare('INSERT INTO conversation_folders (id, owner_sub, name, parent_id) VALUES (?, ?, ?, ?)')
     .run(id, user.sub, body.name, body.parent_id ?? null);
-  const row = db.query('SELECT * FROM conversation_folders WHERE id=?').get(id);
+  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=?').get(id);
   return c.json(row, 201);
 });
 
@@ -282,18 +281,18 @@ foldersRouter.patch('/:id', async (c) => {
   const db = getDb();
   const id = c.req.param('id');
   if (body.name !== undefined) {
-    db.query('UPDATE conversation_folders SET name=? WHERE id=? AND owner_sub=?').run(body.name, id, user.sub);
+    db.prepare('UPDATE conversation_folders SET name=? WHERE id=? AND owner_sub=?').run(body.name, id, user.sub);
   }
   if (body.parent_id !== undefined) {
-    db.query('UPDATE conversation_folders SET parent_id=? WHERE id=? AND owner_sub=?').run(body.parent_id ?? null, id, user.sub);
+    db.prepare('UPDATE conversation_folders SET parent_id=? WHERE id=? AND owner_sub=?').run(body.parent_id ?? null, id, user.sub);
   }
-  const row = db.query('SELECT * FROM conversation_folders WHERE id=?').get(id);
+  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=?').get(id);
   return c.json(row);
 });
 
 foldersRouter.delete('/:id', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  db.query('DELETE FROM conversation_folders WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
+  db.prepare('DELETE FROM conversation_folders WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
   return c.body(null, 204);
 });

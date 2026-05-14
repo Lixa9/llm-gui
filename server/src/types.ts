@@ -1,5 +1,12 @@
 export type Role = 'admin' | 'user';
 
+// Hono variable map augmentation — allows c.get('user') without casting in all routers
+declare module 'hono' {
+  interface ContextVariableMap {
+    user: SessionPayload;
+  }
+}
+
 export interface ContentPart {
   type: 'text';
   text: string;

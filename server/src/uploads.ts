@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { join, dirname } from 'path';
 import { mkdirSync, existsSync } from 'fs';
+import { writeFile, readFile } from 'fs/promises';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
@@ -65,12 +66,12 @@ uploadsRouter.post('/', async (c) => {
 
   const filePath = join(uploadsDir, `${sha256}${ext}`);
   if (!existsSync(filePath)) {
-    await Bun.write(filePath, bytes);
+    await writeFile(filePath, Buffer.from(bytes));
   }
 
   const db = getDb();
   const id = generateId();
-  db.query(
+  db.prepare(
     'INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, user.sub, sha256, file.name, file.type, file.size);
 
@@ -84,9 +85,9 @@ uploadsRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
 
   const db = getDb();
-  const row = db.query<{ owner_sub: string; sha256: string; mime_type: string; filename: string }, [string]>(
+  const row = db.prepare(
     'SELECT owner_sub, sha256, mime_type, filename FROM uploads WHERE id=?'
-  ).get(id);
+  ).get(id) as { owner_sub: string; sha256: string; mime_type: string; filename: string } | undefined;
 
   if (!row) return c.json({ error: 'Not found' }, 404);
   if (row.owner_sub !== user.sub) return c.json({ error: 'Forbidden' }, 403);
@@ -94,10 +95,10 @@ uploadsRouter.get('/:id', async (c) => {
   const ext = MIME_TO_EXT[row.mime_type] ?? '';
   const filePath = join(getUploadsDir(), `${row.sha256}${ext}`);
 
-  const bunFile = Bun.file(filePath);
-  if (!(await bunFile.exists())) return c.json({ error: 'File not found on disk' }, 404);
+  if (!existsSync(filePath)) return c.json({ error: 'File not found on disk' }, 404);
 
-  return new Response(bunFile, {
+  const buffer = await readFile(filePath);
+  return new Response(buffer, {
     headers: {
       'Content-Type': row.mime_type,
       'Cache-Control': 'private, max-age=31536000, immutable',
