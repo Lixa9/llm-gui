@@ -9,9 +9,9 @@ preferencesRouter.use('*', requireAuth);
 preferencesRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.query<UserPrefRow, [string]>(
+  const rows = db.prepare(
     'SELECT key, value FROM user_preferences WHERE user_sub=?'
-  ).all(user.sub);
+  ).all(user.sub) as UserPrefRow[];
 
   const prefs: Record<string, string> = {
     sound_enabled: 'true',
@@ -29,7 +29,7 @@ preferencesRouter.put('/:key', async (c) => {
   const user = c.get('user') as SessionPayload;
   const body = await c.req.json() as { value: string };
   const db = getDb();
-  db.query(
+  db.prepare(
     `INSERT INTO user_preferences (user_sub, key, value, updated_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(user_sub, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
   ).run(user.sub, c.req.param('key'), body.value, Date.now());

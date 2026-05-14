@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { join } from 'path';
+import { readFile } from 'fs/promises';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
@@ -18,14 +19,14 @@ async function resolveContentParts(parts: MessageContentPart[]): Promise<unknown
       const url = part.image_url.url;
       if (url.startsWith('/api/uploads/')) {
         const uploadId = url.split('/').pop()!;
-        const row = db.query<{ sha256: string; mime_type: string }, [string]>(
+        const row = db.prepare(
           'SELECT sha256, mime_type FROM uploads WHERE id=?'
-        ).get(uploadId);
+        ).get(uploadId) as { sha256: string; mime_type: string } | undefined;
         if (row) {
           const ext = MIME_TO_EXT[row.mime_type] ?? '';
           const filePath = join(uploadsDir, `${row.sha256}${ext}`);
-          const bytes = await Bun.file(filePath).arrayBuffer();
-          const base64 = Buffer.from(bytes).toString('base64');
+          const bytes = await readFile(filePath);
+          const base64 = bytes.toString('base64');
           resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${base64}` } });
         }
       } else {
@@ -102,7 +103,7 @@ relayRouter.post('/', async (c) => {
   let convId = body.conversation_id;
   if (!convId) {
     convId = generateId();
-    db.query('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)')
+    db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)')
       .run(convId, user.sub, body.model, body.system_prompt ?? null);
   }
 
@@ -117,7 +118,7 @@ relayRouter.post('/', async (c) => {
   const userMsgId = generateId();
   const userContent = JSON.stringify(body.new_user_message.content);
   const userText = extractText(body.new_user_message.content);
-  db.query(
+  db.prepare(
     'INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(userMsgId, convId, 'user', userContent, userText, 'done');
 
@@ -216,7 +217,7 @@ relayRouter.post('/', async (c) => {
                     })))
                   : null;
                 const assistantContent = JSON.stringify([{ type: 'text', text: fullText }]);
-                db.query(
+                db.prepare(
                   'INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, model, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
                 ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, toolCallsJson, body.model, 'done');
 
@@ -276,7 +277,7 @@ relayRouter.post('/', async (c) => {
           // Save partial response
           if (fullText) {
             const partialContent = JSON.stringify([{ type: 'text', text: fullText }]);
-            db.query(
+            db.prepare(
               'INSERT INTO messages (id, conversation_id, role, content, content_text, model, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
             ).run(assistantMsgId, convId, 'assistant', partialContent, fullText, body.model, 'aborted');
           }
@@ -315,9 +316,9 @@ async function generateTitle(
   db: ReturnType<typeof getDb>,
 ): Promise<string | null> {
   try {
-    const msgs = db.query<{ content_text: string }, [string]>(
+    const msgs = db.prepare(
       "SELECT content_text FROM messages WHERE conversation_id=? AND role IN ('user','assistant') ORDER BY timestamp LIMIT 4"
-    ).all(convId);
+    ).all(convId) as { content_text: string }[];
 
     const context = msgs.map(m => m.content_text).join('\n\n').slice(0, 2000);
     const titleModel = cfg.conversation.auto_title_model ?? model;
@@ -340,7 +341,7 @@ async function generateTitle(
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
     const title = data.choices[0]?.message?.content?.trim().slice(0, 80);
     if (title) {
-      db.query('UPDATE conversations SET title=?, title_auto=1 WHERE id=?').run(title, convId);
+      db.prepare('UPDATE conversations SET title=?, title_auto=1 WHERE id=?').run(title, convId);
     }
     return title ?? null;
   } catch {

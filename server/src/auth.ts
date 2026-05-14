@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
+import bcryptjs from 'bcryptjs';
+import * as argon2 from 'argon2';
+import { timingSafeEqual } from 'node:crypto';
 import type { Context, Next } from 'hono';
 import { getConfig } from './config';
 import { getDb, generateId } from './db/index';
@@ -87,14 +90,17 @@ function localAuthCredentials(): { username: string; password: string } | null {
 
 async function checkLocalPassword(input: string, stored: string): Promise<boolean> {
   // Detect bcrypt / argon2 hashes by their prefix
-  if (stored.startsWith('$2b$') || stored.startsWith('$2a$') || stored.startsWith('$argon2')) {
-    return Bun.password.verify(input, stored);
+  if (stored.startsWith('$2b$') || stored.startsWith('$2a$')) {
+    return bcryptjs.compare(input, stored);
+  }
+  if (stored.startsWith('$argon2')) {
+    return argon2.verify(stored, input);
   }
   // Plain text — timing-safe comparison
   const a = Buffer.from(input);
   const b = Buffer.from(stored);
   if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  return timingSafeEqual(a, b);
 }
 
 function isSecureCookieRequired(): boolean {
@@ -217,9 +223,9 @@ authRouter.get('/callback', async (c) => {
 
   // Resolve role
   const db = getDb();
-  const existingOverride = db.query<{ role_override: string | null }, [string]>(
+  const existingOverride = db.prepare(
     'SELECT role_override FROM users WHERE sub = ?'
-  ).get(sub);
+  ).get(sub) as { role_override: string | null } | undefined;
 
   let role: Role;
   if (groups.some(g => cfg.rbac.mappings.some(m => m.oidc_group === g))) {
@@ -231,7 +237,7 @@ authRouter.get('/callback', async (c) => {
   }
 
   // Upsert user
-  db.query(
+  db.prepare(
     `INSERT INTO users (sub, email, name) VALUES (?, ?, ?)
      ON CONFLICT(sub) DO UPDATE SET email=excluded.email, name=excluded.name`
   ).run(sub, email, name);
@@ -301,7 +307,7 @@ authRouter.post('/local', async (c) => {
 
   const db = getDb();
   const sub = 'local:admin';
-  db.query(
+  db.prepare(
     `INSERT INTO users (sub, email, name) VALUES (?, ?, ?)
      ON CONFLICT(sub) DO UPDATE SET name=excluded.name`
   ).run(sub, '', creds.username);

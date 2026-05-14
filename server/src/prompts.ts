@@ -16,7 +16,7 @@ function serializePrompt(row: SystemPromptRow) {
 promptsRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.query<SystemPromptRow, [string, string]>(`
+  const rows = db.prepare(`
     SELECT * FROM system_prompts
     WHERE deleted_at IS NULL
       AND (
@@ -30,7 +30,7 @@ promptsRouter.get('/', (c) => {
         )
       )
     ORDER BY owner_sub ASC, name ASC
-  `).all(user.sub, user.role);
+  `).all(user.sub, user.role) as SystemPromptRow[];
   return c.json(rows.map(serializePrompt));
 });
 
@@ -39,9 +39,9 @@ promptsRouter.post('/', async (c) => {
   const body = await c.req.json() as { name: string; content: string };
   const db = getDb();
   const id = generateId();
-  db.query('INSERT INTO system_prompts (id, owner_sub, name, content) VALUES (?, ?, ?, ?)')
+  db.prepare('INSERT INTO system_prompts (id, owner_sub, name, content) VALUES (?, ?, ?, ?)')
     .run(id, user.sub, body.name, body.content);
-  const row = db.query<SystemPromptRow, [string]>('SELECT * FROM system_prompts WHERE id=?').get(id)!;
+  const row = db.prepare('SELECT * FROM system_prompts WHERE id=?').get(id) as SystemPromptRow;
   return c.json(serializePrompt(row), 201);
 });
 
@@ -51,21 +51,21 @@ promptsRouter.patch('/:id', async (c) => {
   const db = getDb();
   const id = c.req.param('id');
 
-  const existing = db.query<{ owner_sub: string }, [string]>(
+  const existing = db.prepare(
     'SELECT owner_sub FROM system_prompts WHERE id=?'
-  ).get(id);
+  ).get(id) as { owner_sub: string } | undefined;
   if (!existing || existing.owner_sub !== user.sub) return c.json({ error: 'Not found' }, 404);
 
-  if (body.name !== undefined) db.query('UPDATE system_prompts SET name=? WHERE id=?').run(body.name, id);
-  if (body.content !== undefined) db.query('UPDATE system_prompts SET content=? WHERE id=?').run(body.content, id);
+  if (body.name !== undefined) db.prepare('UPDATE system_prompts SET name=? WHERE id=?').run(body.name, id);
+  if (body.content !== undefined) db.prepare('UPDATE system_prompts SET content=? WHERE id=?').run(body.content, id);
 
-  const row = db.query<SystemPromptRow, [string]>('SELECT * FROM system_prompts WHERE id=?').get(id)!;
+  const row = db.prepare('SELECT * FROM system_prompts WHERE id=?').get(id) as SystemPromptRow;
   return c.json(serializePrompt(row));
 });
 
 promptsRouter.delete('/:id', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  db.query('DELETE FROM system_prompts WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
+  db.prepare('DELETE FROM system_prompts WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
   return c.body(null, 204);
 });
