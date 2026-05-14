@@ -20,9 +20,9 @@ function serializeAutomation(row: AutomationRow) {
 automationsRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.query<AutomationRow, [string]>(
+  const rows = db.prepare(
     "SELECT * FROM automations WHERE owner_sub=? AND deleted_at IS NULL ORDER BY name"
-  ).all(user.sub);
+  ).all(user.sub) as AutomationRow[];
   return c.json(rows.map(serializeAutomation));
 });
 
@@ -31,9 +31,9 @@ automationsRouter.post('/', async (c) => {
   const body = await c.req.json() as { name: string; type: string; definition: unknown };
   const db = getDb();
   const id = generateId();
-  db.query('INSERT INTO automations (id, owner_sub, name, type, definition) VALUES (?, ?, ?, ?, ?)')
+  db.prepare('INSERT INTO automations (id, owner_sub, name, type, definition) VALUES (?, ?, ?, ?, ?)')
     .run(id, user.sub, body.name, body.type, JSON.stringify(body.definition));
-  const row = db.query<AutomationRow, [string]>('SELECT * FROM automations WHERE id=?').get(id)!;
+  const row = db.prepare('SELECT * FROM automations WHERE id=?').get(id) as AutomationRow;
   const auto = serializeAutomation(row);
 
   if (auto.enabled && auto.type === 'scheduled') {
@@ -49,14 +49,14 @@ automationsRouter.patch('/:id', async (c) => {
   const db = getDb();
   const id = c.req.param('id');
 
-  const existing = db.query<{ owner_sub: string }, [string]>('SELECT owner_sub FROM automations WHERE id=?').get(id);
+  const existing = db.prepare('SELECT owner_sub FROM automations WHERE id=?').get(id) as { owner_sub: string } | undefined;
   if (!existing || existing.owner_sub !== user.sub) return c.json({ error: 'Not found' }, 404);
 
-  if (body.name !== undefined) db.query('UPDATE automations SET name=? WHERE id=?').run(body.name, id);
-  if (body.definition !== undefined) db.query('UPDATE automations SET definition=? WHERE id=?').run(JSON.stringify(body.definition), id);
-  if (body.enabled !== undefined) db.query('UPDATE automations SET enabled=? WHERE id=?').run(body.enabled ? 1 : 0, id);
+  if (body.name !== undefined) db.prepare('UPDATE automations SET name=? WHERE id=?').run(body.name, id);
+  if (body.definition !== undefined) db.prepare('UPDATE automations SET definition=? WHERE id=?').run(JSON.stringify(body.definition), id);
+  if (body.enabled !== undefined) db.prepare('UPDATE automations SET enabled=? WHERE id=?').run(body.enabled ? 1 : 0, id);
 
-  const row = db.query<AutomationRow, [string]>('SELECT * FROM automations WHERE id=?').get(id)!;
+  const row = db.prepare('SELECT * FROM automations WHERE id=?').get(id) as AutomationRow;
   const auto = serializeAutomation(row);
 
   // Re-schedule if needed
@@ -72,7 +72,7 @@ automationsRouter.delete('/:id', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
   const id = c.req.param('id');
-  db.query("UPDATE automations SET deleted_at=? WHERE id=? AND owner_sub=?").run(Date.now(), id, user.sub);
+  db.prepare("UPDATE automations SET deleted_at=? WHERE id=? AND owner_sub=?").run(Date.now(), id, user.sub);
   removeSchedule(id);
   return c.body(null, 204);
 });
@@ -81,9 +81,9 @@ automationsRouter.post('/:id/trigger', async (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
   const id = c.req.param('id');
-  const row = db.query<AutomationRow, [string, string]>(
+  const row = db.prepare(
     "SELECT * FROM automations WHERE id=? AND owner_sub=?"
-  ).get(id, user.sub);
+  ).get(id, user.sub) as AutomationRow | undefined;
   if (!row) return c.json({ error: 'Not found' }, 404);
 
   const auto = serializeAutomation(row);
@@ -95,12 +95,12 @@ automationsRouter.get('/:id/runs', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
   const id = c.req.param('id');
-  const auto = db.query<{ owner_sub: string }, [string]>('SELECT owner_sub FROM automations WHERE id=?').get(id);
+  const auto = db.prepare('SELECT owner_sub FROM automations WHERE id=?').get(id) as { owner_sub: string } | undefined;
   if (!auto || auto.owner_sub !== user.sub) return c.json({ error: 'Not found' }, 404);
 
-  const rows = db.query<AutomationRunRow, [string]>(
+  const rows = db.prepare(
     'SELECT * FROM automation_runs WHERE automation_id=? ORDER BY started_at DESC LIMIT 50'
-  ).all(id);
+  ).all(id) as AutomationRunRow[];
   return c.json(rows);
 });
 
@@ -134,9 +134,9 @@ function removeSchedule(id: string) {
 
 export function initScheduler() {
   const db = getDb();
-  const rows = db.query<AutomationRow, []>(
+  const rows = db.prepare(
     "SELECT * FROM automations WHERE enabled=1 AND deleted_at IS NULL AND type='scheduled'"
-  ).all();
+  ).all() as AutomationRow[];
 
   for (const row of rows) {
     scheduleAutomation(serializeAutomation(row));
@@ -161,19 +161,19 @@ async function runAutomation(auto: ReturnType<typeof serializeAutomation>, sourc
   const title = `${auto.name} — ${dayAbbr} ${day} ${monAbbr} ${year}, ${time}`;
 
   const convId = generateId();
-  db.query('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, 0, ?)')
+  db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, 0, ?)')
     .run(convId, auto.owner_sub ?? 'system', title, (auto.definition as ScheduledDefinition).model ?? null);
 
-  db.query('INSERT INTO automation_runs (id, automation_id, conversation_id, status) VALUES (?, ?, ?, ?)')
+  db.prepare('INSERT INTO automation_runs (id, automation_id, conversation_id, status) VALUES (?, ?, ?, ?)')
     .run(runId, auto.id, convId, 'running');
 
   // Execute asynchronously
   executeAutomationRun(auto, convId, runId).catch(e => {
-    db.query('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
+    db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
     logger.error('automation run error', { automation_id: auto.id, run_id: runId, error: String(e) });
   });
 
-  return db.query<AutomationRunRow, [string]>('SELECT * FROM automation_runs WHERE id=?').get(runId)!;
+  return db.prepare('SELECT * FROM automation_runs WHERE id=?').get(runId) as AutomationRunRow;
 }
 
 async function executeAutomationRun(auto: ReturnType<typeof serializeAutomation>, convId: string, runId: string) {
@@ -184,17 +184,17 @@ async function executeAutomationRun(auto: ReturnType<typeof serializeAutomation>
   try {
     if (auto.type === 'scheduled') {
       const def = auto.definition as ScheduledDefinition;
-      await callLiteLLM(auto.id, convId, def.model, def.system_prompt, def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
+      await callLiteLLM(auto.id, convId, def.model, def.system_prompt ?? '', def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key ?? '');
     } else {
       const def = auto.definition as PipelineDefinition;
       for (const step of def.steps ?? []) {
-        await callLiteLLM(auto.id, convId, step.model, step.system_prompt, step.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key);
+        await callLiteLLM(auto.id, convId, step.model, step.system_prompt ?? '', step.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key ?? '');
       }
     }
-    db.query('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
+    db.prepare('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
     logger.info('automation run finished', { automation_id: auto.id, run_id: runId, status: 'done', latency_ms: Date.now() - start });
   } catch (e) {
-    db.query('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
+    db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
     logger.error('automation run finished', { automation_id: auto.id, run_id: runId, status: 'error', error: String(e), latency_ms: Date.now() - start });
   }
 }
@@ -212,7 +212,7 @@ async function callLiteLLM(
   const msgId = generateId();
 
   const userContent = JSON.stringify([{ type: 'text', text: userPrompt }]);
-  db.query('INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)')
+  db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)')
     .run(msgId, convId, 'user', userContent, userPrompt, 'done');
 
   const messages: unknown[] = [];
@@ -241,7 +241,7 @@ async function callLiteLLM(
   const assistantText = data.choices[0]?.message?.content ?? '';
   const assistantContent = JSON.stringify([{ type: 'text', text: assistantText }]);
 
-  db.query(
+  db.prepare(
     'INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     generateId(), convId, 'assistant', assistantContent, assistantText,

@@ -1,11 +1,11 @@
-import type { Database } from 'bun:sqlite';
+import type Database from 'better-sqlite3';
 
-export function applySchema(db: Database): void {
-  db.run('PRAGMA journal_mode=WAL');
-  db.run('PRAGMA foreign_keys=ON');
-  db.run('PRAGMA synchronous=NORMAL');
+export function applySchema(db: Database.Database): void {
+  db.exec('PRAGMA journal_mode=WAL');
+  db.exec('PRAGMA foreign_keys=ON');
+  db.exec('PRAGMA synchronous=NORMAL');
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       sub TEXT PRIMARY KEY,
       email TEXT NOT NULL,
@@ -15,7 +15,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS user_preferences (
       user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
       key TEXT NOT NULL,
@@ -25,7 +25,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS conversation_folders (
       id TEXT PRIMARY KEY,
       owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
@@ -35,7 +35,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS system_prompts (
       id TEXT PRIMARY KEY,
       owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
@@ -47,7 +47,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS model_presets (
       id TEXT PRIMARY KEY,
       owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
@@ -58,7 +58,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
@@ -77,11 +77,11 @@ export function applySchema(db: Database): void {
   `);
 
   // Migration for existing databases
-  try { db.run('ALTER TABLE conversations ADD COLUMN preset_id TEXT REFERENCES model_presets(id) ON DELETE SET NULL'); } catch { /* column already exists */ }
+  try { db.exec('ALTER TABLE conversations ADD COLUMN preset_id TEXT REFERENCES model_presets(id) ON DELETE SET NULL'); } catch { /* column already exists */ }
 
-  db.run(`CREATE INDEX IF NOT EXISTS idx_conv_owner ON conversations(owner_sub, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_owner ON conversations(owner_sub, created_at DESC)`);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -99,10 +99,10 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp)`);
 
   // FTS5 virtual table (external content mode)
-  db.run(`
+  db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
       content_text,
       content='messages',
@@ -114,26 +114,26 @@ export function applySchema(db: Database): void {
   // We use rowid-based FTS. Since our messages table uses TEXT primary keys,
   // we need a way to map. SQLite assigns rowids automatically.
   // FTS will index content_text column.
-  db.run(`
+  db.exec(`
     CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
       INSERT INTO messages_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
     END
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
       INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES('delete', old.rowid, old.content_text);
       INSERT INTO messages_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
     END
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
       INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES('delete', old.rowid, old.content_text);
     END
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS automations (
       id TEXT PRIMARY KEY,
       owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
@@ -146,7 +146,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS automation_runs (
       id TEXT PRIMARY KEY,
       automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
@@ -157,7 +157,7 @@ export function applySchema(db: Database): void {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS uploads (
       id        TEXT PRIMARY KEY,
       owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
@@ -168,5 +168,5 @@ export function applySchema(db: Database): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC)`);
 }
