@@ -12,6 +12,9 @@
   let editing = $state<ModelPreset | null>(null);
   let deleting = $state<ModelPreset | null>(null);
 
+  const systemPresets = $derived(modelsStore.presets.filter(p => p.owner_sub === null));
+  const personalPresets = $derived(modelsStore.presets.filter(p => p.owner_sub !== null));
+
   async function save(data: Pick<ModelPreset, 'name' | 'base_model_id' | 'system_prompt'>) {
     try {
       if (editing) {
@@ -55,33 +58,63 @@
     <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New preset</Button>
   </div>
 
-  {#if modelsStore.presets.length === 0}
-    <p class="empty-hint">No presets yet. Create a preset to bundle a model with a system prompt.</p>
-  {:else}
-    <div class="preset-grid">
-      {#each modelsStore.presets as preset (preset.id)}
-        <div class="preset-card">
-          <div class="preset-name">
-            {preset.name}
-            {#if preferencesStore.defaultPresetId === preset.id}
-              <Badge variant="accent">Default</Badge>
+  {#if systemPresets.length > 0}
+    <section class="section">
+      <h3 class="section-title">System presets <Badge variant="muted">read-only</Badge></h3>
+      <div class="preset-grid">
+        {#each systemPresets as preset (preset.id)}
+          <div class="preset-card">
+            <div class="preset-name">
+              {preset.name}
+              {#if preferencesStore.defaultPresetId === preset.id}
+                <Badge variant="accent">Default</Badge>
+              {/if}
+            </div>
+            <div class="preset-model">{modelName(preset.base_model_id)}</div>
+            {#if preset.system_prompt}
+              <div class="preset-prompt">{preset.system_prompt}</div>
             {/if}
+            <div class="preset-actions">
+              <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
+                {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
+              </Button>
+            </div>
           </div>
-          <div class="preset-model">{modelName(preset.base_model_id)}</div>
-          {#if preset.system_prompt}
-            <div class="preset-prompt">{preset.system_prompt}</div>
-          {/if}
-          <div class="preset-actions">
-            <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
-              {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
-            </Button>
-            <Button variant="ghost" size="sm" onclick={() => { editing = preset; editorOpen = true; }}>Edit</Button>
-            <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
-          </div>
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    </section>
   {/if}
+
+  <section class="section">
+    <h3 class="section-title">My presets</h3>
+    {#if personalPresets.length === 0}
+      <p class="empty-hint">No presets yet. Create a preset to bundle a model with a system prompt.</p>
+    {:else}
+      <div class="preset-grid">
+        {#each personalPresets as preset (preset.id)}
+          <div class="preset-card">
+            <div class="preset-name">
+              {preset.name}
+              {#if preferencesStore.defaultPresetId === preset.id}
+                <Badge variant="accent">Default</Badge>
+              {/if}
+            </div>
+            <div class="preset-model">{modelName(preset.base_model_id)}</div>
+            {#if preset.system_prompt}
+              <div class="preset-prompt">{preset.system_prompt}</div>
+            {/if}
+            <div class="preset-actions">
+              <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
+                {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
+              </Button>
+              <Button variant="ghost" size="sm" onclick={() => { editing = preset; editorOpen = true; }}>Edit</Button>
+              <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <PresetEditor
@@ -105,6 +138,8 @@
   .view-header { display: flex; align-items: center; justify-content: space-between; }
   .view-title { font-size: 20px; font-weight: 600; }
   .empty-hint { font-size: 13px; color: var(--text-muted); }
+  .section { display: flex; flex-direction: column; gap: 10px; }
+  .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 
   .preset-grid {
     display: grid;

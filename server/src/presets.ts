@@ -9,9 +9,13 @@ presetsRouter.use('*', requireAuth);
 presetsRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM model_presets WHERE owner_sub=? ORDER BY name'
-  ).all(user.sub) as ModelPresetRow[];
+  const rows = db.prepare(`
+    SELECT * FROM model_presets WHERE deleted_at IS NULL AND (
+      owner_sub = ?
+      OR (owner_sub IS NULL AND (visible_to IS NULL OR EXISTS (SELECT 1 FROM json_each(visible_to) WHERE value = ?)))
+    )
+    ORDER BY owner_sub IS NULL DESC, name
+  `).all(user.sub, user.role) as ModelPresetRow[];
   return c.json(rows);
 });
 

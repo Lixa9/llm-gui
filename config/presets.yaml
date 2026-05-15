@@ -1,0 +1,5 @@
+presets:
+  - name: "Code assistant"
+    base_model_id: "qwen3.5-0.8b"
+    system_prompt: "You are an expert software engineer. Write clean, idiomatic code and explain your reasoning."
+    allowed_roles: [admin, user]

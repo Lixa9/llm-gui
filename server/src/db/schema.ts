@@ -50,13 +50,37 @@ export function applySchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS model_presets (
       id TEXT PRIMARY KEY,
-      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
       name TEXT NOT NULL,
       base_model_id TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      visible_to TEXT,
+      deleted_at INTEGER
     )
   `);
+
+  // Migration: add visible_to/deleted_at and relax owner_sub NOT NULL on existing databases
+  {
+    const cols = (db.pragma('table_info(model_presets)') as { name: string }[]).map(c => c.name);
+    if (!cols.includes('visible_to')) {
+      db.exec(`
+        CREATE TABLE model_presets_v2 (
+          id TEXT PRIMARY KEY,
+          owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          base_model_id TEXT NOT NULL,
+          system_prompt TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+          visible_to TEXT,
+          deleted_at INTEGER
+        )
+      `);
+      db.exec(`INSERT INTO model_presets_v2 SELECT id, owner_sub, name, base_model_id, system_prompt, created_at, NULL, NULL FROM model_presets`);
+      db.exec(`DROP TABLE model_presets`);
+      db.exec(`ALTER TABLE model_presets_v2 RENAME TO model_presets`);
+    }
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -142,9 +166,11 @@ export function applySchema(db: Database.Database): void {
       definition TEXT NOT NULL DEFAULT '{}',
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      deleted_at INTEGER
+      deleted_at INTEGER,
+      visible_to TEXT
     )
   `);
+  try { db.exec('ALTER TABLE automations ADD COLUMN visible_to TEXT'); } catch { /* already exists */ }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS automation_runs (

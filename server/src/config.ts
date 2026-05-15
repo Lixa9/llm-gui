@@ -43,7 +43,7 @@ const configSchema = z.object({
   }).default({}),
   conversation: z.object({
     auto_title: z.boolean().default(true),
-    auto_title_model: z.string().default('gpt-4o-mini'),
+    auto_title_model: z.string().default('qwen3.5-0.8b'),
     context_window_tokens: z.number().default(100000),
     context_window_reserve: z.number().default(1000),
   }).default({}),
@@ -65,8 +65,35 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     '',
   ].join('\n'),
   'models.yaml': 'models: []\n',
-  'prompts.yaml': 'prompts: []\n',
-  'automations.yaml': 'automations: []\n',
+  'prompts.yaml': [
+    'prompts:',
+    '  - name: "Helpful assistant"',
+    '    content: "You are a helpful assistant."',
+    '    allowed_roles: [admin, user]',
+    '',
+  ].join('\n'),
+  'presets.yaml': [
+    'presets:',
+    '  - name: "Default"',
+    '    base_model_id: ""',
+    '    system_prompt: "You are a helpful assistant."',
+    '    allowed_roles: [admin, user]',
+    '',
+  ].join('\n'),
+  'automations.yaml': [
+    'automations: []',
+    '# Example:',
+    '# automations:',
+    '#   - name: "Daily digest"',
+    '#     type: scheduled',
+    '#     interval: 1',
+    '#     unit: days',
+    '#     model: "qwen3.5-0.8b"',
+    '#     system_prompt: "You are a concise summarizer."',
+    '#     user_prompt: "Summarize the top tech news today."',
+    '#     allowed_roles: [admin, user]',
+    '',
+  ].join('\n'),
 };
 
 function scaffoldConfigIfNeeded(): void {
@@ -145,6 +172,7 @@ export function loadConfig(): AppConfig {
   const mainRaw = loadYaml('config.yaml') as Record<string, unknown>;
   const modelsRaw = loadYaml('models.yaml') as { models?: unknown[] };
   const promptsRaw = loadYaml('prompts.yaml') as { prompts?: unknown[] };
+  const presetsRaw = loadYaml('presets.yaml') as { presets?: unknown[] };
   const automationsRaw = loadYaml('automations.yaml') as { automations?: unknown[] };
 
   const parsed = configSchema.parse(mainRaw);
@@ -153,6 +181,7 @@ export function loadConfig(): AppConfig {
     ...parsed,
     models: (modelsRaw.models ?? []) as AppConfig['models'],
     prompts: (promptsRaw.prompts ?? []) as AppConfig['prompts'],
+    presets: (presetsRaw.presets ?? []) as AppConfig['presets'],
     automations: (automationsRaw.automations ?? []) as AppConfig['automations'],
   };
 
@@ -204,4 +233,4 @@ export function writeConfigFile(name: string, content: string): void {
   reloadConfig();
 }
 
-export const CONFIG_FILES = ['config.yaml', 'models.yaml', 'prompts.yaml', 'automations.yaml'];
+export const CONFIG_FILES = ['config.yaml', 'models.yaml', 'prompts.yaml', 'presets.yaml', 'automations.yaml'];

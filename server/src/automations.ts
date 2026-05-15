@@ -20,9 +20,13 @@ function serializeAutomation(row: AutomationRow) {
 automationsRouter.get('/', (c) => {
   const user = c.get('user') as SessionPayload;
   const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM automations WHERE owner_sub=? AND deleted_at IS NULL ORDER BY name"
-  ).all(user.sub) as AutomationRow[];
+  const rows = db.prepare(`
+    SELECT * FROM automations WHERE deleted_at IS NULL AND (
+      owner_sub = ?
+      OR (owner_sub IS NULL AND (visible_to IS NULL OR EXISTS (SELECT 1 FROM json_each(visible_to) WHERE value = ?)))
+    )
+    ORDER BY owner_sub IS NULL DESC, name
+  `).all(user.sub, user.role) as AutomationRow[];
   return c.json(rows.map(serializeAutomation));
 });
 
@@ -82,7 +86,7 @@ automationsRouter.post('/:id/trigger', async (c) => {
   const db = getDb();
   const id = c.req.param('id');
   const row = db.prepare(
-    "SELECT * FROM automations WHERE id=? AND owner_sub=?"
+    "SELECT * FROM automations WHERE id=? AND (owner_sub=? OR owner_sub IS NULL) AND deleted_at IS NULL"
   ).get(id, user.sub) as AutomationRow | undefined;
   if (!row) return c.json({ error: 'Not found' }, 404);
 
