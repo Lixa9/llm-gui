@@ -7,7 +7,10 @@ export async function streamChat(
 ): Promise<void> {
   const res = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'llm-frontend',
+    },
     body: JSON.stringify(payload),
     credentials: 'same-origin',
     signal,

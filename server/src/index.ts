@@ -86,6 +86,7 @@ app.use('*', async (c, next) => {
 
 // CORS: same-origin only — localhost allowed on any port for dev convenience
 const LOCALHOST_ORIGIN = /^https?:\/\/localhost(:\d+)?$/;
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 app.use('/api/*', async (c, next) => {
   const origin = c.req.header('origin');
@@ -95,6 +96,14 @@ app.use('/api/*', async (c, next) => {
       return c.json({ error: 'Forbidden' }, 403);
     }
   }
+
+  // Require a custom header on all state-mutating requests. Browsers cannot set
+  // arbitrary headers on cross-origin requests without a preflight, so this
+  // defends against CSRF from clients that omit the Origin header entirely.
+  if (MUTATING_METHODS.has(c.req.method) && c.req.header('x-requested-with') !== 'llm-frontend') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
   return next();
 });
 
