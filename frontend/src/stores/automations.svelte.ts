@@ -12,6 +12,11 @@ function createAutomationsStore() {
 
   const crud = makeCrud(api.automations, () => automations, (v) => { automations = v; });
 
+  async function toggleSubscription(id: string, enabled: boolean) {
+    await api.automations.setSubscription(id, enabled);
+    automations = automations.map(a => a.id === id ? { ...a, enabled } : a);
+  }
+
   async function trigger(id: string) {
     const run = await api.automations.trigger(id);
     runsByAutomation = {
@@ -29,7 +34,7 @@ function createAutomationsStore() {
   return {
     get automations() { return automations; },
     get runsByAutomation() { return runsByAutomation; },
-    load, ...crud, trigger, loadRuns,
+    load, ...crud, toggleSubscription, trigger, loadRuns,
   };
 }
 

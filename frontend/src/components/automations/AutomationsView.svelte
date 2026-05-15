@@ -15,6 +15,7 @@
   let editing = $state<Automation | null>(null);
   let deleting = $state<Automation | null>(null);
   let expandedRuns = $state<Set<string>>(new Set());
+  let expandedDetails = $state<Set<string>>(new Set());
 
   const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null));
   const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null));
@@ -54,6 +55,24 @@
     expandedRuns = next;
   }
 
+  function toggleDetails(id: string) {
+    const next = new Set(expandedDetails);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    expandedDetails = next;
+  }
+
+  function formatDefinition(auto: Automation): string {
+    const def = auto.definition as Record<string, unknown>;
+    const lines: string[] = [];
+    if (auto.type === 'scheduled') {
+      lines.push(`Schedule: every ${def.interval} ${def.unit}`);
+    }
+    if (def.model) lines.push(`Model: ${def.model}`);
+    if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
+    if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
+    return lines.join('\n');
+  }
+
   async function toggleEnabled(a: Automation) {
     await withToast(() => automationsStore.update(a.id, { enabled: !a.enabled }));
   }
@@ -78,12 +97,23 @@
                 <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
               </div>
               <div class="auto-actions">
+                <Button variant="ghost" size="sm" onclick={() => automationsStore.toggleSubscription(auto.id, !auto.enabled)}>
+                  {auto.enabled ? 'Unsubscribe' : 'Subscribe'}
+                </Button>
                 <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
               </div>
             </div>
-            <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-              {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
-            </button>
+            <div class="auto-toggles">
+              <button class="runs-toggle" onclick={() => toggleDetails(auto.id)}>
+                {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
+              </button>
+              <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
+                {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+              </button>
+            </div>
+            {#if expandedDetails.has(auto.id)}
+              <pre class="auto-details">{formatDefinition(auto)}</pre>
+            {/if}
             {#if expandedRuns.has(auto.id)}
               <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
             {/if}
@@ -172,6 +202,7 @@
   .auto-name { font-weight: 600; font-size: 14px; }
   .auto-actions { display: flex; gap: 6px; }
 
+  .auto-toggles { display: flex; gap: 16px; }
   .runs-toggle {
     font-size: 12px;
     color: var(--text-muted);
@@ -182,4 +213,16 @@
     padding: 0;
   }
   .runs-toggle:hover { color: var(--text-secondary); }
+  .auto-details {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 </style>
