@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
-import { authRouter, requireAuth, purgeExpiredSessions } from './auth';
+import { authRouter, purgeExpiredSessions } from './auth';
 import { relayRouter } from './relay';
 import { conversationsRouter, foldersRouter } from './conversations';
 import { modelsRouter } from './models';

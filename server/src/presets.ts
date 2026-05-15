@@ -35,9 +35,12 @@ presetsRouter.patch('/:id', async (c) => {
   const existing = db.prepare('SELECT owner_sub FROM model_presets WHERE id=?').get(id) as { owner_sub: string } | undefined;
   if (!existing || existing.owner_sub !== user.sub) return c.json({ error: 'Not found' }, 404);
 
-  if (body.name !== undefined) db.prepare('UPDATE model_presets SET name=? WHERE id=?').run(body.name, id);
-  if (body.base_model_id !== undefined) db.prepare('UPDATE model_presets SET base_model_id=? WHERE id=?').run(body.base_model_id, id);
-  if (body.system_prompt !== undefined) db.prepare('UPDATE model_presets SET system_prompt=? WHERE id=?').run(body.system_prompt, id);
+  const updates: string[] = [];
+  const vals: unknown[] = [];
+  if (body.name !== undefined)          { updates.push('name=?');          vals.push(body.name); }
+  if (body.base_model_id !== undefined) { updates.push('base_model_id=?'); vals.push(body.base_model_id); }
+  if (body.system_prompt !== undefined) { updates.push('system_prompt=?'); vals.push(body.system_prompt); }
+  if (updates.length > 0) db.prepare(`UPDATE model_presets SET ${updates.join(', ')} WHERE id=?`).run(...vals, id);
 
   const row = db.prepare('SELECT * FROM model_presets WHERE id=?').get(id) as ModelPresetRow;
   return c.json(row);

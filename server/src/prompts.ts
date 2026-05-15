@@ -56,8 +56,11 @@ promptsRouter.patch('/:id', async (c) => {
   ).get(id) as { owner_sub: string } | undefined;
   if (!existing || existing.owner_sub !== user.sub) return c.json({ error: 'Not found' }, 404);
 
-  if (body.name !== undefined) db.prepare('UPDATE system_prompts SET name=? WHERE id=?').run(body.name, id);
-  if (body.content !== undefined) db.prepare('UPDATE system_prompts SET content=? WHERE id=?').run(body.content, id);
+  const updates: string[] = [];
+  const vals: unknown[] = [];
+  if (body.name !== undefined)    { updates.push('name=?');    vals.push(body.name); }
+  if (body.content !== undefined) { updates.push('content=?'); vals.push(body.content); }
+  if (updates.length > 0) db.prepare(`UPDATE system_prompts SET ${updates.join(', ')} WHERE id=?`).run(...vals, id);
 
   const row = db.prepare('SELECT * FROM system_prompts WHERE id=?').get(id) as SystemPromptRow;
   return c.json(serializePrompt(row));

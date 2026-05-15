@@ -157,7 +157,7 @@ export function loadConfig(): AppConfig {
   };
 
   // Probe writability
-  for (const name of ['config.yaml', 'models.yaml', 'prompts.yaml', 'automations.yaml']) {
+  for (const name of CONFIG_FILES) {
     _writability[name] = isWritable(name);
   }
 

@@ -178,7 +178,6 @@ relayRouter.post('/', async (c) => {
 
   openStream(user.sub);
 
-  const encoder = new TextEncoder();
   let fullText = '';
   const toolAccumulators = new Map<number, ToolCallAccumulator>();
   let assistantMsgId = generateId();
@@ -279,15 +278,15 @@ relayRouter.post('/', async (c) => {
 
                 if (delta.tool_calls) {
                   for (const tc of delta.tool_calls) {
-                    if (!toolAccumulators.has(tc.index)) {
-                      toolAccumulators.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', argumentsBuffer: '' });
+                    let acc = toolAccumulators.get(tc.index);
+                    if (!acc) {
+                      acc = { id: tc.id ?? '', name: tc.function?.name ?? '', argumentsBuffer: '' };
+                      toolAccumulators.set(tc.index, acc);
                     } else {
-                      if (tc.id) toolAccumulators.get(tc.index)!.id = tc.id;
-                      if (tc.function?.name) toolAccumulators.get(tc.index)!.name = tc.function.name;
+                      if (tc.id) acc.id = tc.id;
+                      if (tc.function?.name) acc.name = tc.function.name;
                     }
-                    if (tc.function?.arguments) {
-                      toolAccumulators.get(tc.index)!.argumentsBuffer += tc.function.arguments;
-                    }
+                    if (tc.function?.arguments) acc.argumentsBuffer += tc.function.arguments;
                   }
                 }
               } catch {
