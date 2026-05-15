@@ -122,35 +122,55 @@ relayRouter.post('/', async (c) => {
     'INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(userMsgId, convId, 'user', userContent, userText, 'done');
 
-  // Build OpenAI messages array with context window truncation
+  // Build OpenAI messages array
   const allMessages = body.messages ?? [];
   const systemPrompt = body.system_prompt;
-  const windowTokens = cfg.conversation.context_window_tokens - cfg.conversation.context_window_reserve;
-
-  let tokenCount = systemPrompt ? estimateTokens(systemPrompt) : 0;
-  tokenCount += estimateTokens(userText);
-
-  const trimmed: typeof allMessages = [];
-  for (const msg of [...allMessages].reverse()) {
-    const msgTokens = estimateTokens(extractText(msg.content));
-    if (tokenCount + msgTokens > windowTokens && trimmed.length > 0) break;
-    tokenCount += msgTokens;
-    trimmed.unshift(msg);
-  }
+  const modelEntry = allowedModels.find(m => m.id === body.model);
+  const contextMode = modelEntry?.context_mode ?? 'truncate';
 
   const openaiMessages: unknown[] = [];
   if (systemPrompt) openaiMessages.push({ role: 'system', content: systemPrompt });
-  for (const msg of trimmed) {
-    openaiMessages.push({
-      role: msg.role,
-      content: await resolveContentParts(msg.content),
-      ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
-        id: tc.id,
-        type: 'function',
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-      })) } : {}),
-    });
+
+  if (contextMode === 'session_only') {
+    // Agent manages its own context; only send the new message
+  } else if (contextMode === 'passthrough') {
+    for (const msg of allMessages) {
+      openaiMessages.push({
+        role: msg.role,
+        content: await resolveContentParts(msg.content),
+        ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        })) } : {}),
+      });
+    }
+  } else {
+    // truncate (default): reverse-scan to fit within token budget
+    const windowTokens = (modelEntry?.context_window_tokens ?? cfg.conversation.context_window_tokens)
+      - cfg.conversation.context_window_reserve;
+    let tokenCount = systemPrompt ? estimateTokens(systemPrompt) : 0;
+    tokenCount += estimateTokens(userText);
+    const trimmed: typeof allMessages = [];
+    for (const msg of [...allMessages].reverse()) {
+      const msgTokens = estimateTokens(extractText(msg.content));
+      if (tokenCount + msgTokens > windowTokens && trimmed.length > 0) break;
+      tokenCount += msgTokens;
+      trimmed.unshift(msg);
+    }
+    for (const msg of trimmed) {
+      openaiMessages.push({
+        role: msg.role,
+        content: await resolveContentParts(msg.content),
+        ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        })) } : {}),
+      });
+    }
   }
+
   openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content) });
 
   openStream(user.sub);
@@ -175,6 +195,7 @@ relayRouter.post('/', async (c) => {
             model: body.model,
             messages: openaiMessages,
             stream: true,
+            ...(contextMode === 'session_only' ? { session_id: convId } : {}),
           }),
           signal: c.req.raw.signal,
         });
