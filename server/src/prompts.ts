@@ -14,7 +14,7 @@ function serializePrompt(row: SystemPromptRow) {
 }
 
 promptsRouter.get('/', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   const rows = db.prepare(`
     SELECT * FROM system_prompts
@@ -35,7 +35,7 @@ promptsRouter.get('/', (c) => {
 });
 
 promptsRouter.post('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as { name: string; content: string };
   const db = getDb();
   const id = generateId();
@@ -46,7 +46,7 @@ promptsRouter.post('/', async (c) => {
 });
 
 promptsRouter.patch('/:id', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as { name?: string; content?: string };
   const db = getDb();
   const id = c.req.param('id');
@@ -67,7 +67,7 @@ promptsRouter.patch('/:id', async (c) => {
 });
 
 promptsRouter.delete('/:id', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   db.prepare('DELETE FROM system_prompts WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
   return c.body(null, 204);

@@ -64,7 +64,7 @@ function sse(data: unknown): Uint8Array {
 }
 
 relayRouter.post('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const start = Date.now();
 
   // Rate limit check
@@ -126,7 +126,7 @@ relayRouter.post('/', async (c) => {
   ).run(userMsgId, convId, 'user', userContent, userText, 'done');
 
   // Build OpenAI messages array
-  const allMessages = body.messages ?? [];
+  const allMessages = body.messages;
   const systemPrompt = body.system_prompt;
   const modelEntry = allowedModels.find(m => m.id === body.model);
   const contextMode = modelEntry?.context_mode ?? 'truncate';
