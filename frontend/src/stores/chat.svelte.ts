@@ -1,7 +1,7 @@
 import { streamChat } from '$lib/sse';
 import { api } from '$lib/api';
 import { playCompletionSound } from '$lib/audio';
-import type { Message, MessageContentPart, ToolCall, ChatPayload } from '$lib/types';
+import type { Message, ToolCall, ChatPayload } from '$lib/types';
 import { conversationsStore } from './conversations.svelte';
 import { preferencesStore } from './preferences.svelte';
 

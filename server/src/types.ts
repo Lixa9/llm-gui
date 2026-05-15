@@ -50,13 +50,6 @@ export interface UserPrefRow {
   updated_at: number;
 }
 
-export interface ConversationFolderRow {
-  id: string;
-  owner_sub: string;
-  name: string;
-  parent_id: string | null;
-  created_at: number;
-}
 
 export interface ConversationRow {
   id: string;

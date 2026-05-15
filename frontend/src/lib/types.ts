@@ -211,7 +211,3 @@ export interface ConfigFile {
   writable: boolean;
 }
 
-export interface ApiError {
-  status: number;
-  message: string;
-}

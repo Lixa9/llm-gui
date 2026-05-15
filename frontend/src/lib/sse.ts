@@ -45,7 +45,7 @@ export async function streamChat(
         for (const line of part.split('\n')) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6).trim();
-          if (!data || data === '[DONE]') continue;
+          if (!data) continue;
           try {
             const event = JSON.parse(data) as SSEEvent;
             onEvent(event);

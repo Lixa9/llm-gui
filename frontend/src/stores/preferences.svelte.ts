@@ -11,7 +11,7 @@ function createPreferencesStore() {
     default_preset_id: '',
   });
 
-  const soundEnabled = $derived(prefs.sound_enabled !== 'false');
+  const soundEnabled = $derived(prefs.sound_enabled === 'true');
   const soundVolume = $derived(parseFloat(prefs.sound_volume ?? '0.6'));
   const defaultModelId = $derived(prefs.default_model_id ?? '');
   const defaultPresetId = $derived(prefs.default_preset_id ?? '');

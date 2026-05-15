@@ -65,7 +65,7 @@ function resolveRole(groups: string[]): Role {
   return cfg.rbac.default_role;
 }
 
-async function signSession(payload: Omit<SessionPayload, 'exp' | 'iat'>): Promise<string> {
+async function signSession(payload: Omit<SessionPayload, 'exp' | 'iat' | 'jti'>): Promise<string> {
   const jti = generateId();
   const expiresAt = Date.now() + 86400 * 1000;
   const db = getDb();
@@ -219,7 +219,11 @@ authRouter.get('/callback', async (c) => {
     audience: oidc.client_id,
   });
 
-  const sub = idPayload.sub!;
+  const sub = idPayload.sub;
+  if (!sub) {
+    logger.error('OIDC token missing sub claim');
+    return c.redirect('/#/chat?auth_error=1');
+  }
   const email = (idPayload['email'] as string) ?? '';
   const name = (idPayload['name'] as string) ?? (idPayload['preferred_username'] as string) ?? email;
   const groups = ((idPayload[cfg.rbac.group_claim] as string[]) ?? []);
@@ -230,14 +234,9 @@ authRouter.get('/callback', async (c) => {
     'SELECT role_override FROM users WHERE sub = ?'
   ).get(sub) as { role_override: string | null } | undefined;
 
-  let role: Role;
-  if (groups.some(g => cfg.rbac.mappings.some(m => m.oidc_group === g))) {
-    role = resolveRole(groups);
-  } else if (existingOverride?.role_override) {
-    role = existingOverride.role_override as Role;
-  } else {
-    role = cfg.rbac.default_role;
-  }
+  const role: Role = existingOverride?.role_override
+    ? existingOverride.role_override as Role
+    : resolveRole(groups);
 
   // Upsert user
   db.prepare(
@@ -354,12 +353,9 @@ export async function requireAuth(c: Context, next: Next): Promise<Response | vo
 
 export function requireRole(role: Role) {
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const token = getCookie(c, 'session');
-    if (!token) return c.json({ error: 'Unauthorized' }, 401);
-    const payload = await verifySession(token);
-    if (!payload) return c.json({ error: 'Unauthorized' }, 401);
-    if (payload.role !== role) return c.json({ error: 'Forbidden' }, 403);
-    c.set('user', payload);
+    const authResult = await requireAuth(c, async () => {});
+    if (authResult) return authResult;
+    if (c.get('user').role !== role) return c.json({ error: 'Forbidden' }, 403);
     return next();
   };
 }
