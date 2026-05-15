@@ -107,11 +107,12 @@ export interface ModelInfo {
 
 export interface ModelPreset {
   id: string;
-  owner_sub: string;
+  owner_sub: string | null;
   name: string;
   base_model_id: string;
   system_prompt: string;
   created_at: number;
+  visible_to: Role[] | null;
 }
 
 export type AutomationType = 'scheduled' | 'pipeline';

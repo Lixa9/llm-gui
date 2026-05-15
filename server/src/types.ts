@@ -95,11 +95,13 @@ export interface SystemPromptRow {
 
 export interface ModelPresetRow {
   id: string;
-  owner_sub: string;
+  owner_sub: string | null;
   name: string;
   base_model_id: string;
   system_prompt: string;
   created_at: number;
+  visible_to: string | null;
+  deleted_at: number | null;
 }
 
 export interface AutomationRow {
@@ -111,6 +113,7 @@ export interface AutomationRow {
   enabled: number;
   created_at: number;
   deleted_at: number | null;
+  visible_to: string | null;
 }
 
 export interface AutomationRunRow {
@@ -173,6 +176,7 @@ export interface AppConfig {
   models?: ModelYamlEntry[];
   prompts?: PromptYamlEntry[];
   automations?: AutomationYamlEntry[];
+  presets?: PresetYamlEntry[];
 }
 
 export interface ModelYamlEntry {
@@ -187,7 +191,14 @@ export interface ModelYamlEntry {
 export interface PromptYamlEntry {
   name: string;
   content: string;
-  visible_to: Role[];
+  allowed_roles?: Role[];
+}
+
+export interface PresetYamlEntry {
+  name: string;
+  base_model_id: string;
+  system_prompt?: string;
+  allowed_roles?: Role[];
 }
 
 export type ScheduleUnit = 'hours' | 'days' | 'weeks';
@@ -216,7 +227,7 @@ export interface AutomationYamlEntry {
   type: 'scheduled' | 'pipeline';
   interval?: number;
   unit?: ScheduleUnit;
-  visible_to?: Role | Role[];
+  allowed_roles?: Role[];
   model?: string;
   system_prompt?: string;
   user_prompt?: string;

@@ -31,5 +31,5 @@ rate_limits:
 
 conversation:
   auto_title: true
-  auto_title_model: "gpt-4o-mini"
+  auto_title_model: "qwen3.5-0.8b"
   context_window_tokens: 100000

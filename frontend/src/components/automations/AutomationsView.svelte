@@ -16,6 +16,9 @@
   let deleting = $state<Automation | null>(null);
   let expandedRuns = $state<Set<string>>(new Set());
 
+  const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null));
+  const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null));
+
   async function save(data: Pick<Automation, 'name' | 'type' | 'definition'>) {
     try {
       if (editing) {
@@ -62,39 +65,68 @@
     <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New automation</Button>
   </div>
 
-  {#if automationsStore.automations.length === 0}
-    <p class="empty-hint">No automations yet.</p>
-  {:else}
-    <div class="auto-list">
-      {#each automationsStore.automations as auto (auto.id)}
-        <div class="auto-card">
-          <div class="auto-header">
-            <div class="auto-info">
-              <span class="auto-name">{auto.name}</span>
-              <Badge variant={auto.type === 'scheduled' ? 'accent' : 'default'}>{auto.type}</Badge>
-              <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
+  {#if systemAutomations.length > 0}
+    <section class="section">
+      <h3 class="section-title">System automations <Badge variant="muted">read-only</Badge></h3>
+      <div class="auto-list">
+        {#each systemAutomations as auto (auto.id)}
+          <div class="auto-card">
+            <div class="auto-header">
+              <div class="auto-info">
+                <span class="auto-name">{auto.name}</span>
+                <Badge variant={auto.type === 'scheduled' ? 'accent' : 'default'}>{auto.type}</Badge>
+                <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
+              </div>
+              <div class="auto-actions">
+                <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
+              </div>
             </div>
-            <div class="auto-actions">
-              <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
-                {auto.enabled ? 'Disable' : 'Enable'}
-              </Button>
-              <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
-              <Button variant="ghost" size="sm" onclick={() => { editing = auto; editorOpen = true; }}>Edit</Button>
-              <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
-            </div>
+            <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
+              {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+            </button>
+            {#if expandedRuns.has(auto.id)}
+              <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
+            {/if}
           </div>
-
-          <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-            {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
-          </button>
-
-          {#if expandedRuns.has(auto.id)}
-            <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
-          {/if}
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    </section>
   {/if}
+
+  <section class="section">
+    <h3 class="section-title">My automations</h3>
+    {#if personalAutomations.length === 0}
+      <p class="empty-hint">No automations yet.</p>
+    {:else}
+      <div class="auto-list">
+        {#each personalAutomations as auto (auto.id)}
+          <div class="auto-card">
+            <div class="auto-header">
+              <div class="auto-info">
+                <span class="auto-name">{auto.name}</span>
+                <Badge variant={auto.type === 'scheduled' ? 'accent' : 'default'}>{auto.type}</Badge>
+                <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
+              </div>
+              <div class="auto-actions">
+                <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
+                  {auto.enabled ? 'Disable' : 'Enable'}
+                </Button>
+                <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
+                <Button variant="ghost" size="sm" onclick={() => { editing = auto; editorOpen = true; }}>Edit</Button>
+                <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
+              </div>
+            </div>
+            <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
+              {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+            </button>
+            {#if expandedRuns.has(auto.id)}
+              <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <AutomationEditor
@@ -122,6 +154,8 @@
   .view-header { display: flex; align-items: center; justify-content: space-between; }
   .view-title { font-size: 20px; font-weight: 600; }
   .empty-hint { font-size: 13px; color: var(--text-muted); }
+  .section { display: flex; flex-direction: column; gap: 10px; }
+  .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 
   .auto-list { display: flex; flex-direction: column; gap: 10px; }
   .auto-card {
