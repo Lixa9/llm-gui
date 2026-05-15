@@ -8,8 +8,8 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 - Streaming responses with a stop button that cancels the upstream request immediately
 - Image attachments — paste or drag-and-drop; images are stored on the server and sent to the model as base64
 - Tool call display — when LiteLLM uses tools, each call appears as a collapsible block showing the function name, arguments, and result. Visibility is configurable per model in `models.yaml`
-- Auto-generated conversation titles after the first exchange (using a cheap model you configure)
-- Sliding context window — older messages are quietly trimmed before the request if the conversation exceeds your configured token budget; they are never deleted from the database
+- Auto-generated conversation titles after the first exchange (using a model you configure)
+- Sliding context window — older messages are quietly trimmed before the request if the conversation exceeds the configured token budget; they are never deleted from the database. Per-model overrides are supported in `models.yaml`
 
 ### Per-message actions
 - **Edit** — edit a user message and automatically regenerate the reply, or directly edit an assistant message without re-sending
@@ -30,12 +30,14 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 ### Model presets
 - Save a model + system prompt combination as a named preset
 - Selecting a preset pre-fills the model and system prompt when starting a conversation
+- Admin-seeded presets from `presets.yaml` appear for all users (read-only), with their own role-based visibility independent of the underlying model
 
 ### Automations
 - Schedule a prompt to run automatically (every N hours/days/weeks)
 - Each run creates a new conversation with the full exchange
 - Manual trigger button for testing
 - Run history per automation
+- Admin-seeded automations from `automations.yaml`
 
 ### Admin panel
 - View all users and their OIDC-sourced identity
@@ -45,7 +47,7 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 
 ### Authentication
 - **SSO via OIDC** (Authelia, Keycloak, Authentik, or any compliant provider) using Authorization Code + PKCE
-- **Local admin account** — optional fallback enabled by two environment variables; accepts plain text or an argon2/bcrypt hash
+- **Local admin account** — opt-in fallback enabled by setting `LOCAL_AUTH=true`; credentials are hardcoded to `admin`/`admin` and intended for testing only
 - Sessions are stored in the database; logging out fully invalidates the session, and a DB reset invalidates all existing cookies automatically
 - RBAC with two roles (`admin`, `user`); role assigned from OIDC group claims with per-user override capability
 
@@ -57,9 +59,11 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 
 **Single container.** The Svelte SPA and the Node.js server are bundled together. SQLite lives in a mounted volume — no separate database container needed.
 
-**Config is YAML, user content is SQLite.** Auth, model display settings, RBAC, and admin-seeded prompts and automations are defined in mounted YAML files. Everything a user creates (conversations, personal prompts, presets, automations) lives in the database. On startup the server reconciles the YAML into the database.
+**Config is YAML, user content is SQLite.** Auth, model display settings, RBAC, and admin-seeded prompts, presets, and automations are defined in mounted YAML files. Everything a user creates (conversations, personal prompts, presets, automations) lives in the database. On startup the server reconciles the YAML into the database — additions, updates, and removals (soft-deleted) are all handled automatically.
 
-**Models are discovered from LiteLLM.** The `/models` endpoint is polled at startup and cached. `models.yaml` only adds display metadata and role-based access control on top; any model not listed defaults to admin-only.
+**Models are discovered from LiteLLM.** The `/models` endpoint is polled at startup and cached. `models.yaml` only adds display metadata, role-based access control, and context configuration on top; any model not listed defaults to admin-only.
+
+**Agent models.** Set `context_mode: session_only` on a model entry to connect an agentic workflow (e.g. n8n) registered in LiteLLM. The relay sends only the new message and the `conversation_id`; the agent manages its own context. Use `context_mode: passthrough` to forward the full history without truncation.
 
 **Stop = abort.** The browser's `AbortController` closes the SSE connection. The server propagates the abort signal directly to the upstream fetch, so LiteLLM (and any agentic loop it's running) stops immediately — no polling, no special endpoint.
 
@@ -93,9 +97,8 @@ services:
       - ./config:/app/config
     environment:
       SECRET_KEY: change-me-to-a-random-32-char-string
-      # Local admin account — omit both lines to disable
-      LOCAL_ADMIN_USERNAME: admin
-      LOCAL_ADMIN_PASSWORD: admin
+      # Local admin account (admin/admin) — for testing only, disabled by default
+      # LOCAL_AUTH: "true"
       # Only needed if LiteLLM requires authentication
       # LITELLM_API_KEY: your-key-here
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
@@ -149,7 +152,7 @@ rate_limits:
 
 conversation:
   auto_title: true
-  auto_title_model: "gpt-4o-mini"
+  auto_title_model: "qwen3.5-0.8b"
   context_window_tokens: 100000
 ```
 
@@ -157,61 +160,83 @@ conversation:
 
 ### 4. Create `config/models.yaml`
 
-Controls which models are visible to which roles and whether tool calls are shown. Any model returned by LiteLLM but not listed here defaults to admin-only.
+Controls which models are visible to which roles and how context is handled. Any model returned by LiteLLM but not listed here defaults to admin-only.
 
 ```yaml
 models:
-  - id: "openai/gpt-4o"
-    display_name: "GPT-4o"
-    show_tool_calls: true
+  - id: "qwen3.5-0.8b"
+    display_name: "Qwen 3.5 0.8B"
+    show_tool_calls: false
     allowed_roles: [admin, user]
+    context_window_tokens: 32000   # optional per-model override
 
-  - id: "openai/gpt-4o-mini"
-    display_name: "GPT-4o Mini"
+  - id: "meta-llama/llama-3.3-70b-instruct"
+    display_name: "Llama 3.3 70B"
     show_tool_calls: true
     allowed_roles: [admin, user]
 ```
 
 The `id` must match the model ID as LiteLLM returns it from its `/models` endpoint.
 
+**Context modes** (optional `context_mode` field):
+
+| Value | Behaviour |
+|---|---|
+| `truncate` | Default. Trim oldest messages to stay within `context_window_tokens`. |
+| `passthrough` | Send full history with no truncation. |
+| `session_only` | Send only the new message. The `conversation_id` is forwarded as a top-level field so an external agent can use it as a session key. |
+
 ### 5. Create `config/prompts.yaml` (optional)
 
-Admin-seeded prompts that appear in every user's prompt library.
+Admin-seeded prompts that appear in every user's prompt library as read-only.
 
 ```yaml
 prompts:
   - name: "Concise assistant"
     content: "You are a helpful assistant. Keep responses short and to the point."
-    visible_to: [admin, user]
+    allowed_roles: [admin, user]
 
   - name: "Code reviewer"
     content: "You are an expert code reviewer. Focus on correctness, security, and clarity."
-    visible_to: [admin, user]
+    allowed_roles: [admin, user]
 ```
 
-### 6. Create `config/automations.yaml` (optional)
+### 6. Create `config/presets.yaml` (optional)
+
+Admin-seeded presets (model + system prompt bundles). Role visibility is independent of the underlying model.
+
+```yaml
+presets:
+  - name: "Code assistant"
+    base_model_id: "qwen3.5-0.8b"
+    system_prompt: "You are an expert software engineer. Write clean, idiomatic code and explain your reasoning."
+    allowed_roles: [admin, user]
+```
+
+### 7. Create `config/automations.yaml` (optional)
 
 ```yaml
 automations: []
 # Example:
 # automations:
-#   - name: daily_digest
+#   - name: "Daily digest"
 #     type: scheduled
 #     interval: 1
 #     unit: days
-#     model: gpt-4o-mini
+#     model: "qwen3.5-0.8b"
 #     system_prompt: "You are a concise summarizer."
 #     user_prompt: "Summarize today's key points."
+#     allowed_roles: [admin, user]
 ```
 
-### 7. Start
+### 8. Start
 
 ```bash
 docker compose up -d
 docker compose logs -f
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Log in with the local admin credentials you set.
+Open [http://localhost:3000](http://localhost:3000). Log in with your OIDC credentials, or with `admin`/`admin` if you enabled `LOCAL_AUTH`.
 
 ---
 
@@ -220,8 +245,7 @@ Open [http://localhost:3000](http://localhost:3000). Log in with the local admin
 | Variable | Required | Description |
 |---|---|---|
 | `SECRET_KEY` | Yes | Signs session JWTs. Any random string ≥ 32 characters. If unset, an ephemeral key is generated and sessions don't survive restarts. |
-| `LOCAL_ADMIN_USERNAME` | No | Enables a local admin account. Both vars must be set. |
-| `LOCAL_ADMIN_PASSWORD` | No | Accepts plain text or an argon2/bcrypt hash. |
+| `LOCAL_AUTH` | No | Set to `true` to enable the local admin account (`admin`/`admin`). Disabled by default. Intended for testing when no OIDC provider is available. |
 | `OIDC_CLIENT_SECRET` | No | Required only if `config.yaml` references `${OIDC_CLIENT_SECRET}`. |
 | `LITELLM_API_KEY` | No | Sent as `Authorization: Bearer` to LiteLLM. Required only if your LiteLLM instance has auth enabled. |
 
