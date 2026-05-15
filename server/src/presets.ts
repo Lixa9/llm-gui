@@ -7,7 +7,7 @@ export const presetsRouter = new Hono();
 presetsRouter.use('*', requireAuth);
 
 presetsRouter.get('/', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   const rows = db.prepare(`
     SELECT * FROM model_presets WHERE deleted_at IS NULL AND (
@@ -20,7 +20,7 @@ presetsRouter.get('/', (c) => {
 });
 
 presetsRouter.post('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as Pick<ModelPresetRow, 'name' | 'base_model_id' | 'system_prompt'>;
   const db = getDb();
   const id = generateId();
@@ -31,7 +31,7 @@ presetsRouter.post('/', async (c) => {
 });
 
 presetsRouter.patch('/:id', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as Partial<Pick<ModelPresetRow, 'name' | 'base_model_id' | 'system_prompt'>>;
   const db = getDb();
   const id = c.req.param('id');
@@ -51,7 +51,7 @@ presetsRouter.patch('/:id', async (c) => {
 });
 
 presetsRouter.delete('/:id', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   db.prepare('DELETE FROM model_presets WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
   return c.body(null, 204);

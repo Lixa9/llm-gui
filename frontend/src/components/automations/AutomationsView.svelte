@@ -66,10 +66,16 @@
     const lines: string[] = [];
     if (auto.type === 'scheduled') {
       lines.push(`Schedule: every ${def.interval} ${def.unit}`);
+      if (def.model) lines.push(`Model: ${def.model}`);
+      if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
+      if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
+    } else if (auto.type === 'pipeline' && Array.isArray(def.steps)) {
+      (def.steps as Record<string, unknown>[]).forEach((s, i) => {
+        lines.push(`Step ${i + 1}: ${s.model}`);
+        if (s.system_prompt) lines.push(`  System: ${s.system_prompt}`);
+        if (s.user_prompt) lines.push(`  Prompt: ${s.user_prompt}`);
+      });
     }
-    if (def.model) lines.push(`Model: ${def.model}`);
-    if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
-    if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
     return lines.join('\n');
   }
 

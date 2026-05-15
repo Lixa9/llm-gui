@@ -50,9 +50,8 @@ if (!process.env.SECRET_KEY?.trim()) {
 }
 
 // Load config
-let config: ReturnType<typeof getConfig>;
 try {
-  config = loadConfig();
+  loadConfig();
   logger.info('Config loaded');
 } catch (e) {
   process.stderr.write(`FATAL: Config load failed: ${String(e)}\n`);
@@ -60,8 +59,8 @@ try {
 }
 
 // Open database
-const db = openDatabase(config.database.path);
-logger.info('Database opened', { path: config.database.path });
+const db = openDatabase(getConfig().database.path);
+logger.info('Database opened', { path: getConfig().database.path });
 
 // Reconcile YAML
 reconcileYaml();

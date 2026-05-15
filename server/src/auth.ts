@@ -138,7 +138,8 @@ authRouter.get('/login', async (c) => {
     path: '/',
   });
 
-  const oidc = cfg.oidc!;
+  const oidc = cfg.oidc;
+  if (!oidc) return c.html('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem"><h2>SSO unavailable</h2><p>OIDC is not configured.</p><a href="/">← Back</a></body></html>', 503);
   const params = new URLSearchParams({
     client_id: oidc.client_id,
     response_type: 'code',
@@ -163,11 +164,13 @@ authRouter.get('/callback', async (c) => {
     return c.redirect('/#/chat?auth_error=1');
   }
 
+  if (!code) return c.redirect('/#/chat?auth_error=1');
+
   const pkceRaw = getCookie(c, 'oidc_pkce');
   if (!pkceRaw) return c.text('Missing PKCE cookie', 400);
 
   const { verifier, state } = JSON.parse(pkceRaw) as { verifier: string; state: string };
-  if (state !== returnedState) return c.text('State mismatch', 400);
+  if (!returnedState || !timingSafeStringEqual(state, returnedState)) return c.text('State mismatch', 400);
 
   deleteCookie(c, 'oidc_pkce', { path: '/' });
 
@@ -177,7 +180,8 @@ authRouter.get('/callback', async (c) => {
   } catch {
     return c.redirect('/#/chat?auth_error=1');
   }
-  const oidc = cfg.oidc!;
+  const oidc = cfg.oidc;
+  if (!oidc) return c.redirect('/#/chat?auth_error=1');
 
   // Exchange code for tokens
   const tokenRes = await fetch(endpoints.token_endpoint, {
@@ -185,7 +189,7 @@ authRouter.get('/callback', async (c) => {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
-      code: code!,
+      code,
       redirect_uri: `${cfg.app.base_url}/api/auth/callback`,
       client_id: oidc.client_id,
       client_secret: oidc.client_secret,
@@ -214,7 +218,7 @@ authRouter.get('/callback', async (c) => {
   }
   const email = (idPayload['email'] as string) ?? '';
   const name = (idPayload['name'] as string) ?? (idPayload['preferred_username'] as string) ?? email;
-  const groups = ((idPayload[cfg.rbac.group_claim] as string[]) ?? []);
+  const groups = (idPayload[cfg.rbac.group_claim] as string[]) ?? [];
 
   // Resolve role
   const db = getDb();
@@ -335,9 +339,12 @@ export async function requireAuth(c: Context, next: Next): Promise<Response | vo
 
 export function requireRole(role: Role) {
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const authResult = await requireAuth(c, async () => {});
-    if (authResult) return authResult;
-    if (c.get('user').role !== role) return c.json({ error: 'Forbidden' }, 403);
+    const token = getCookie(c, 'session');
+    if (!token) return c.json({ error: 'Unauthorized' }, 401);
+    const payload = await verifySession(token);
+    if (!payload) return c.json({ error: 'Unauthorized' }, 401);
+    c.set('user', payload);
+    if (payload.role !== role) return c.json({ error: 'Forbidden' }, 403);
     return next();
   };
 }

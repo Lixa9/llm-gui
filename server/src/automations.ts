@@ -18,7 +18,7 @@ function serializeAutomation(row: AutomationRow) {
 }
 
 automationsRouter.get('/', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   // For system automations, replace `enabled` with the user's subscription state (default 0).
   const rows = db.prepare(`
@@ -39,7 +39,7 @@ automationsRouter.get('/', (c) => {
 });
 
 automationsRouter.post('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as { name: string; type: string; definition: unknown };
   const db = getDb();
   const id = generateId();
@@ -56,7 +56,7 @@ automationsRouter.post('/', async (c) => {
 });
 
 automationsRouter.patch('/:id', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as { name?: string; definition?: unknown; enabled?: boolean };
   const db = getDb();
   const id = c.req.param('id');
@@ -81,7 +81,7 @@ automationsRouter.patch('/:id', async (c) => {
 });
 
 automationsRouter.delete('/:id', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   const id = c.req.param('id');
   db.prepare("UPDATE automations SET deleted_at=? WHERE id=? AND owner_sub=?").run(Date.now(), id, user.sub);
@@ -90,7 +90,7 @@ automationsRouter.delete('/:id', (c) => {
 });
 
 automationsRouter.patch('/:id/subscription', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const body = await c.req.json() as { enabled: boolean };
   const db = getDb();
   const id = c.req.param('id');
@@ -108,7 +108,7 @@ automationsRouter.patch('/:id/subscription', async (c) => {
 });
 
 automationsRouter.post('/:id/trigger', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   const id = c.req.param('id');
   const row = db.prepare(
@@ -122,7 +122,7 @@ automationsRouter.post('/:id/trigger', async (c) => {
 });
 
 automationsRouter.get('/:id/runs', (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const db = getDb();
   const id = c.req.param('id');
   const auto = db.prepare('SELECT owner_sub FROM automations WHERE id=?').get(id) as { owner_sub: string } | undefined;

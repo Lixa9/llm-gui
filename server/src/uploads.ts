@@ -5,8 +5,8 @@ import { writeFile, readFile } from 'fs/promises';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
+import { checkRateLimit } from './ratelimit';
 import { logger } from './logger';
-import type { SessionPayload } from './types';
 
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);
@@ -33,7 +33,10 @@ export function getUploadsDir(): string {
 }
 
 uploadsRouter.post('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
+
+  const rl = checkRateLimit(user.sub);
+  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
 
   let formData: FormData;
   try {
@@ -81,7 +84,7 @@ uploadsRouter.post('/', async (c) => {
 });
 
 uploadsRouter.get('/:id', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const id = c.req.param('id');
 
   const db = getDb();
@@ -102,7 +105,7 @@ uploadsRouter.get('/:id', async (c) => {
     headers: {
       'Content-Type': row.mime_type,
       'Cache-Control': 'private, max-age=31536000, immutable',
-      'Content-Disposition': `inline; filename="${row.filename}"`,
+      'Content-Disposition': `inline; filename="${row.filename.replace(/[\x00-\x1f\x7f"\\]/g, '_')}"`,
     },
   });
 });

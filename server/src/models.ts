@@ -73,11 +73,12 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
     }
   }
 
-  return _cache!.models.filter(m => m.allowed_roles.includes(userRole as 'admin' | 'user'));
+  const cache = _cache;
+  return cache.models.filter(m => m.allowed_roles.includes(userRole as 'admin' | 'user'));
 }
 
 modelsRouter.get('/', async (c) => {
-  const user = c.get('user') as SessionPayload;
+  const user = c.get('user');
   const models = await fetchModels(user.role);
   return c.json(models);
 });
