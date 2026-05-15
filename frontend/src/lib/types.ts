@@ -101,6 +101,8 @@ export interface ModelInfo {
   display_name: string;
   show_tool_calls: boolean;
   allowed_roles: Role[];
+  context_window_tokens?: number;
+  context_mode?: 'truncate' | 'passthrough' | 'session_only';
 }
 
 export interface ModelPreset {
