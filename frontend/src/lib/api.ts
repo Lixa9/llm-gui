@@ -104,6 +104,8 @@ export const api = {
     delete: (id: string) => del<void>(`/api/automations/${id}`),
     trigger: (id: string) => post<AutomationRun>(`/api/automations/${id}/trigger`),
     runs: (id: string) => get<AutomationRun[]>(`/api/automations/${id}/runs`),
+    setSubscription: (id: string, enabled: boolean) =>
+      patch<{ enabled: boolean }>(`/api/automations/${id}/subscription`, { enabled }),
   },
 
 uploads: {

@@ -173,6 +173,15 @@ export function applySchema(db: Database.Database): void {
   try { db.exec('ALTER TABLE automations ADD COLUMN visible_to TEXT'); } catch { /* already exists */ }
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS user_automation_subscriptions (
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (user_sub, automation_id)
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS automation_runs (
       id TEXT PRIMARY KEY,
       automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
