@@ -10,7 +10,7 @@ import { logger } from './logger';
 import { getUploadsDir, MIME_TO_EXT } from './uploads';
 import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
 
-async function resolveContentParts(parts: MessageContentPart[]): Promise<unknown[]> {
+async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
   const db = getDb();
   const uploadsDir = getUploadsDir();
   const resolved: unknown[] = [];
@@ -20,8 +20,8 @@ async function resolveContentParts(parts: MessageContentPart[]): Promise<unknown
       if (url.startsWith('/api/uploads/')) {
         const uploadId = url.split('/').pop()!;
         const row = db.prepare(
-          'SELECT sha256, mime_type FROM uploads WHERE id=?'
-        ).get(uploadId) as { sha256: string; mime_type: string } | undefined;
+          'SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?'
+        ).get(uploadId, ownerSub) as { sha256: string; mime_type: string } | undefined;
         if (row) {
           const ext = MIME_TO_EXT[row.mime_type] ?? '';
           const filePath = join(uploadsDir, `${row.sha256}${ext}`);
@@ -105,6 +105,9 @@ relayRouter.post('/', async (c) => {
     convId = generateId();
     db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)')
       .run(convId, user.sub, body.model, body.system_prompt ?? null);
+  } else {
+    const owned = db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub);
+    if (!owned) return c.json({ error: 'Not found' }, 404);
   }
 
   logger.info('chat request', {
@@ -137,7 +140,7 @@ relayRouter.post('/', async (c) => {
     for (const msg of allMessages) {
       openaiMessages.push({
         role: msg.role,
-        content: await resolveContentParts(msg.content),
+        content: await resolveContentParts(msg.content, user.sub),
         ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
           id: tc.id,
           type: 'function',
@@ -161,7 +164,7 @@ relayRouter.post('/', async (c) => {
     for (const msg of trimmed) {
       openaiMessages.push({
         role: msg.role,
-        content: await resolveContentParts(msg.content),
+        content: await resolveContentParts(msg.content, user.sub),
         ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
           id: tc.id,
           type: 'function',
@@ -171,7 +174,7 @@ relayRouter.post('/', async (c) => {
     }
   }
 
-  openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content) });
+  openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content, user.sub) });
 
   openStream(user.sub);
 

@@ -13,7 +13,10 @@ class HttpError extends Error {
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      'X-Requested-With': 'llm-frontend',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
@@ -109,6 +112,7 @@ uploads: {
       form.append('file', file);
       const res = await fetch('/api/uploads', {
         method: 'POST',
+        headers: { 'X-Requested-With': 'llm-frontend' },
         body: form,
         credentials: 'same-origin',
       });

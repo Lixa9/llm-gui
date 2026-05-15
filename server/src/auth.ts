@@ -14,40 +14,33 @@ import type { Role, SessionPayload } from './types';
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 let _discoveredEndpoints: { token_endpoint: string; end_session_endpoint?: string } | null = null;
 
-// Brute-force protection for local login
+// Brute-force protection for local login — keyed on username so IP rotation cannot bypass it
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
 
-function getClientIp(c: Context): string {
-  return c.req.header('x-forwarded-for')?.split(',')[0].trim() ?? c.req.header('x-real-ip') ?? 'unknown';
-}
-
-function isLoginLocked(ip: string): boolean {
-  const entry = loginAttempts.get(ip);
+function isLoginLocked(username: string): boolean {
+  const entry = loginAttempts.get(username);
   if (!entry) return false;
-  // Entry exists but lockout hasn't been triggered yet — don't delete, just not locked
   if (entry.lockedUntil === 0) return false;
-  // Active lockout
   if (entry.lockedUntil > Date.now()) return true;
-  // Lockout expired — clear it
-  loginAttempts.delete(ip);
+  loginAttempts.delete(username);
   return false;
 }
 
-function recordLoginFailure(ip: string): void {
-  const entry = loginAttempts.get(ip) ?? { count: 0, lockedUntil: 0 };
+function recordLoginFailure(username: string): void {
+  const entry = loginAttempts.get(username) ?? { count: 0, lockedUntil: 0 };
   entry.count++;
   if (entry.count >= LOGIN_MAX_ATTEMPTS) {
     entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
     entry.count = 0;
-    logger.warn('Local login locked out', { ip });
+    logger.warn('Local login locked out', { username });
   }
-  loginAttempts.set(ip, entry);
+  loginAttempts.set(username, entry);
 }
 
-function clearLoginFailures(ip: string): void {
-  loginAttempts.delete(ip);
+function clearLoginFailures(username: string): void {
+  loginAttempts.delete(username);
 }
 
 async function discover() {
@@ -295,32 +288,31 @@ authRouter.post('/local', async (c) => {
   const creds = localAuthCredentials();
   if (!creds) return c.json({ error: 'Local auth disabled' }, 403);
 
-  const ip = getClientIp(c);
-  if (isLoginLocked(ip)) {
-    return c.json({ error: 'Too many failed attempts. Try again later.' }, 429);
-  }
-
   const body = await c.req.json() as { username?: string; password?: string };
   if (!body.username || !body.password) {
     return c.json({ error: 'Missing credentials' }, 400);
   }
 
-  logger.info('login attempt', { method: 'local', ip, username: body.username });
+  if (isLoginLocked(body.username)) {
+    return c.json({ error: 'Too many failed attempts. Try again later.' }, 429);
+  }
+
+  logger.info('login attempt', { method: 'local', username: body.username });
 
   if (body.username !== creds.username) {
-    recordLoginFailure(ip);
-    logger.warn('login failed', { method: 'local', ip, reason: 'invalid credentials' });
+    recordLoginFailure(body.username);
+    logger.warn('login failed', { method: 'local', reason: 'invalid credentials' });
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
   const valid = await checkLocalPassword(body.password, creds.password);
   if (!valid) {
-    recordLoginFailure(ip);
-    logger.warn('login failed', { method: 'local', ip, reason: 'invalid credentials' });
+    recordLoginFailure(body.username);
+    logger.warn('login failed', { method: 'local', reason: 'invalid credentials' });
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
-  clearLoginFailures(ip);
+  clearLoginFailures(body.username);
 
   const db = getDb();
   const sub = 'local:admin';
@@ -338,7 +330,7 @@ authRouter.post('/local', async (c) => {
     maxAge: 86400,
   });
 
-  logger.info('login success', { method: 'local', ip, username: creds.username });
+  logger.info('login success', { method: 'local', username: creds.username });
   return c.json({ ok: true });
 });
 
