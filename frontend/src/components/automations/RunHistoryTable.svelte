@@ -6,11 +6,8 @@
   interface Props { runs: AutomationRun[]; }
   let { runs }: Props = $props();
 
-  function statusVariant(status: AutomationRun['status']): 'success' | 'danger' | 'warning' {
-    if (status === 'done') return 'success';
-    if (status === 'error') return 'danger';
-    return 'warning';
-  }
+  const statusVariant = (status: AutomationRun['status']): 'success' | 'danger' | 'warning' =>
+    status === 'done' ? 'success' : status === 'error' ? 'danger' : 'warning';
 </script>
 
 {#if runs.length === 0}

@@ -63,6 +63,13 @@ function sse(data: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function serializeToolCalls(calls: ToolCall[] | null | undefined) {
+  return calls?.length ? { tool_calls: calls.map(tc => ({
+    id: tc.id, type: 'function' as const,
+    function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+  })) } : {};
+}
+
 relayRouter.post('/', async (c) => {
   const user = c.get('user');
   const start = Date.now();
@@ -141,11 +148,7 @@ relayRouter.post('/', async (c) => {
       openaiMessages.push({
         role: msg.role,
         content: await resolveContentParts(msg.content, user.sub),
-        ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        })) } : {}),
+        ...serializeToolCalls(msg.tool_calls),
       });
     }
   } else {
@@ -165,11 +168,7 @@ relayRouter.post('/', async (c) => {
       openaiMessages.push({
         role: msg.role,
         content: await resolveContentParts(msg.content, user.sub),
-        ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls.map(tc => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        })) } : {}),
+        ...serializeToolCalls(msg.tool_calls),
       });
     }
   }
@@ -181,7 +180,7 @@ relayRouter.post('/', async (c) => {
   let fullText = '';
   const toolAccumulators = new Map<number, ToolCallAccumulator>();
   let assistantMsgId = generateId();
-  let isFirstExchange = allMessages.filter(m => m.role === 'user').length === 0;
+  let isFirstExchange = !allMessages.some(m => m.role === 'user');
 
   const stream = new ReadableStream({
     async start(controller) {

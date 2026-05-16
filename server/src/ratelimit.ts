@@ -11,16 +11,12 @@ interface UserBucket {
 const buckets = new Map<string, UserBucket>();
 
 function getBucket(sub: string): UserBucket {
-  if (!buckets.has(sub)) {
-    buckets.set(sub, {
-      minuteTokens: 0,
-      hourTokens: 0,
-      concurrentStreams: 0,
-      lastMinuteReset: Date.now(),
-      lastHourReset: Date.now(),
-    });
+  let b = buckets.get(sub);
+  if (!b) {
+    b = { minuteTokens: 0, hourTokens: 0, concurrentStreams: 0, lastMinuteReset: Date.now(), lastHourReset: Date.now() };
+    buckets.set(sub, b);
   }
-  return buckets.get(sub)!;
+  return b;
 }
 
 export interface RateLimitResult {

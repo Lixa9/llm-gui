@@ -11,7 +11,7 @@
 
   const rootFolders = $derived(conversationsStore.folders.filter(f => f.parent_id === null));
   const unfolderedConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === null));
-  const isSearching = $derived(searchQuery.trim().length > 0);
+  const isSearching = $derived(!!searchQuery.trim());
 
   const doSearch = debounce((q: string) => conversationsStore.search(q), 250);
 

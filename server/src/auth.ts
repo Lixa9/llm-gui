@@ -339,12 +339,9 @@ export async function requireAuth(c: Context, next: Next): Promise<Response | vo
 
 export function requireRole(role: Role) {
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const token = getCookie(c, 'session');
-    if (!token) return c.json({ error: 'Unauthorized' }, 401);
-    const payload = await verifySession(token);
-    if (!payload) return c.json({ error: 'Unauthorized' }, 401);
-    c.set('user', payload);
-    if (payload.role !== role) return c.json({ error: 'Forbidden' }, 403);
+    const res = await requireAuth(c, async () => {});
+    if (res) return res;
+    if (c.get('user').role !== role) return c.json({ error: 'Forbidden' }, 403);
     return next();
   };
 }

@@ -24,7 +24,7 @@
 
   const isFullMessage = $derived('id' in message && !isPending);
 
-  const showToolCalls = $derived(() => {
+  const showToolCalls = $derived.by(() => {
     if (!('tool_calls' in message) || !message.tool_calls?.length) return false;
     if (isPending) return true;
     const fullMsg = message as Message;
@@ -84,7 +84,7 @@
       {/if}
     </div>
 
-    {#if showToolCalls() && message.tool_calls?.length}
+    {#if showToolCalls && message.tool_calls?.length}
       <div class="tool-calls">
         {#each message.tool_calls as tc (tc.index)}
           <ToolCallAccordion

@@ -98,7 +98,7 @@
   }
 
   const canSend = $derived(
-    !streaming && (text.trim().length > 0 || pendingAttachments.some(a => a.status === 'ready'))
+    !streaming && (!!text.trim() || pendingAttachments.some(a => a.status === 'ready'))
   );
 </script>
 
