@@ -17,7 +17,7 @@
   let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming, expanded = $bindable(false) }: Props = $props();
 
   const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-  const MAX_IMAGES = 20;
+  const MAX_ATTACHMENTS = 20;
   const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
   const TEXT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -47,11 +47,12 @@ let text = $state('');
     for (const file of files) {
       const kind = ALLOWED_IMAGE_MIMES.has(file.type) ? 'image' : 'file';
 
+      if (pendingAttachments.length >= MAX_ATTACHMENTS) {
+        rejectFile(file, kind, `Maximum ${MAX_ATTACHMENTS} attachments per message`);
+        continue;
+      }
+
       if (kind === 'image') {
-        if (pendingAttachments.filter(a => a.kind === 'image').length >= MAX_IMAGES) {
-          rejectFile(file, kind, `Maximum ${MAX_IMAGES} images per message`);
-          continue;
-        }
         if (file.size > IMAGE_MAX_BYTES) {
           rejectFile(file, kind, 'File too large (max 20 MB)');
           continue;
