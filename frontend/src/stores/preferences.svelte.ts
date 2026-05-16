@@ -7,7 +7,6 @@ function createPreferencesStore() {
     sound_enabled: 'true',
     sound_volume: '0.6',
     default_model_id: '',
-    default_system_prompt: '',
     default_preset_id: '',
   });
 

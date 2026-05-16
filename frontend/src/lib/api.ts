@@ -39,7 +39,6 @@ const put = <T>(path: string, body?: unknown) => req<T>('PUT', path, body);
 export const api = {
   auth: {
     me: () => get<User>('/api/auth/me'),
-    loginUrl: () => '/api/auth/login',
     logout: () => get<void>('/api/auth/logout'),
     localEnabled: () => get<{ enabled: boolean }>('/api/auth/local-enabled'),
     localLogin: (username: string, password: string) =>

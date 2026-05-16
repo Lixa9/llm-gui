@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
-import type { SessionPayload, ModelPresetRow } from './types';
+import type { ModelPresetRow } from './types';
 
 export const presetsRouter = new Hono();
 presetsRouter.use('*', requireAuth);

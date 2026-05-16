@@ -13,7 +13,7 @@
     onclick={() => open = !open}
     aria-expanded={open}
   >
-    <span class="accordion-arrow" class:open>{open ? '▾' : '▸'}</span>
+    <span class="accordion-arrow">{open ? '▾' : '▸'}</span>
     {@render header()}
   </button>
   {#if open}

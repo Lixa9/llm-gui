@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
-import { getCookie } from 'hono/cookie';
 import { existsSync, readFileSync } from 'fs';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
