@@ -6,10 +6,11 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 
 ### Chat
 - Streaming responses with a stop button that cancels the upstream request immediately
-- Image attachments — paste or drag-and-drop; images are stored on the server and sent to the model as base64
+- **File attachments** — images (JPEG, PNG, GIF, WebP), documents (PDF, DOCX, ODT, EPUB), spreadsheets (XLSX, XLS, ODS), and text files (plain text, Markdown, CSV, TSV, HTML, JSON, YAML, XML). Files are stored on the server; text is extracted and sent inline; PDFs are rendered to images page by page; DOCX/ODT/EPUB embedded images are extracted and forwarded alongside the text
 - Tool call display — when LiteLLM uses tools, each call appears as a collapsible block showing the function name, arguments, and result. Visibility is configurable per model in `models.yaml`
 - Auto-generated conversation titles after the first exchange (using a model you configure)
 - Sliding context window — older messages are quietly trimmed before the request if the conversation exceeds the configured token budget; they are never deleted from the database. Per-model overrides are supported in `models.yaml`
+- Optional audio notification when a response completes (configurable in user preferences)
 
 ### Per-message actions
 - **Edit** — edit a user message and automatically regenerate the reply, or directly edit an assistant message without re-sending
@@ -33,21 +34,49 @@ A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (o
 - Admin-seeded presets from `presets.yaml` appear for all users (read-only), with their own role-based visibility independent of the underlying model
 
 ### Automations
-- Schedule a prompt to run automatically (every N hours/days/weeks)
-- Each run creates a new conversation with the full exchange
-- Manual trigger button for testing
+
+Automations are recurring LLM jobs. There are two types:
+
+**Scheduled** — runs a single prompt on a cron schedule. Each run creates a new conversation owned by the user.
+
+```yaml
+- name: "Daily digest"
+  type: scheduled
+  interval: 1
+  unit: days          # hours | days | weeks
+  model: "llama-3.3-70b"
+  system_prompt: "You are a concise summarizer."
+  user_prompt: "Summarize the top tech news today."
+```
+
+**Pipeline** — chains multiple prompts sequentially in a single conversation. Each step's output is appended before the next step runs.
+
+```yaml
+- name: "Research pipeline"
+  type: pipeline
+  steps:
+    - model: "llama-3.3-70b"
+      user_prompt: "List 5 recent AI research papers."
+    - model: "llama-3.3-70b"
+      system_prompt: "You are an expert reviewer."
+      user_prompt: "Summarize each paper in two sentences."
+```
+
+**System automations** (admin-seeded from `automations.yaml`) are shared across users. Users subscribe individually — each subscribed user gets their own copy of the conversation on each run, but only one LLM call is made regardless of subscriber count.
+
+Other automation features:
+- Manual trigger button for on-demand runs
 - Run history per automation
-- Admin-seeded automations from `automations.yaml`
 
 ### Admin panel
 - View all users and their OIDC-sourced identity
-- Set per-user role overrides (in case OIDC groups can't cover a case)
+- Set per-user role overrides (in case OIDC group claims can't cover a case)
 - View all users' prompts and automations (read-only)
-- View mounted config files
+- **Edit config files in-browser** — all YAML files under `/app/config` that are writable can be edited and saved directly from the admin panel. Changes are validated before being written and take effect immediately.
 
 ### Authentication
 - **SSO via OIDC** (Authelia, Keycloak, Authentik, or any compliant provider) using Authorization Code + PKCE
-- **Local admin account** — opt-in fallback enabled by setting `LOCAL_AUTH=true`; credentials are hardcoded to `admin`/`admin` and intended for testing only
+- **Local admin account** — opt-in fallback enabled by setting `LOCAL_AUTH=true`; credentials are hardcoded to `admin`/`admin` and intended for testing only, to use when no OIDC provider is available
 - Sessions are stored in the database; logging out fully invalidates the session, and a DB reset invalidates all existing cookies automatically
 - RBAC with two roles (`admin`, `user`); role assigned from OIDC group claims with per-user override capability
 
@@ -154,6 +183,7 @@ conversation:
   auto_title: true
   auto_title_model: "qwen3.5-0.8b"
   context_window_tokens: 100000
+  context_window_reserve: 1000   # tokens kept free for the model's reply
 ```
 
 > **Docker networking note:** use your host machine's LAN IP (or `host.docker.internal` on Mac/Windows) for `litellm.base_url`. `127.0.0.1` inside a container refers to the container itself, not your host.
@@ -217,7 +247,7 @@ presets:
 
 ```yaml
 automations: []
-# Example:
+# Scheduled example:
 # automations:
 #   - name: "Daily digest"
 #     type: scheduled
@@ -227,6 +257,17 @@ automations: []
 #     system_prompt: "You are a concise summarizer."
 #     user_prompt: "Summarize today's key points."
 #     allowed_roles: [admin, user]
+#
+# Pipeline example:
+#   - name: "Research pipeline"
+#     type: pipeline
+#     allowed_roles: [admin]
+#     steps:
+#       - model: "qwen3.5-0.8b"
+#         user_prompt: "List 5 AI papers published this week."
+#       - model: "qwen3.5-0.8b"
+#         system_prompt: "You are a concise reviewer."
+#         user_prompt: "Summarize each paper in two sentences."
 ```
 
 ### 8. Start
@@ -275,6 +316,5 @@ Requires Node.js 22+ if running outside Docker:
 
 ```bash
 cd frontend && npm ci && npm run build
-cd ../server && npm ci
-node src/index.ts
+cd ../server && npm ci && npm start
 ```

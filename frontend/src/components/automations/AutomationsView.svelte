@@ -62,7 +62,7 @@
   }
 
   function formatDefinition(auto: Automation): string {
-    const def = auto.definition as Record<string, unknown>;
+    const def = auto.definition as unknown as Record<string, unknown>;
     const lines: string[] = [];
     if (auto.type === 'scheduled') {
       lines.push(`Schedule: every ${def.interval} ${def.unit}`);

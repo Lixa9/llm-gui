@@ -32,7 +32,7 @@
     warning?: string;
   }
 
-let text = $state('');
+  let text = $state('');
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let fileInputEl: HTMLInputElement;
 
