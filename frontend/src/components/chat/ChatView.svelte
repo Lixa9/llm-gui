@@ -30,9 +30,7 @@
     if (_presetId !== null) return _presetId;
     if (!conversationId) {
       const defId = preferencesStore.defaultPresetId;
-      if (defId && modelsStore.presets.length > 0) {
-        if (modelsStore.presets.find(p => p.id === defId)) return defId;
-      }
+      if (defId && modelsStore.presets.some(p => p.id === defId)) return defId;
       return '';
     }
     return conversationsStore.list.find(c => c.id === conversationId)?.preset_id ?? '';
