@@ -18,7 +18,13 @@ export interface ImageUrlPart {
   _filename?: string;
 }
 
-export type MessageContentPart = ContentPart | ImageUrlPart;
+export interface FilePart {
+  type: 'file';
+  file: { url: string };
+  _filename?: string;
+}
+
+export type MessageContentPart = ContentPart | ImageUrlPart | FilePart;
 
 export interface ToolCall {
   id: string;

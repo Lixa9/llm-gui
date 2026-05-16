@@ -204,6 +204,8 @@ export function applySchema(db: Database.Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC)`);
+  try { db.exec('ALTER TABLE uploads ADD COLUMN extracted_text TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE uploads ADD COLUMN file_meta TEXT'); } catch { /* already exists */ }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (

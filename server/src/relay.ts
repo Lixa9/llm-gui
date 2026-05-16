@@ -9,11 +9,37 @@ import { fetchModels } from './models';
 import { logger } from './logger';
 import { getUploadsDir, MIME_TO_EXT } from './uploads';
 import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
+import type { FileMeta } from './extract';
+import { existsSync } from 'fs';
+import { readdir } from 'fs/promises';
+
+interface UploadRow {
+  sha256: string;
+  mime_type: string;
+  filename: string;
+  size: number;
+  extracted_text: string | null;
+  file_meta: string | null;
+}
+
+function buildFileJsonBlock(row: UploadRow): string {
+  const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
+  const ext = '.' + row.filename.split('.').pop();
+  const obj: Record<string, unknown> = {
+    filename: row.filename,
+    ext,
+    size_kb: Math.round(row.size / 1024),
+    ...(meta?.sheet_names?.length && { sheets: meta.sheet_names }),
+    content: row.extracted_text ?? '[Text extraction was not available for this file]',
+  };
+  return JSON.stringify(obj, null, 2);
+}
 
 async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
   const db = getDb();
   const uploadsDir = getUploadsDir();
   const resolved: unknown[] = [];
+
   for (const part of parts) {
     if (part.type === 'image_url') {
       const url = part.image_url.url;
@@ -31,6 +57,67 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
         }
       } else {
         resolved.push({ type: 'image_url', image_url: { url } });
+      }
+    } else if (part.type === 'file') {
+      const url = part.file.url;
+      if (url.startsWith('/api/uploads/')) {
+        const uploadId = url.split('/').pop()!;
+        const row = db.prepare(
+          'SELECT sha256, mime_type, filename, size, extracted_text, file_meta FROM uploads WHERE id=? AND owner_sub=?'
+        ).get(uploadId, ownerSub) as UploadRow | undefined;
+
+        if (row) {
+          const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
+          const isPdf = row.mime_type === 'application/pdf';
+          const isDocx = row.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          const isOdt = row.mime_type === 'application/vnd.oasis.opendocument.text';
+
+          if (isPdf && meta?.page_count) {
+            const pagesDir = join(uploadsDir, 'pdf-pages', row.sha256);
+            const served = meta.served_pages ?? Math.min(meta.page_count, 100);
+            const ext = row.filename.split('.').pop() ?? 'pdf';
+
+            for (let i = 1; i <= served; i++) {
+              const padded = String(i).padStart(3, '0');
+              const pagePath = join(pagesDir, `page-${padded}.jpg`);
+              if (!existsSync(pagePath)) continue;
+
+              const label: Record<string, unknown> = i === 1
+                ? { filename: row.filename, ext: '.' + ext, size_kb: Math.round(row.size / 1024), page: i, total_pages: meta.page_count }
+                : { filename: row.filename, page: i, total_pages: meta.page_count };
+              resolved.push({ type: 'text', text: JSON.stringify(label) });
+
+              const pageBytes = await readFile(pagePath);
+              resolved.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pageBytes.toString('base64')}` } });
+            }
+
+            if (meta.page_count > served) {
+              resolved.push({
+                type: 'text',
+                text: JSON.stringify({ filename: row.filename, note: `Truncated: showing ${served} of ${meta.page_count} pages` }),
+              });
+            }
+          } else if ((isDocx || isOdt) && meta) {
+            resolved.push({ type: 'text', text: buildFileJsonBlock(row) });
+
+            const imagesDir = join(uploadsDir, 'doc-images', row.sha256);
+            if (existsSync(imagesDir) && (meta.served_image_count ?? 0) > 0) {
+              const files = (await readdir(imagesDir)).sort();
+              const served = meta.served_image_count ?? files.length;
+              for (let i = 0; i < Math.min(files.length, served); i++) {
+                const imgBytes = await readFile(join(imagesDir, files[i]));
+                const imgMime = files[i].endsWith('.png') ? 'image/png' : 'image/jpeg';
+                resolved.push({
+                  type: 'text',
+                  text: JSON.stringify({ filename: row.filename, embedded_image: i + 1, of: served }),
+                });
+                resolved.push({ type: 'image_url', image_url: { url: `data:${imgMime};base64,${imgBytes.toString('base64')}` } });
+              }
+            }
+          } else {
+            resolved.push({ type: 'text', text: buildFileJsonBlock(row) });
+          }
+        }
       }
     } else {
       resolved.push(part);
