@@ -26,12 +26,17 @@ function copyMessages(db: Database.Database, srcId: string, destId: string, stop
   }
 }
 
+function tryParse(s: string | null, fallback: unknown = null): unknown {
+  if (!s) return fallback;
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
 function serializeMessage(row: MessageRow) {
   return {
     ...row,
-    content: JSON.parse(row.content),
-    tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null,
-    tool_results: row.tool_results ? JSON.parse(row.tool_results) : null,
+    content: tryParse(row.content, []),
+    tool_calls: tryParse(row.tool_calls),
+    tool_results: tryParse(row.tool_results),
   };
 }
 
@@ -281,7 +286,8 @@ foldersRouter.patch('/:id', async (c) => {
   if (updates.length > 0) {
     db.prepare(`UPDATE conversation_folders SET ${updates.join(', ')} WHERE id=? AND owner_sub=?`).run(...vals, id, user.sub);
   }
-  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=?').get(id);
+  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=? AND owner_sub=?').get(id, user.sub);
+  if (!row) return c.json({ error: 'Not found' }, 404);
   return c.json(row);
 });
 

@@ -11,6 +11,8 @@ import type { Role, SessionPayload } from './types';
 // JWKS cache — createRemoteJWKSet handles caching internally
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 let _discoveredEndpoints: { token_endpoint: string; end_session_endpoint?: string } | null = null;
+let _discoveredAt = 0;
+const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Brute-force protection for local login — keyed on username so IP rotation cannot bypass it
 const LOGIN_MAX_ATTEMPTS = 10;
@@ -42,7 +44,7 @@ function clearLoginFailures(username: string): void {
 }
 
 async function discover() {
-  if (_discoveredEndpoints) return _discoveredEndpoints;
+  if (_discoveredEndpoints && Date.now() - _discoveredAt < DISCOVERY_TTL_MS) return _discoveredEndpoints;
   const cfg = getConfig().oidc;
   if (!cfg) throw new Error('OIDC is not configured');
   const res = await fetch(`${cfg.issuer}/.well-known/openid-configuration`);
@@ -52,6 +54,7 @@ async function discover() {
     token_endpoint: data.token_endpoint,
     end_session_endpoint: data.end_session_endpoint,
   };
+  _discoveredAt = Date.now();
   return _discoveredEndpoints;
 }
 
@@ -327,21 +330,27 @@ authRouter.get('/me', async (c) => {
   return c.json({ sub: payload.sub, email: payload.email, name: payload.name, role: payload.role });
 });
 
+async function authenticate(c: Context): Promise<SessionPayload | null> {
+  const token = getCookie(c, 'session');
+  if (!token) return null;
+  const payload = await verifySession(token);
+  if (!payload) return null;
+  c.set('user', payload);
+  return payload;
+}
+
 // Middleware
 export async function requireAuth(c: Context, next: Next): Promise<Response | void> {
-  const token = getCookie(c, 'session');
-  if (!token) return c.json({ error: 'Unauthorized' }, 401);
-  const payload = await verifySession(token);
+  const payload = await authenticate(c);
   if (!payload) return c.json({ error: 'Unauthorized' }, 401);
-  c.set('user', payload);
   return next();
 }
 
 export function requireRole(role: Role) {
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const res = await requireAuth(c, async () => {});
-    if (res) return res;
-    if (c.get('user').role !== role) return c.json({ error: 'Forbidden' }, 403);
+    const payload = await authenticate(c);
+    if (!payload) return c.json({ error: 'Unauthorized' }, 401);
+    if (payload.role !== role) return c.json({ error: 'Forbidden' }, 403);
     return next();
   };
 }

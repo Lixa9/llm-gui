@@ -121,6 +121,15 @@ app.route('/api/uploads', uploadsRouter);
 // Health check — minimal response; does not probe internal services
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
+// CSP for all non-API routes (API routes serve JSON, not HTML)
+app.use('*', async (c, next) => {
+  await next();
+  if (!c.req.path.startsWith('/api/')) {
+    c.header('Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'");
+  }
+});
+
 // SPA fallback — serve index.html for all non-API routes
 app.use('*', serveStatic({ root: STATIC_DIR }));
 app.get('*', (c) => {

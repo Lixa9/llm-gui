@@ -1,10 +1,17 @@
 import { Hono } from 'hono';
 import cron from 'node-cron';
+import { z } from 'zod';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { logger } from './logger';
 import type { AutomationRow, AutomationRunRow, ScheduledDefinition, PipelineDefinition } from './types';
+
+const automationCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  type: z.enum(['scheduled', 'pipeline']),
+  definition: z.record(z.unknown()),
+});
 
 export const automationsRouter = new Hono();
 automationsRouter.use('*', requireAuth);
@@ -40,7 +47,9 @@ automationsRouter.get('/', (c) => {
 
 automationsRouter.post('/', async (c) => {
   const user = c.get('user');
-  const body = await c.req.json() as { name: string; type: string; definition: unknown };
+  const parsed = automationCreateSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? 'Invalid body' }, 400);
+  const body = parsed.data;
   const db = getDb();
   const id = generateId();
   db.prepare('INSERT INTO automations (id, owner_sub, name, type, definition) VALUES (?, ?, ?, ?, ?)')
@@ -141,7 +150,9 @@ function toCron(interval: number, unit: string): string | null {
   const n = Math.max(1, Math.floor(interval));
   if (unit === 'hours') return `0 */${n} * * *`;
   if (unit === 'days') return `0 0 */${n} * *`;
-  if (unit === 'weeks') return `0 0 */${n * 7} * *`;
+  // `*/7` in day-of-month fires on days 1,8,15,22,29 — not calendar-aligned weeks.
+  // For n=1 we use day-of-week (every Sunday); for n>1 it remains an approximation.
+  if (unit === 'weeks') return n === 1 ? `0 0 * * 0` : `0 0 */${n * 7} * *`;
   return null;
 }
 

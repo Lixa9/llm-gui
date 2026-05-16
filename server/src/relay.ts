@@ -171,12 +171,6 @@ relayRouter.post('/', async (c) => {
   const user = c.get('user');
   const start = Date.now();
 
-  // Rate limit check
-  const rl = checkRateLimit(user.sub);
-  if (!rl.allowed) {
-    return c.json({ error: rl.reason }, 429);
-  }
-
   const body = await c.req.json() as {
     conversation_id: string | null;
     model: string;
@@ -202,7 +196,7 @@ relayRouter.post('/', async (c) => {
 
   const db = getDb();
 
-  // Resolve conversation
+  // Resolve conversation (ownership validated before rate-limit is consumed)
   let convId = body.conversation_id;
   if (!convId) {
     convId = generateId();
@@ -211,6 +205,12 @@ relayRouter.post('/', async (c) => {
   } else {
     const owned = db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub);
     if (!owned) return c.json({ error: 'Not found' }, 404);
+  }
+
+  // Rate limit check — placed after ownership validation so rejected requests don't consume tokens
+  const rl = checkRateLimit(user.sub);
+  if (!rl.allowed) {
+    return c.json({ error: rl.reason }, 429);
   }
 
   logger.info('chat request', {
