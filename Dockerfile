@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Build server (compile native addons + bundle TS)
 FROM node:22-alpine AS build-server
 WORKDIR /app
-RUN apk add --no-cache python3 make g++ pkgconfig cairo-dev pango-dev libjpeg-turbo-dev giflib-dev pixman-dev
+RUN apk add --no-cache python3 make g++
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci
 COPY server/ .
@@ -29,7 +29,7 @@ RUN npm prune --production && \
 FROM node:22-alpine
 WORKDIR /app
 
-RUN apk add --no-cache gosu cairo pango libjpeg-turbo giflib pixman
+RUN apk add --no-cache gosu
 
 COPY --chown=node:node --from=build-server /app/node_modules ./node_modules
 COPY --chown=node:node --from=build-server /app/dist/index.js ./index.js
