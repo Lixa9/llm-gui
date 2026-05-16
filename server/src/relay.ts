@@ -40,7 +40,15 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
   const uploadsDir = getUploadsDir();
   const resolved: unknown[] = [];
 
+  const hasText = parts.some(p => p.type === 'text');
+  const hasAttachments = parts.some(p => p.type === 'image_url' || p.type === 'file');
+  let separatorDone = !hasText || !hasAttachments;
+
   for (const part of parts) {
+    if (!separatorDone && (part.type === 'image_url' || part.type === 'file')) {
+      resolved.push({ type: 'text', text: '---\nAttached files:' });
+      separatorDone = true;
+    }
     if (part.type === 'image_url') {
       const url = part.image_url.url;
       if (url.startsWith('/api/uploads/')) {

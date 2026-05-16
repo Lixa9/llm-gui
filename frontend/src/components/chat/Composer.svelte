@@ -93,7 +93,7 @@
       }));
 
     const textParts = trimmed ? [{ type: 'text' as const, text: trimmed }] : [];
-    const contentParts = [...imageParts, ...fileParts, ...textParts];
+    const contentParts = [...textParts, ...imageParts, ...fileParts];
 
     const payload: ChatPayload = {
       conversation_id: conversationId,
