@@ -147,60 +147,31 @@ export async function renderPdfPages(
   sha256: string,
   uploadsDir: string,
 ): Promise<{ page_count: number; served: number; warning?: string }> {
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const { createCanvas } = await import('canvas');
-
-  class NodeCanvasFactory {
-    create(width: number, height: number) {
-      const canvas = createCanvas(width, height);
-      return { canvas, context: canvas.getContext('2d') };
-    }
-    reset(canvasAndCtx: { canvas: ReturnType<typeof createCanvas> }, width: number, height: number) {
-      canvasAndCtx.canvas.width = width;
-      canvasAndCtx.canvas.height = height;
-    }
-    destroy(canvasAndCtx: { canvas: ReturnType<typeof createCanvas> }) {
-      canvasAndCtx.canvas.width = 0;
-      canvasAndCtx.canvas.height = 0;
-    }
-  }
+  const mupdf = (await import('mupdf')).default;
 
   const pagesDir = join(uploadsDir, 'pdf-pages', sha256);
   mkdirSync(pagesDir, { recursive: true });
 
-  const doc = await (pdfjsLib as unknown as typeof import('pdfjs-dist')).getDocument({
-    data: new Uint8Array(bytes),
-    useSystemFonts: true,
-    disableFontFace: true,
-    CanvasFactory: NodeCanvasFactory,
-  }).promise;
-
-  const page_count = doc.numPages;
+  const doc = mupdf.Document.openDocument(new Uint8Array(bytes), 'application/pdf');
+  const page_count = doc.countPages();
   const served = Math.min(page_count, PDF_PAGE_CAP);
-  const DPI_SCALE = 150 / 72;
+  const matrix = mupdf.Matrix.scale(150 / 72, 150 / 72);
 
-  for (let i = 1; i <= served; i++) {
-    const page = await doc.getPage(i);
-    const viewport = page.getViewport({ scale: DPI_SCALE });
-    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    const context = canvas.getContext('2d');
-
-    await page.render({
-      canvasContext: context as unknown as CanvasRenderingContext2D,
-      viewport,
-      canvas: canvas as unknown as HTMLCanvasElement,
-    }).promise;
-
-    const padded = String(i).padStart(3, '0');
-    await writeFile(join(pagesDir, `page-${padded}.jpg`), canvas.toBuffer('image/jpeg', { quality: 0.85 }));
-    page.cleanup();
+  for (let i = 0; i < served; i++) {
+    const page = doc.loadPage(i);
+    const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false);
+    const padded = String(i + 1).padStart(3, '0');
+    await writeFile(join(pagesDir, `page-${padded}.jpg`), Buffer.from(pixmap.asJPEG(85)));
+    pixmap.destroy();
+    page.destroy();
   }
+  doc.destroy();
 
-  const warning = page_count > PDF_PAGE_CAP
-    ? `Showing first ${PDF_PAGE_CAP} of ${page_count} pages`
-    : undefined;
-
-  return { page_count, served, warning };
+  return {
+    page_count,
+    served,
+    warning: page_count > PDF_PAGE_CAP ? `Showing first ${PDF_PAGE_CAP} of ${page_count} pages` : undefined,
+  };
 }
 
 export async function extractDocImages(
