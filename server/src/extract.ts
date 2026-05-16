@@ -19,12 +19,15 @@ export interface ExtractionResult {
 }
 
 const TEXT_CAP = 1_000_000;
-const PDF_PAGE_CAP = 100;
+export const PDF_PAGE_CAP = 100;
 const DOC_IMAGE_CAP = 20;
 
-function truncate(text: string): { text: string; truncated: boolean } {
-  if (text.length <= TEXT_CAP) return { text, truncated: false };
-  return { text: text.slice(0, TEXT_CAP) + '\n\n[Content truncated at 1,000,000 characters]', truncated: true };
+function truncate(text: string): { text: string; warning?: string } {
+  if (text.length <= TEXT_CAP) return { text };
+  return {
+    text: text.slice(0, TEXT_CAP) + '\n\n[Content truncated at 1,000,000 characters]',
+    warning: 'Content truncated at 1,000,000 characters',
+  };
 }
 
 export async function extractText(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
@@ -62,53 +65,29 @@ export async function extractText(bytes: Buffer, mimeType: string): Promise<Extr
 }
 
 async function extractPlain(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
-  let raw: string;
-  try {
-    raw = bytes.toString('utf-8');
-    // strip BOM
-    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  } catch {
-    raw = bytes.toString('latin1');
-  }
-  const { text, truncated } = truncate(raw.trim() || '[File appears empty or has no extractable text]');
-  return {
-    text,
-    meta: { format: 'plain', ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  let raw = bytes.toString('utf-8');
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  const { text, warning } = truncate(raw.trim() || '[File appears empty or has no extractable text]');
+  return { text, meta: { format: 'plain', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
   const { parse } = await import('node-html-parser');
-  let raw: string;
-  try {
-    raw = bytes.toString('utf-8');
-    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  } catch {
-    raw = bytes.toString('latin1');
-  }
+  let raw = bytes.toString('utf-8');
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const root = parse(raw);
-  // remove script and style nodes
   root.querySelectorAll('script, style').forEach(n => n.remove());
   const extracted = root.text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
-  const { text, truncated } = truncate(extracted);
-  return {
-    text,
-    meta: { format: 'html', ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  const { text, warning } = truncate(extracted);
+  return { text, meta: { format: 'html', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
   const mammoth = await import('mammoth');
   const result = await mammoth.extractRawText({ buffer: bytes });
   const raw = result.value.trim() || '[File appears empty or has no extractable text]';
-  const { text, truncated } = truncate(raw);
-  return {
-    text,
-    meta: { format: 'docx', ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  const { text, warning } = truncate(raw);
+  return { text, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
@@ -121,12 +100,8 @@ async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim() || '[File appears empty or has no extractable text]';
-  const { text, truncated } = truncate(raw);
-  return {
-    text,
-    meta: { format: 'odt', ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  const { text, warning } = truncate(raw);
+  return { text, meta: { format: 'odt', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
@@ -138,12 +113,8 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     return `=== Sheet: ${name} ===\n${csv}`;
   });
   const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
-  const { text, truncated } = truncate(raw);
-  return {
-    text,
-    meta: { format, sheet_names: wb.SheetNames, ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  const { text, warning } = truncate(raw);
+  return { text, meta: { format, sheet_names: wb.SheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
@@ -192,12 +163,8 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   }
 
   const raw = textParts.join('\n\n').trim() || '[File appears empty or has no extractable text]';
-  const { text, truncated } = truncate(raw);
-  return {
-    text,
-    meta: { format: 'epub', ...(truncated && { truncated: true }) },
-    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
-  };
+  const { text, warning } = truncate(raw);
+  return { text, meta: { format: 'epub', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 export async function renderPdfPages(
