@@ -3,7 +3,7 @@ import { writeFile } from 'fs/promises';
 import { join, extname } from 'path';
 
 export interface FileMeta {
-  format: 'plain' | 'pdf' | 'docx' | 'odt' | 'xlsx' | 'ods' | 'html';
+  format: 'plain' | 'pdf' | 'docx' | 'odt' | 'xlsx' | 'ods' | 'html' | 'epub';
   page_count?: number;
   served_pages?: number;
   sheet_names?: string[];
@@ -52,6 +52,10 @@ export async function extractText(bytes: Buffer, mimeType: string): Promise<Extr
 
   if (mimeType === 'text/html') {
     return extractHtml(bytes);
+  }
+
+  if (mimeType === 'application/epub+zip') {
+    return extractEpub(bytes);
   }
 
   return extractPlain(bytes, mimeType);
@@ -142,6 +146,60 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   };
 }
 
+async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
+  const AdmZip = (await import('adm-zip')).default;
+  const { parse } = await import('node-html-parser');
+  const zip = new AdmZip(bytes);
+
+  // Locate OPF file via META-INF/container.xml
+  const containerEntry = zip.getEntry('META-INF/container.xml');
+  if (!containerEntry) throw new Error('EPUB missing META-INF/container.xml');
+  const containerXml = containerEntry.getData().toString('utf-8');
+  const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
+  if (!opfPath) throw new Error('EPUB container.xml has no rootfile full-path');
+
+  const opfBase = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+
+  const opfEntry = zip.getEntry(opfPath);
+  if (!opfEntry) throw new Error(`EPUB OPF not found: ${opfPath}`);
+  const opfXml = opfEntry.getData().toString('utf-8');
+
+  // Parse manifest: id → { href, mediaType }
+  const manifest = new Map<string, { href: string; mediaType: string }>();
+  for (const item of opfXml.match(/<item\s[^>]+>/g) ?? []) {
+    const id = item.match(/\bid="([^"]+)"/)?.[1];
+    const href = item.match(/\bhref="([^"]+)"/)?.[1];
+    const mediaType = item.match(/\bmedia-type="([^"]+)"/)?.[1] ?? '';
+    if (id && href) manifest.set(id, { href, mediaType });
+  }
+
+  // Parse spine: ordered idrefs
+  const spineIds = [...opfXml.matchAll(/\bidref="([^"]+)"/g)].map(m => m[1]);
+
+  // Extract text from spine HTML files in order
+  const textParts: string[] = [];
+  for (const idref of spineIds) {
+    const item = manifest.get(idref);
+    if (!item) continue;
+    const entryPath = opfBase + item.href;
+    const entry = zip.getEntry(entryPath) ?? zip.getEntry(item.href);
+    if (!entry) continue;
+    const html = entry.getData().toString('utf-8');
+    const root = parse(html);
+    root.querySelectorAll('script, style').forEach(n => n.remove());
+    const text = root.text.replace(/\s+/g, ' ').trim();
+    if (text) textParts.push(text);
+  }
+
+  const raw = textParts.join('\n\n').trim() || '[File appears empty or has no extractable text]';
+  const { text, truncated } = truncate(raw);
+  return {
+    text,
+    meta: { format: 'epub', ...(truncated && { truncated: true }) },
+    ...(truncated && { warning: 'Content truncated at 1,000,000 characters' }),
+  };
+}
+
 export async function renderPdfPages(
   bytes: Buffer,
   sha256: string,
@@ -178,16 +236,36 @@ export async function extractDocImages(
   bytes: Buffer,
   sha256: string,
   uploadsDir: string,
-  format: 'docx' | 'odt',
+  format: 'docx' | 'odt' | 'epub',
 ): Promise<{ count: number; served: number; warning?: string }> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
-  const entries = zip.getEntries();
 
-  const prefix = format === 'docx' ? 'word/media/' : 'Pictures/';
-  const imageEntries = entries.filter(e =>
-    e.entryName.startsWith(prefix) && !e.isDirectory
-  );
+  let imageEntries: { data: Buffer; ext: string }[];
+
+  if (format === 'epub') {
+    // Discover images via OPF manifest (handles any directory layout)
+    const containerXml = zip.getEntry('META-INF/container.xml')?.getData().toString('utf-8') ?? '';
+    const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
+    const opfBase = opfPath?.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+    const opfXml = opfPath ? (zip.getEntry(opfPath)?.getData().toString('utf-8') ?? '') : '';
+
+    imageEntries = (opfXml.match(/<item\s[^>]+>/g) ?? [])
+      .flatMap(item => {
+        const href = item.match(/\bhref="([^"]+)"/)?.[1];
+        const mediaType = item.match(/\bmedia-type="(image\/[^"]+)"/)?.[1];
+        if (!href || !mediaType) return [];
+        const entry = zip.getEntry(opfBase + href) ?? zip.getEntry(href);
+        if (!entry) return [];
+        const ext = mediaType === 'image/png' ? '.png' : mediaType === 'image/gif' ? '.gif' : mediaType === 'image/webp' ? '.webp' : '.jpg';
+        return [{ data: entry.getData(), ext }];
+      });
+  } else {
+    const prefix = format === 'docx' ? 'word/media/' : 'Pictures/';
+    imageEntries = zip.getEntries()
+      .filter(e => e.entryName.startsWith(prefix) && !e.isDirectory)
+      .map(e => ({ data: e.getData(), ext: extname(e.entryName) || '.bin' }));
+  }
 
   const count = imageEntries.length;
   if (count === 0) return { count: 0, served: 0 };
@@ -197,15 +275,14 @@ export async function extractDocImages(
 
   const served = Math.min(count, DOC_IMAGE_CAP);
   for (let i = 0; i < served; i++) {
-    const entry = imageEntries[i];
-    const ext = extname(entry.entryName) || '.bin';
+    const { data, ext } = imageEntries[i];
     const padded = String(i + 1).padStart(3, '0');
-    await writeFile(join(imagesDir, `img-${padded}${ext}`), entry.getData());
+    await writeFile(join(imagesDir, `img-${padded}${ext}`), data);
   }
 
-  const warning = count > DOC_IMAGE_CAP
-    ? `Showing first ${DOC_IMAGE_CAP} of ${count} embedded images`
-    : undefined;
-
-  return { count, served, warning };
+  return {
+    count,
+    served,
+    warning: count > DOC_IMAGE_CAP ? `Showing first ${DOC_IMAGE_CAP} of ${count} embedded images` : undefined,
+  };
 }

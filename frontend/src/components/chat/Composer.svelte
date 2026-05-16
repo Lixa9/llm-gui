@@ -33,6 +33,7 @@
     if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'application/vnd.oasis.opendocument.spreadsheet') return '📊';
     if (mime.includes('wordprocessingml') || mime === 'application/vnd.oasis.opendocument.text') return '📝';
     if (mime === 'text/html') return '🌐';
+    if (mime === 'application/epub+zip') return '📚';
     return '📃';
   }
 
@@ -185,7 +186,7 @@
   <input
     bind:this={fileInputEl}
     type="file"
-    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.ods,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
+    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,application/epub+zip,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.ods,.epub,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
     multiple
     style="display:none"
     onchange={onFileSelected}
