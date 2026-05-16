@@ -1,6 +1,7 @@
 <script lang="ts">
   import { renderMarkdown } from '$lib/markdown';
   import type { MessageContentPart } from '$lib/types';
+  import { fileIcon } from '$lib/fileUtils';
 
   interface Props {
     role: string;
@@ -22,17 +23,7 @@
     content.filter((p): p is { type: 'file'; file: { url: string }; _filename?: string; _mime_type?: string } => p.type === 'file')
   );
 
-  function fileIcon(mime: string | undefined): string {
-    if (!mime) return '📃';
-    if (mime === 'application/pdf') return '📄';
-    if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'application/vnd.oasis.opendocument.spreadsheet') return '📊';
-    if (mime.includes('wordprocessingml') || mime === 'application/vnd.oasis.opendocument.text') return '📝';
-    if (mime === 'text/html') return '🌐';
-    if (mime === 'application/epub+zip') return '📚';
-    return '📃';
-  }
-
-  const text = $derived(
+const text = $derived(
     streaming && streamingText != null
       ? streamingText
       : textParts.map(p => p.text).join('\n'),

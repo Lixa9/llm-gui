@@ -2,6 +2,7 @@
   import { chatStore } from '../../stores/chat.svelte';
   import { api } from '$lib/api';
   import type { ChatPayload, UploadResult } from '$lib/types';
+  import { fileIcon } from '$lib/fileUtils';
 
   interface Props {
     conversationId: string | null;
@@ -16,6 +17,9 @@
   let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming, expanded = $bindable(false) }: Props = $props();
 
   const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+  const MAX_IMAGES = 20;
+  const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+  const TEXT_MAX_BYTES = 50 * 1024 * 1024;
 
   interface PendingAttachment {
     localUrl: string;
@@ -28,18 +32,13 @@
     warning?: string;
   }
 
-  function fileIcon(mime: string): string {
-    if (mime === 'application/pdf') return '📄';
-    if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'application/vnd.oasis.opendocument.spreadsheet') return '📊';
-    if (mime.includes('wordprocessingml') || mime === 'application/vnd.oasis.opendocument.text') return '📝';
-    if (mime === 'text/html') return '🌐';
-    if (mime === 'application/epub+zip') return '📚';
-    return '📃';
-  }
-
-  let text = $state('');
+let text = $state('');
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let fileInputEl: HTMLInputElement;
+
+  function rejectFile(file: File, kind: 'image' | 'file', errorMsg: string) {
+    pendingAttachments = [...pendingAttachments, { localUrl: '', filename: file.name, mimeType: file.type, kind, status: 'error', errorMsg }];
+  }
 
   async function onFileSelected(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
@@ -47,6 +46,21 @@
     input.value = '';
     for (const file of files) {
       const kind = ALLOWED_IMAGE_MIMES.has(file.type) ? 'image' : 'file';
+
+      if (kind === 'image') {
+        if (pendingAttachments.filter(a => a.kind === 'image').length >= MAX_IMAGES) {
+          rejectFile(file, kind, `Maximum ${MAX_IMAGES} images per message`);
+          continue;
+        }
+        if (file.size > IMAGE_MAX_BYTES) {
+          rejectFile(file, kind, 'File too large (max 20 MB)');
+          continue;
+        }
+      } else if (file.size > TEXT_MAX_BYTES) {
+        rejectFile(file, kind, 'File too large (max 50 MB)');
+        continue;
+      }
+
       const localUrl = kind === 'image' ? URL.createObjectURL(file) : '';
       const attachment: PendingAttachment = { localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
       pendingAttachments = [...pendingAttachments, attachment];
@@ -186,7 +200,7 @@
   <input
     bind:this={fileInputEl}
     type="file"
-    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,application/epub+zip,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.ods,.epub,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
+    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.oasis.opendocument.spreadsheet,application/epub+zip,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.xls,.ods,.epub,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
     multiple
     style="display:none"
     onchange={onFileSelected}

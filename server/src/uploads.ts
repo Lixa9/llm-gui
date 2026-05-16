@@ -66,6 +66,15 @@ export const MIME_TO_EXT: Record<string, string> = {
 const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
 const TEXT_MAX_SIZE = 50 * 1024 * 1024;
 
+export function classifyMime(mime: string) {
+  return {
+    isPdf: mime === 'application/pdf',
+    isDocx: mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    isOdt: mime === 'application/vnd.oasis.opendocument.text',
+    isEpub: mime === 'application/epub+zip',
+  };
+}
+
 export function getUploadsDir(): string {
   const cfg = getConfig();
   return join(dirname(cfg.database.path), 'uploads');
@@ -121,10 +130,7 @@ uploadsRouter.post('/', async (c) => {
   let warning: string | undefined;
 
   if (isTextFile) {
-    const isPdf = file.type === 'application/pdf';
-    const isDocx = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    const isOdt = file.type === 'application/vnd.oasis.opendocument.text';
-    const isEpub = file.type === 'application/epub+zip';
+    const { isPdf, isDocx, isOdt, isEpub } = classifyMime(file.type);
 
     try {
       if (isPdf) {

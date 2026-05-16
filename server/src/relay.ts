@@ -1,17 +1,17 @@
 import { Hono } from 'hono';
 import { join } from 'path';
-import { readFile } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
+import { existsSync } from 'fs';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { checkRateLimit, openStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
-import { getUploadsDir, MIME_TO_EXT } from './uploads';
+import { getUploadsDir, MIME_TO_EXT, classifyMime } from './uploads';
 import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
 import type { FileMeta } from './extract';
-import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
+import { PDF_PAGE_CAP } from './extract';
 
 interface UploadRow {
   sha256: string;
@@ -24,7 +24,7 @@ interface UploadRow {
 
 function buildFileJsonBlock(row: UploadRow): string {
   const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
-  const ext = '.' + row.filename.split('.').pop();
+  const ext = MIME_TO_EXT[row.mime_type] ?? '';
   const obj: Record<string, unknown> = {
     filename: row.filename,
     ext,
@@ -59,9 +59,10 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
         if (row) {
           const ext = MIME_TO_EXT[row.mime_type] ?? '';
           const filePath = join(uploadsDir, `${row.sha256}${ext}`);
-          const bytes = await readFile(filePath);
-          const base64 = bytes.toString('base64');
-          resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${base64}` } });
+          if (existsSync(filePath)) {
+            const bytes = await readFile(filePath);
+            resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${bytes.toString('base64')}` } });
+          }
         }
       } else {
         resolved.push({ type: 'image_url', image_url: { url } });
@@ -76,15 +77,12 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
 
         if (row) {
           const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
-          const isPdf = row.mime_type === 'application/pdf';
-          const isDocx = row.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          const isOdt = row.mime_type === 'application/vnd.oasis.opendocument.text';
-          const isEpub = row.mime_type === 'application/epub+zip';
+          const { isPdf, isDocx, isOdt, isEpub } = classifyMime(row.mime_type);
 
           if (isPdf && meta?.page_count) {
             const pagesDir = join(uploadsDir, 'pdf-pages', row.sha256);
-            const served = meta.served_pages ?? Math.min(meta.page_count, 100);
-            const ext = row.filename.split('.').pop() ?? 'pdf';
+            const served = meta.served_pages ?? Math.min(meta.page_count, PDF_PAGE_CAP);
+            const ext = MIME_TO_EXT[row.mime_type] ?? '.pdf';
 
             for (let i = 1; i <= served; i++) {
               const padded = String(i).padStart(3, '0');
@@ -92,7 +90,7 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
               if (!existsSync(pagePath)) continue;
 
               const label: Record<string, unknown> = i === 1
-                ? { filename: row.filename, ext: '.' + ext, size_kb: Math.round(row.size / 1024), page: i, total_pages: meta.page_count }
+                ? { filename: row.filename, ext, size_kb: Math.round(row.size / 1024), page: i, total_pages: meta.page_count }
                 : { filename: row.filename, page: i, total_pages: meta.page_count };
               resolved.push({ type: 'text', text: JSON.stringify(label) });
 
@@ -115,7 +113,10 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
               const served = meta.served_image_count ?? files.length;
               for (let i = 0; i < Math.min(files.length, served); i++) {
                 const imgBytes = await readFile(join(imagesDir, files[i]));
-                const imgMime = files[i].endsWith('.png') ? 'image/png' : 'image/jpeg';
+                const imgMime = files[i].endsWith('.png') ? 'image/png'
+                  : files[i].endsWith('.gif') ? 'image/gif'
+                  : files[i].endsWith('.webp') ? 'image/webp'
+                  : 'image/jpeg';
                 resolved.push({
                   type: 'text',
                   text: JSON.stringify({ filename: row.filename, embedded_image: i + 1, of: served }),
@@ -148,7 +149,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-function extractText(content: MessageContentPart[]): string {
+function contentPartsToText(content: MessageContentPart[]): string {
   return content
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map(p => p.text)
@@ -180,7 +181,6 @@ relayRouter.post('/', async (c) => {
     conversation_id: string | null;
     model: string;
     system_prompt?: string;
-    system_prompt_id?: string;
     messages: Array<{
       role: 'user' | 'assistant';
       content: MessageContentPart[];
@@ -223,7 +223,7 @@ relayRouter.post('/', async (c) => {
   // Persist user message
   const userMsgId = generateId();
   const userContent = JSON.stringify(body.new_user_message.content);
-  const userText = extractText(body.new_user_message.content);
+  const userText = contentPartsToText(body.new_user_message.content);
   db.prepare(
     'INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(userMsgId, convId, 'user', userContent, userText, 'done');
@@ -255,7 +255,7 @@ relayRouter.post('/', async (c) => {
     tokenCount += estimateTokens(userText);
     const trimmed: typeof allMessages = [];
     for (const msg of [...allMessages].reverse()) {
-      const msgTokens = estimateTokens(extractText(msg.content));
+      const msgTokens = estimateTokens(contentPartsToText(msg.content));
       if (tokenCount + msgTokens > windowTokens && trimmed.length > 0) break;
       tokenCount += msgTokens;
       trimmed.unshift(msg);
