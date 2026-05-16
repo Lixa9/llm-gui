@@ -36,6 +36,7 @@ export const ALLOWED_TEXT_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
   'application/vnd.oasis.opendocument.spreadsheet',
+  'application/epub+zip',
 ]);
 
 export const MIME_TO_EXT: Record<string, string> = {
@@ -59,6 +60,7 @@ export const MIME_TO_EXT: Record<string, string> = {
   'application/xml': '.xml',
   'text/xml': '.xml',
   'text/plain': '.txt',
+  'application/epub+zip': '.epub',
 };
 
 const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
@@ -122,16 +124,17 @@ uploadsRouter.post('/', async (c) => {
     const isPdf = file.type === 'application/pdf';
     const isDocx = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     const isOdt = file.type === 'application/vnd.oasis.opendocument.text';
+    const isEpub = file.type === 'application/epub+zip';
 
     try {
       if (isPdf) {
         const res = await renderPdfPages(buf, sha256, uploadsDir);
         file_meta = JSON.stringify({ format: 'pdf', page_count: res.page_count, served_pages: res.served });
         warning = res.warning;
-      } else if (isDocx || isOdt) {
+      } else if (isDocx || isOdt || isEpub) {
         const [textRes, imgRes] = await Promise.all([
           extractText(buf, file.type),
-          extractDocImages(buf, sha256, uploadsDir, isDocx ? 'docx' : 'odt'),
+          extractDocImages(buf, sha256, uploadsDir, isDocx ? 'docx' : isOdt ? 'odt' : 'epub'),
         ]);
         extracted_text = textRes.text;
         const meta = {

@@ -71,6 +71,7 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
           const isPdf = row.mime_type === 'application/pdf';
           const isDocx = row.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
           const isOdt = row.mime_type === 'application/vnd.oasis.opendocument.text';
+          const isEpub = row.mime_type === 'application/epub+zip';
 
           if (isPdf && meta?.page_count) {
             const pagesDir = join(uploadsDir, 'pdf-pages', row.sha256);
@@ -97,7 +98,7 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
                 text: JSON.stringify({ filename: row.filename, note: `Truncated: showing ${served} of ${meta.page_count} pages` }),
               });
             }
-          } else if ((isDocx || isOdt) && meta) {
+          } else if ((isDocx || isOdt || isEpub) && meta) {
             resolved.push({ type: 'text', text: buildFileJsonBlock(row) });
 
             const imagesDir = join(uploadsDir, 'doc-images', row.sha256);
