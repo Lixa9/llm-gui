@@ -18,6 +18,19 @@
     content.filter((p): p is { type: 'image_url'; image_url: { url: string }; _filename?: string } => p.type === 'image_url')
   );
 
+  const fileParts = $derived(
+    content.filter((p): p is { type: 'file'; file: { url: string }; _filename?: string; _mime_type?: string } => p.type === 'file')
+  );
+
+  function fileIcon(mime: string | undefined): string {
+    if (!mime) return '📃';
+    if (mime === 'application/pdf') return '📄';
+    if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'application/vnd.oasis.opendocument.spreadsheet') return '📊';
+    if (mime.includes('wordprocessingml') || mime === 'application/vnd.oasis.opendocument.text') return '📝';
+    if (mime === 'text/html') return '🌐';
+    return '📃';
+  }
+
   const text = $derived(
     streaming && streamingText != null
       ? streamingText
@@ -50,6 +63,15 @@
           title={img._filename}
           onclick={() => lightboxSrc = img.image_url.url}
         />
+      {/each}
+    </div>
+  {/if}
+  {#if fileParts.length > 0}
+    <div class="file-parts">
+      {#each fileParts as fp}
+        <span class="file-chip" title={fp._filename}>
+          {fileIcon(fp._mime_type)}&nbsp;{fp._filename ?? 'Attached file'}
+        </span>
       {/each}
     </div>
   {/if}
@@ -102,6 +124,28 @@
     max-height: 90vh;
     object-fit: contain;
     border-radius: var(--radius);
+  }
+
+  .file-parts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 6px;
+  }
+
+  .file-chip {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 7px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .user-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; }

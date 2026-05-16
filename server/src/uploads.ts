@@ -7,6 +7,7 @@ import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { checkRateLimit } from './ratelimit';
 import { logger } from './logger';
+import { extractText, renderPdfPages, extractDocImages } from './extract';
 
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);
@@ -18,14 +19,50 @@ export const ALLOWED_IMAGE_TYPES = new Set([
   'image/webp',
 ]);
 
+export const ALLOWED_TEXT_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/tab-separated-values',
+  'text/html',
+  'text/xml',
+  'application/json',
+  'application/yaml',
+  'text/yaml',
+  'application/xml',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/vnd.oasis.opendocument.spreadsheet',
+]);
+
 export const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/gif': '.gif',
   'image/webp': '.webp',
+  'application/pdf': '.pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.oasis.opendocument.text': '.odt',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.oasis.opendocument.spreadsheet': '.ods',
+  'text/html': '.html',
+  'text/markdown': '.md',
+  'text/csv': '.csv',
+  'text/tab-separated-values': '.tsv',
+  'application/json': '.json',
+  'application/yaml': '.yaml',
+  'text/yaml': '.yaml',
+  'application/xml': '.xml',
+  'text/xml': '.xml',
+  'text/plain': '.txt',
 };
 
-const MAX_SIZE = 20 * 1024 * 1024; // 20 MB
+const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
+const TEXT_MAX_SIZE = 50 * 1024 * 1024;
 
 export function getUploadsDir(): string {
   const cfg = getConfig();
@@ -50,15 +87,20 @@ uploadsRouter.post('/', async (c) => {
     return c.json({ error: 'No file provided' }, 400);
   }
 
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    return c.json({ error: `Unsupported file type. Allowed: jpeg, png, gif, webp` }, 415);
+  const isImage = ALLOWED_IMAGE_TYPES.has(file.type);
+  const isTextFile = ALLOWED_TEXT_TYPES.has(file.type);
+
+  if (!isImage && !isTextFile) {
+    return c.json({ error: 'Unsupported file type.' }, 415);
   }
 
-  if (file.size > MAX_SIZE) {
-    return c.json({ error: 'File too large (max 20 MB)' }, 413);
+  const maxSize = isImage ? IMAGE_MAX_SIZE : TEXT_MAX_SIZE;
+  if (file.size > maxSize) {
+    return c.json({ error: `File too large (max ${isImage ? '20' : '50'} MB)` }, 413);
   }
 
   const bytes = await file.arrayBuffer();
+  const buf = Buffer.from(bytes);
 
   const hashBuf = await crypto.subtle.digest('SHA-256', bytes);
   const sha256 = Buffer.from(hashBuf).toString('hex');
@@ -69,18 +111,63 @@ uploadsRouter.post('/', async (c) => {
 
   const filePath = join(uploadsDir, `${sha256}${ext}`);
   if (!existsSync(filePath)) {
-    await writeFile(filePath, Buffer.from(bytes));
+    await writeFile(filePath, buf);
+  }
+
+  let extracted_text: string | null = null;
+  let file_meta: string | null = null;
+  let warning: string | undefined;
+
+  if (isTextFile) {
+    const isPdf = file.type === 'application/pdf';
+    const isDocx = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isOdt = file.type === 'application/vnd.oasis.opendocument.text';
+
+    try {
+      if (isPdf) {
+        const res = await renderPdfPages(buf, sha256, uploadsDir);
+        file_meta = JSON.stringify({ format: 'pdf', page_count: res.page_count, served_pages: res.served });
+        warning = res.warning;
+      } else if (isDocx || isOdt) {
+        const [textRes, imgRes] = await Promise.all([
+          extractText(buf, file.type),
+          extractDocImages(buf, sha256, uploadsDir, isDocx ? 'docx' : 'odt'),
+        ]);
+        extracted_text = textRes.text;
+        const meta = {
+          ...textRes.meta,
+          embedded_image_count: imgRes.count,
+          served_image_count: imgRes.served,
+        };
+        file_meta = JSON.stringify(meta);
+        warning = textRes.warning ?? imgRes.warning;
+      } else {
+        const res = await extractText(buf, file.type);
+        extracted_text = res.text;
+        file_meta = JSON.stringify(res.meta);
+        warning = res.warning;
+      }
+    } catch (err) {
+      logger.warn('text extraction failed', { filename: file.name, error: (err as Error).message });
+    }
   }
 
   const db = getDb();
   const id = generateId();
   db.prepare(
-    'INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, user.sub, sha256, file.name, file.type, file.size);
+    'INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size, extracted_text, file_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, user.sub, sha256, file.name, file.type, file.size, extracted_text, file_meta);
 
   logger.info('upload', { user_sub: user.sub, id, filename: file.name, mime_type: file.type, size: file.size });
 
-  return c.json({ id, filename: file.name, mime_type: file.type, size: file.size, url: `/api/uploads/${id}` }, 201);
+  return c.json({
+    id,
+    filename: file.name,
+    mime_type: file.type,
+    size: file.size,
+    url: `/api/uploads/${id}`,
+    ...(warning !== undefined && { warning }),
+  }, 201);
 });
 
 uploadsRouter.get('/:id', async (c) => {

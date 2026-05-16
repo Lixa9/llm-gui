@@ -19,7 +19,14 @@ export interface ImageUrlPart {
   _filename?: string;
 }
 
-export type MessageContentPart = ContentPart | ImageUrlPart;
+export interface FilePart {
+  type: 'file';
+  file: { url: string };
+  _filename?: string;
+  _mime_type?: string;
+}
+
+export type MessageContentPart = ContentPart | ImageUrlPart | FilePart;
 
 export interface UploadResult {
   id: string;
@@ -27,6 +34,7 @@ export interface UploadResult {
   mime_type: string;
   size: number;
   url: string;
+  warning?: string;
 }
 
 export interface ToolCall {

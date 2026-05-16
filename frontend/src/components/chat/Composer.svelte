@@ -15,12 +15,25 @@
   }
   let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming, expanded = $bindable(false) }: Props = $props();
 
+  const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
   interface PendingAttachment {
     localUrl: string;
     filename: string;
+    mimeType: string;
+    kind: 'image' | 'file';
     status: 'uploading' | 'ready' | 'error';
     result?: UploadResult;
     errorMsg?: string;
+    warning?: string;
+  }
+
+  function fileIcon(mime: string): string {
+    if (mime === 'application/pdf') return '📄';
+    if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'application/vnd.oasis.opendocument.spreadsheet') return '📊';
+    if (mime.includes('wordprocessingml') || mime === 'application/vnd.oasis.opendocument.text') return '📝';
+    if (mime === 'text/html') return '🌐';
+    return '📃';
   }
 
   let text = $state('');
@@ -32,14 +45,15 @@
     const files = Array.from(input.files ?? []);
     input.value = '';
     for (const file of files) {
-      const localUrl = URL.createObjectURL(file);
-      const attachment: PendingAttachment = { localUrl, filename: file.name, status: 'uploading' };
+      const kind = ALLOWED_IMAGE_MIMES.has(file.type) ? 'image' : 'file';
+      const localUrl = kind === 'image' ? URL.createObjectURL(file) : '';
+      const attachment: PendingAttachment = { localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
       pendingAttachments = [...pendingAttachments, attachment];
       const idx = pendingAttachments.length - 1;
       try {
         const result = await api.uploads.upload(file);
         pendingAttachments = pendingAttachments.map((a, i) =>
-          i === idx ? { ...a, status: 'ready', result } : a
+          i === idx ? { ...a, status: 'ready', result, warning: result.warning } : a
         );
       } catch (err) {
         pendingAttachments = pendingAttachments.map((a, i) =>
@@ -51,7 +65,7 @@
 
   function removeAttachment(idx: number) {
     const a = pendingAttachments[idx];
-    URL.revokeObjectURL(a.localUrl);
+    if (a.localUrl) URL.revokeObjectURL(a.localUrl);
     pendingAttachments = pendingAttachments.filter((_, i) => i !== idx);
   }
 
@@ -60,14 +74,25 @@
     const readyAttachments = pendingAttachments.filter(a => a.status === 'ready' && a.result);
     if ((!trimmed && readyAttachments.length === 0) || !selectedModel) return;
 
-    const imageParts = readyAttachments.map(a => ({
-      type: 'image_url' as const,
-      image_url: { url: a.result!.url },
-      _filename: a.result!.filename,
-    }));
+    const imageParts = readyAttachments
+      .filter(a => a.kind === 'image')
+      .map(a => ({
+        type: 'image_url' as const,
+        image_url: { url: a.result!.url },
+        _filename: a.result!.filename,
+      }));
+
+    const fileParts = readyAttachments
+      .filter(a => a.kind === 'file')
+      .map(a => ({
+        type: 'file' as const,
+        file: { url: a.result!.url },
+        _filename: a.result!.filename,
+        _mime_type: a.result!.mime_type,
+      }));
 
     const textParts = trimmed ? [{ type: 'text' as const, text: trimmed }] : [];
-    const contentParts = [...imageParts, ...textParts];
+    const contentParts = [...imageParts, ...fileParts, ...textParts];
 
     const payload: ChatPayload = {
       conversation_id: conversationId,
@@ -106,13 +131,18 @@
   {#if pendingAttachments.length > 0}
     <div class="attachments">
       {#each pendingAttachments as att, i}
-        <div class="attachment-chip" class:error={att.status === 'error'}>
+        <div class="attachment-chip" class:error={att.status === 'error'} class:warning={att.warning}>
           {#if att.status === 'uploading'}
             <span class="chip-spinner"></span>
           {:else if att.status === 'error'}
             <span class="chip-icon">⚠</span>
-          {:else}
+          {:else if att.kind === 'image'}
             <img class="chip-thumb" src={att.localUrl} alt={att.filename} />
+          {:else}
+            <span class="chip-icon">{fileIcon(att.mimeType)}</span>
+          {/if}
+          {#if att.warning}
+            <span class="chip-warn" title={att.warning}>⚠</span>
           {/if}
           <span class="chip-name" title={att.status === 'error' ? att.errorMsg : att.filename}>
             {att.filename}
@@ -155,7 +185,7 @@
   <input
     bind:this={fileInputEl}
     type="file"
-    accept="image/jpeg,image/png,image/gif,image/webp"
+    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.ods,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
     multiple
     style="display:none"
     onchange={onFileSelected}
@@ -214,6 +244,13 @@
   .attachment-chip.error {
     border-color: var(--danger);
     color: var(--danger);
+  }
+
+  .chip-warn {
+    font-size: 12px;
+    flex-shrink: 0;
+    cursor: default;
+    color: #f0a020;
   }
 
   .chip-thumb {
