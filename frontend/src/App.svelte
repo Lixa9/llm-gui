@@ -80,7 +80,7 @@
       {#if route.view === 'chat'}
         <Sidebar />
         <main class="main-area">
-          <ChatView conversationId={route.id} />
+          <ChatView conversationId={route.id ?? conversationsStore.activeId} />
         </main>
       {:else if route.view === 'prompts'}
         <main class="main-area">

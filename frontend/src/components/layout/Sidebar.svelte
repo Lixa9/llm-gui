@@ -76,17 +76,6 @@
     </div>
 
     <div class="sidebar-body">
-      {#if conversationsStore.draggingConvId !== null}
-        <div
-          class="no-folder-drop"
-          class:drag-over={noFolderDragOver}
-          role="region"
-          aria-label="Drop here to remove from folder"
-          ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
-          ondragleave={() => { noFolderDragOver = false; }}
-          ondrop={onNoFolderDrop}
-        >No folder</div>
-      {/if}
       {#if isSearching}
         {#if conversationsStore.searching}
           <div class="sidebar-hint">Searching…</div>
@@ -107,6 +96,17 @@
         {#if conversationsStore.sorted.length === 0}
           <div class="sidebar-hint">No conversations yet</div>
         {/if}
+      {/if}
+      {#if conversationsStore.draggingConvId !== null}
+        <div
+          class="no-folder-drop"
+          class:drag-over={noFolderDragOver}
+          role="region"
+          aria-label="Drop here to remove from folder"
+          ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
+          ondragleave={() => { noFolderDragOver = false; }}
+          ondrop={onNoFolderDrop}
+        >No folder</div>
       {/if}
     </div>
 
@@ -191,13 +191,13 @@
   }
 
   .no-folder-drop {
-    padding: 5px 8px;
+    padding: 14px 8px;
     border: 1px dashed var(--border);
     border-radius: var(--radius-sm);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 13px;
     text-align: center;
-    margin: 2px 0 4px;
+    margin-top: 4px;
     cursor: copy;
     transition: background 0.1s, color 0.1s, border-color 0.1s;
   }
