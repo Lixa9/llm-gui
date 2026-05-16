@@ -81,8 +81,6 @@ export interface Conversation {
   forked_at_message_id: string | null;
   created_at: number;
   folder_name?: string;
-  forked_from_title?: string;
-  message_count?: number;
   last_message_at?: number;
 }
 
@@ -166,7 +164,6 @@ export interface UserPreferences {
   sound_enabled: string;
   sound_volume: string;
   default_model_id: string;
-  default_system_prompt: string;
   default_preset_id: string;
   [key: string]: string;
 }

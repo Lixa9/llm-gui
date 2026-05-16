@@ -4,7 +4,7 @@ import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { logger } from './logger';
-import type { SessionPayload, AutomationRow, AutomationRunRow, ScheduledDefinition, PipelineDefinition } from './types';
+import type { AutomationRow, AutomationRunRow, ScheduledDefinition, PipelineDefinition } from './types';
 
 export const automationsRouter = new Hono();
 automationsRouter.use('*', requireAuth);

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
-import type { SessionPayload, SystemPromptRow } from './types';
+import type { SystemPromptRow } from './types';
 
 export const promptsRouter = new Hono();
 promptsRouter.use('*', requireAuth);

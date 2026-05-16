@@ -120,7 +120,7 @@ function createChatStore() {
     abortController?.abort();
   }
 
-  async function editUserMessage(convId: string, msgId: string, newContent: string) {
+  async function editUserMessage(convId: string, msgId: string) {
     // Delete this message and everything after it, then re-send
     await api.conversations.deleteMessage(convId, msgId);
     // Reload messages (server deleted this msg + subsequent)

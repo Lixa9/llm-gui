@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { requireAuth } from './auth';
 import { getConfig } from './config';
 import { logger } from './logger';
-import type { SessionPayload, ModelYamlEntry } from './types';
+import type { ModelYamlEntry } from './types';
 
 export const modelsRouter = new Hono();
 modelsRouter.use('*', requireAuth);

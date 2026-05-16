@@ -153,7 +153,7 @@
     if (!conversationId) return;
     try {
       if (msg.role === 'user') {
-        await chatStore.editUserMessage(conversationId, msg.id, newContent);
+        await chatStore.editUserMessage(conversationId, msg.id);
         const messages = chatStore.messages;
         const idx = messages.findIndex(m => m.id === msg.id);
         const history = idx >= 0 ? messages.slice(0, idx) : messages;
