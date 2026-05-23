@@ -44,11 +44,6 @@ export interface ToolCall {
   index: number;
 }
 
-export interface ToolResult {
-  tool_call_id: string;
-  content: string;
-}
-
 export type MessageStatus = 'done' | 'aborted';
 
 export interface Message {
@@ -57,7 +52,6 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: MessageContentPart[];
   tool_calls: ToolCall[] | null;
-  tool_results: ToolResult[] | null;
   model: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
@@ -195,7 +189,6 @@ export interface ChatPayload {
     role: 'user' | 'assistant';
     content: MessageContentPart[];
     tool_calls?: ToolCall[];
-    tool_results?: ToolResult[];
   }>;
   new_user_message: {
     content: MessageContentPart[];

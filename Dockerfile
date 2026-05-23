@@ -19,11 +19,7 @@ RUN node_modules/.bin/esbuild src/index.ts \
 RUN npm prune --production && \
     rm -rf node_modules/better-sqlite3/deps \
            node_modules/better-sqlite3/build/Release/obj.target \
-           node_modules/argon2/build/Release/obj.target \
-           node_modules/.bin/tsx \
-           node_modules/tsx \
-           node_modules/esbuild \
-           node_modules/@esbuild
+           node_modules/argon2/build/Release/obj.target
 
 # Stage 3: Clean runtime image
 FROM node:22-alpine
