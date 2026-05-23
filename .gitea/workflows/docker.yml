@@ -10,18 +10,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: https://github.com/docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        run: docker buildx create --use --name builder || docker buildx use builder
 
-      - uses: https://github.com/docker/login-action@v3
-        with:
-          registry: git.control.lan
-          username: ${{ gitea.actor }}
-          password: ${{ secrets.GITEA_TOKEN }}
+      - name: Login to registry
+        run: echo "${{ secrets.GITEA_TOKEN }}" | docker login git.control.lan -u "${{ gitea.actor }}" --password-stdin
 
-      - uses: https://github.com/docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: git.control.lan/nico/llm-gui:latest
-          cache-from: type=registry,ref=git.control.lan/nico/llm-gui:buildcache
-          cache-to: type=registry,ref=git.control.lan/nico/llm-gui:buildcache,mode=max
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --push \
+            --tag git.control.lan/nico/llm-gui:latest \
+            --cache-from type=registry,ref=git.control.lan/nico/llm-gui:buildcache \
+            --cache-to type=registry,ref=git.control.lan/nico/llm-gui:buildcache,mode=max \
+            .
