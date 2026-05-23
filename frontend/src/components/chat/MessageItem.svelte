@@ -89,7 +89,6 @@
         {#each message.tool_calls as tc (tc.index)}
           <ToolCallAccordion
             toolCall={tc}
-            toolResult={isFullMessage ? ((message as Message).tool_results?.find(r => r.tool_call_id === tc.id) ?? null) : null}
           />
         {/each}
       </div>

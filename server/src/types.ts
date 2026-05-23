@@ -33,11 +33,6 @@ export interface ToolCall {
   index: number;
 }
 
-export interface ToolResult {
-  tool_call_id: string;
-  content: string;
-}
-
 export type MessageStatus = 'done' | 'aborted';
 
 // DB row types (snake_case)
@@ -80,7 +75,6 @@ export interface MessageRow {
   content: string;
   content_text: string;
   tool_calls: string | null;
-  tool_results: string | null;
   model: string | null;
   tokens_in: number | null;
   tokens_out: number | null;

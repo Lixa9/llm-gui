@@ -1,13 +1,12 @@
 <script lang="ts">
-  import type { ToolCall, ToolResult } from '$lib/types';
+  import type { ToolCall } from '$lib/types';
   import Accordion from '../ui/Accordion.svelte';
 
   interface Props {
     toolCall: ToolCall;
-    toolResult?: ToolResult | null;
     showByDefault?: boolean;
   }
-  let { toolCall, toolResult = null, showByDefault = false }: Props = $props();
+  let { toolCall, showByDefault = false }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let open = $state(showByDefault);
@@ -39,10 +38,6 @@
       <div class="tool-body">
         <div class="tool-section-label">Arguments</div>
         <pre class="tool-json">{argsPretty()}</pre>
-        {#if toolResult}
-          <div class="tool-section-label tool-result-label">Result</div>
-          <pre class="tool-json tool-result-json">{toolResult.content}</pre>
-        {/if}
       </div>
     {/snippet}
   </Accordion>
@@ -55,8 +50,6 @@
 
   .tool-body { display: flex; flex-direction: column; gap: 4px; }
   .tool-section-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 0 2px; }
-  .tool-result-label { color: var(--success); margin-top: 6px; }
-
   .tool-json {
     margin: 0;
     padding: 8px;
@@ -71,5 +64,4 @@
     max-height: 200px;
     overflow-y: auto;
   }
-  .tool-result-json { color: var(--success); opacity: 0.8; }
 </style>

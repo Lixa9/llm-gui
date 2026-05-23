@@ -119,7 +119,6 @@
         role: m.role as 'user' | 'assistant',
         content: m.content,
         tool_calls: m.tool_calls ?? undefined,
-        tool_results: m.tool_results ?? undefined,
       })),
       new_user_message: { content: contentParts },
     };
