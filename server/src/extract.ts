@@ -2,6 +2,15 @@ import { mkdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { join, extname } from 'path';
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export interface FileMeta {
   format: 'plain' | 'pdf' | 'docx' | 'odt' | 'xlsx' | 'ods' | 'html' | 'epub';
   page_count?: number;
@@ -72,20 +81,24 @@ async function extractPlain(bytes: Buffer, mimeType: string): Promise<Extraction
 }
 
 async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
-  const { parse } = await import('node-html-parser');
   let raw = bytes.toString('utf-8');
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  const root = parse(raw);
-  root.querySelectorAll('script, style').forEach(n => n.remove());
-  const extracted = root.text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
+  const extracted = stripHtml(raw) || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(extracted);
   return { text, meta: { format: 'html', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
-  const mammoth = await import('mammoth');
-  const result = await mammoth.extractRawText({ buffer: bytes });
-  const raw = result.value.trim() || '[File appears empty or has no extractable text]';
+  const AdmZip = (await import('adm-zip')).default;
+  const zip = new AdmZip(bytes);
+  const entry = zip.getEntry('word/document.xml');
+  if (!entry) throw new Error('DOCX has no word/document.xml');
+  const xml = entry.getData().toString('utf-8');
+  const raw = xml
+    .replace(/<w:p[ >]/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(raw);
   return { text, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
@@ -105,21 +118,130 @@ async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
 }
 
 async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
-  const XLSX = await import('xlsx');
-  const wb = XLSX.read(bytes, { type: 'buffer' });
+  const AdmZip = (await import('adm-zip')).default;
+
+  if (mimeType === 'application/vnd.ms-excel') {
+    // Legacy XLS binary format — not supported without a binary parser
+    return { text: '[XLS binary format not supported — please convert to XLSX]', meta: { format: 'xlsx' } };
+  }
+
+  const zip = new AdmZip(bytes);
   const format = mimeType.includes('oasis') ? 'ods' : 'xlsx';
-  const sections = wb.SheetNames.map(name => {
-    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
-    return `=== Sheet: ${name} ===\n${csv}`;
-  });
+
+  if (format === 'ods') {
+    // ODS: content.xml has <table:table table:name="…"> with <table:table-row> / <table:table-cell>
+    const entry = zip.getEntry('content.xml');
+    if (!entry) throw new Error('ODS has no content.xml');
+    const xml = entry.getData().toString('utf-8');
+    const sheetNames: string[] = [];
+    const sections: string[] = [];
+
+    for (const tableMatch of xml.matchAll(/<table:table\s[^>]*table:name="([^"]+)"[^>]*>([\s\S]*?)<\/table:table>/g)) {
+      const sheetName = tableMatch[1];
+      sheetNames.push(sheetName);
+      const tableBody = tableMatch[2];
+      const rows: string[] = [];
+      for (const rowMatch of tableBody.matchAll(/<table:table-row[^>]*>([\s\S]*?)<\/table:table-row>/g)) {
+        const cells: string[] = [];
+        for (const cellMatch of rowMatch[1].matchAll(/<table:table-cell[^>]*>([\s\S]*?)<\/table:table-cell>/g)) {
+          const val = cellMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          cells.push(val.includes(',') ? `"${val.replace(/"/g, '""')}"` : val);
+        }
+        if (cells.some(c => c !== '')) rows.push(cells.join(','));
+      }
+      if (rows.length) sections.push(`=== Sheet: ${sheetName} ===\n${rows.join('\n')}`);
+    }
+
+    const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
+    const { text, warning } = truncate(raw);
+    return { text, meta: { format: 'ods', sheet_names: sheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+  }
+
+  // XLSX: xl/workbook.xml (sheet list), xl/sharedStrings.xml (string table), xl/worksheets/sheet*.xml
+  const workbookEntry = zip.getEntry('xl/workbook.xml');
+  if (!workbookEntry) throw new Error('XLSX has no xl/workbook.xml');
+  const workbookXml = workbookEntry.getData().toString('utf-8');
+
+  // Sheet name → rId mapping from workbook
+  const sheetNames: string[] = [];
+  const sheetRels: { name: string; rId: string }[] = [];
+  for (const m of workbookXml.matchAll(/<sheet\s[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)) {
+    sheetNames.push(m[1]);
+    sheetRels.push({ name: m[1], rId: m[2] });
+  }
+
+  // rId → target path from xl/_rels/workbook.xml.rels
+  const relsEntry = zip.getEntry('xl/_rels/workbook.xml.rels');
+  const relsXml = relsEntry ? relsEntry.getData().toString('utf-8') : '';
+  const relMap = new Map<string, string>();
+  for (const m of relsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+    relMap.set(m[1], m[2]);
+  }
+
+  // Shared strings
+  const ssEntry = zip.getEntry('xl/sharedStrings.xml');
+  const sharedStrings: string[] = [];
+  if (ssEntry) {
+    const ssXml = ssEntry.getData().toString('utf-8');
+    for (const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+      sharedStrings.push(m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    }
+  }
+
+  const sections: string[] = [];
+  for (const { name, rId } of sheetRels) {
+    const target = relMap.get(rId);
+    if (!target) continue;
+    const wsPath = target.startsWith('worksheets/') ? `xl/${target}` : target;
+    const wsEntry = zip.getEntry(wsPath);
+    if (!wsEntry) continue;
+    const wsXml = wsEntry.getData().toString('utf-8');
+
+    // Collect cell addresses and values to build a 2D grid
+    const cellMap = new Map<string, string>();
+    let maxRow = 0, maxCol = 0;
+    for (const m of wsXml.matchAll(/<c r="([A-Z]+)(\d+)"(?:\s[^>]*)?\s*t="([^"]*)"[^>]*>[\s\S]*?<v>([\s\S]*?)<\/v>/g)) {
+      const col = colIndex(m[1]), row = parseInt(m[2], 10) - 1;
+      const t = m[3], raw = m[4];
+      const val = t === 's' ? (sharedStrings[parseInt(raw, 10)] ?? '') : raw;
+      cellMap.set(`${row}:${col}`, val);
+      if (row > maxRow) maxRow = row;
+      if (col > maxCol) maxCol = col;
+    }
+    // Also handle cells with no explicit type (numeric)
+    for (const m of wsXml.matchAll(/<c r="([A-Z]+)(\d+)"(?:\s[^>]*)?>[^<]*<v>([\s\S]*?)<\/v>/g)) {
+      const col = colIndex(m[1]), row = parseInt(m[2], 10) - 1;
+      const key = `${row}:${col}`;
+      if (!cellMap.has(key)) cellMap.set(key, m[3]);
+      if (row > maxRow) maxRow = row;
+      if (col > maxCol) maxCol = col;
+    }
+
+    const rows: string[] = [];
+    for (let r = 0; r <= maxRow; r++) {
+      const cells: string[] = [];
+      for (let c = 0; c <= maxCol; c++) {
+        const v = cellMap.get(`${r}:${c}`) ?? '';
+        cells.push(v.includes(',') ? `"${v.replace(/"/g, '""')}"` : v);
+      }
+      if (cells.some(c => c !== '')) rows.push(cells.join(','));
+    }
+    if (rows.length) sections.push(`=== Sheet: ${name} ===\n${rows.join('\n')}`);
+  }
+
   const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(raw);
-  return { text, meta: { format, sheet_names: wb.SheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+  return { text, meta: { format: 'xlsx', sheet_names: sheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+}
+
+function colIndex(col: string): number {
+  let n = 0;
+  for (const ch of col) n = n * 26 + ch.charCodeAt(0) - 64;
+  return n - 1;
 }
 
 async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   const AdmZip = (await import('adm-zip')).default;
-  const { parse } = await import('node-html-parser');
   const zip = new AdmZip(bytes);
 
   // Locate OPF file via META-INF/container.xml
@@ -156,9 +278,7 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
     const entry = zip.getEntry(entryPath) ?? zip.getEntry(item.href);
     if (!entry) continue;
     const html = entry.getData().toString('utf-8');
-    const root = parse(html);
-    root.querySelectorAll('script, style').forEach(n => n.remove());
-    const text = root.text.replace(/\s+/g, ' ').trim();
+    const text = stripHtml(html);
     if (text) textParts.push(text);
   }
 

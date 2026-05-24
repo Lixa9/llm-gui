@@ -1,5 +1,4 @@
 import { marked } from 'marked';
-import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js/lib/core';
 import DOMPurify from 'dompurify';
 
@@ -51,17 +50,14 @@ hljs.registerLanguage('ruby', ruby);
 hljs.registerLanguage('rb', ruby);
 hljs.registerLanguage('plaintext', plaintext);
 
-marked.use(
-  markedHighlight({
-    langPrefix: 'hljs language-',
-    highlight(code, lang) {
-      const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-      return hljs.highlight(code, { language }).value;
-    },
-  }),
-);
-
 marked.use({
+  renderer: {
+    code({ text, lang }) {
+      const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
+      const highlighted = hljs.highlight(text, { language }).value;
+      return `<pre><code class="hljs language-${language}">${highlighted}</code></pre>`;
+    },
+  },
   gfm: true,
   breaks: false,
 });

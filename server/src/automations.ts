@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import cron from 'node-cron';
 import { z } from 'zod';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
@@ -144,33 +143,60 @@ automationsRouter.get('/:id/runs', (c) => {
 });
 
 // Scheduler
-const scheduledTasks = new Map<string, cron.ScheduledTask>();
+const scheduledTasks = new Map<string, NodeJS.Timeout>();
 
-function toCron(interval: number, unit: string): string | null {
+function msUntilNext(interval: number, unit: string): number {
   const n = Math.max(1, Math.floor(interval));
-  if (unit === 'hours') return `0 */${n} * * *`;
-  if (unit === 'days') return `0 0 */${n} * *`;
-  // `*/7` in day-of-month fires on days 1,8,15,22,29 — not calendar-aligned weeks.
-  // For n=1 we use day-of-week (every Sunday); for n>1 it remains an approximation.
-  if (unit === 'weeks') return n === 1 ? `0 0 * * 0` : `0 0 */${n * 7} * *`;
-  return null;
+  const now = new Date();
+  let next: Date;
+
+  if (unit === 'hours') {
+    // Next top-of-hour that is a multiple of n, in UTC
+    const h = now.getUTCHours();
+    const nextH = Math.ceil((h + 1) / n) * n;
+    next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH, 0, 0, 0));
+  } else if (unit === 'days') {
+    // Next midnight UTC that is a multiple of n days from Unix epoch
+    const dayMs = 86400_000;
+    const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const epochDay = Math.floor(todayStart / dayMs);
+    const nextEpochDay = Math.ceil((epochDay + 1) / n) * n;
+    next = new Date(nextEpochDay * dayMs);
+  } else if (unit === 'weeks') {
+    // Next Sunday 00:00 UTC (for n=1), or every n*7 days from epoch
+    const weekMs = 7 * 86400_000;
+    const periodMs = n * weekMs;
+    const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const daysSinceEpoch = todayStart / 86400_000;
+    const periodDay = Math.floor(daysSinceEpoch / (n * 7));
+    next = new Date((periodDay + 1) * periodMs);
+  } else {
+    // Unknown unit — default to 24h
+    next = new Date(Date.now() + 86400_000);
+  }
+
+  return Math.max(next.getTime() - Date.now(), 1000);
 }
 
 function scheduleAutomation(auto: ReturnType<typeof serializeAutomation>) {
   if (auto.type !== 'scheduled') return;
   const def = auto.definition as ScheduledDefinition;
-  const expr = toCron(def.interval, def.unit);
-  if (!expr || !cron.validate(expr)) return;
+  const n = Math.max(1, Math.floor(def.interval));
+  if (!['hours', 'days', 'weeks'].includes(def.unit) || !Number.isFinite(n)) return;
 
-  const task = cron.schedule(expr, () => {
+  const fireAndReschedule = () => {
     runAutomation(auto, 'scheduled').catch(e => logger.error('Automation run failed', { id: auto.id, error: String(e) }));
-  });
-  scheduledTasks.set(auto.id, task);
+    const timer = setTimeout(fireAndReschedule, msUntilNext(def.interval, def.unit));
+    scheduledTasks.set(auto.id, timer);
+  };
+
+  const timer = setTimeout(fireAndReschedule, msUntilNext(def.interval, def.unit));
+  scheduledTasks.set(auto.id, timer);
 }
 
 function removeSchedule(id: string) {
-  const task = scheduledTasks.get(id);
-  if (task) { task.stop(); scheduledTasks.delete(id); }
+  const timer = scheduledTasks.get(id);
+  if (timer) { clearTimeout(timer); scheduledTasks.delete(id); }
 }
 
 export function initScheduler() {

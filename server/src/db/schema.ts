@@ -1,6 +1,6 @@
-import type Database from 'better-sqlite3';
+import type { Db } from './index';
 
-export function applySchema(db: Database.Database): void {
+export function applySchema(db: Db): void {
   db.exec('PRAGMA journal_mode=WAL');
   db.exec('PRAGMA foreign_keys=ON');
   db.exec('PRAGMA synchronous=NORMAL');
@@ -62,7 +62,7 @@ export function applySchema(db: Database.Database): void {
 
   // Migration: add visible_to/deleted_at and relax owner_sub NOT NULL on existing databases
   {
-    const cols = (db.pragma('table_info(model_presets)') as { name: string }[]).map(c => c.name);
+    const cols = (db.prepare('PRAGMA table_info(model_presets)').all() as { name: string }[]).map(c => c.name);
     if (!cols.includes('visible_to')) {
       db.exec(`
         CREATE TABLE model_presets_v2 (

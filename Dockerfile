@@ -1,28 +1,24 @@
 # Stage 1: Build Svelte frontend
-FROM node:22-alpine AS build-frontend
+FROM node:24-alpine AS build-frontend
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-# Stage 2: Build server (compile native addons + bundle TS)
-FROM node:22-alpine AS build-server
+# Stage 2: Build server (bundle TS)
+FROM node:24-alpine AS build-server
 WORKDIR /app
-RUN apk add --no-cache python3 make g++
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci
 COPY server/ .
 RUN node_modules/.bin/esbuild src/index.ts \
-      --bundle --platform=node --target=node22 \
+      --bundle --platform=node --target=node24 \
       --packages=external --outfile=dist/index.js
-RUN npm prune --production && \
-    rm -rf node_modules/better-sqlite3/deps \
-           node_modules/better-sqlite3/build/Release/obj.target \
-           node_modules/argon2/build/Release/obj.target
+RUN npm prune --production
 
 # Stage 3: Clean runtime image
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 RUN apk add --no-cache gosu
