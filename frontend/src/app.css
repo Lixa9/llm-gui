@@ -174,10 +174,57 @@ input::placeholder, textarea::placeholder {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0;
-  margin: 0.75em 0;
+  margin: 0;
   overflow: hidden;
 }
 .hljs { background: var(--code-bg) !important; }
+
+.prose .code-block {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.75em 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.prose .code-block pre {
+  border: none;
+  border-radius: 0;
+}
+
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 0.25em 1em 0.25em 1.25em;
+  user-select: none;
+}
+
+.code-lang {
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  color: var(--text-muted);
+}
+
+.copy-btn {
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.15em 0.6em;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.copy-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
 
 .prose pre code {
   background: none;

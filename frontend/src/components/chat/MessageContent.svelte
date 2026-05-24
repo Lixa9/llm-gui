@@ -32,6 +32,17 @@ const text = $derived(
   const rendered = $derived(role === 'assistant' ? renderMarkdown(text) : null);
 
   let lightboxSrc = $state<string | null>(null);
+
+  function onProseClick(e: MouseEvent) {
+    const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+    const code = btn.closest('.code-block')?.querySelector('pre code');
+    if (!code) return;
+    navigator.clipboard.writeText(code.textContent ?? '').then(() => {
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
 </script>
 
 {#if lightboxSrc}
@@ -68,7 +79,9 @@ const text = $derived(
     </div>
   {/if}
   {#if role === 'assistant'}
-    <div class="prose" class:streaming>{@html rendered}</div>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="prose" class:streaming onclick={onProseClick}>{@html rendered}</div>
   {:else if text}
     <span class="user-text">{text}</span>
   {/if}
