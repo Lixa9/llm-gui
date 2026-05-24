@@ -34,7 +34,7 @@
   .msg-actions {
     display: flex;
     gap: 2px;
-    opacity: 0.3;
+    opacity: 0.5;
     transition: opacity 0.15s;
     margin-top: 4px;
   }
