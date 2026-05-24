@@ -41,16 +41,16 @@
   :global(.msg-wrapper:hover) .msg-actions { opacity: 1; }
 
   .action-btn {
-    padding: 3px 6px;
-    font-size: 13px;
-    color: var(--text-muted);
-    background: transparent;
-    border: none;
+    padding: 4px 9px;
+    font-size: 15px;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
   }
-  .action-btn:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
+  .action-btn:hover:not(:disabled) { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-subtle); }
   .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .action-btn.danger:hover { color: var(--danger); }
 </style>
