@@ -55,7 +55,9 @@ marked.use({
     code({ text, lang }) {
       const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
       const highlighted = hljs.highlight(text, { language }).value;
-      return `<pre><code class="hljs language-${language}">${highlighted}</code></pre>`;
+      const langLabel = language !== 'plaintext' ? `<span class="code-lang">${language}</span>` : '';
+      const header = `<div class="code-header">${langLabel}<button class="copy-btn" aria-label="Copy code">Copy</button></div>`;
+      return `<div class="code-block">${header}<pre><code class="hljs language-${language}">${highlighted}</code></pre></div>`;
     },
   },
   gfm: true,
@@ -70,10 +72,10 @@ const PURIFY_CONFIG: DOMPurify.Config = {
     'blockquote', 'pre', 'code',
     'table', 'thead', 'tbody', 'tr', 'th', 'td',
     'a', 'hr', 'img',
-    'span', 'div',
+    'span', 'div', 'button',
     'details', 'summary',
   ],
-  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'open'],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'open', 'aria-label'],
   ALLOW_DATA_ATTR: false,
   FORCE_BODY: true,
 };
