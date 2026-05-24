@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type Database from 'better-sqlite3';
+import type { Db } from './db/index';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
@@ -15,7 +15,7 @@ function serializeConversation(row: ConversationRow) {
   };
 }
 
-function copyMessages(db: Database.Database, srcId: string, destId: string, stopAtMsgId?: string) {
+function copyMessages(db: Db, srcId: string, destId: string, stopAtMsgId?: string) {
   const msgs = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp').all(srcId) as MessageRow[];
   for (const m of msgs) {
     db.prepare(
