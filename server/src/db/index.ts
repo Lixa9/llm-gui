@@ -25,6 +25,7 @@ class Stmt {
 
 export class Db {
   private inner: DatabaseSync;
+  private stmtCache = new Map<string, StatementSync>();
 
   constructor(path: string) {
     this.inner = new DatabaseSync(path);
@@ -35,7 +36,9 @@ export class Db {
   }
 
   prepare(sql: string): Stmt {
-    return new Stmt(this.inner.prepare(sql));
+    let s = this.stmtCache.get(sql);
+    if (!s) { s = this.inner.prepare(sql); this.stmtCache.set(sql, s); }
+    return new Stmt(s);
   }
 }
 

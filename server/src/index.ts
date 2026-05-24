@@ -155,6 +155,7 @@ function startBackendHealthCheck() {
         headers: cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
+      await res.body?.cancel().catch(() => {});
       if (!res.ok) {
         logger.warn('backend unreachable', { url: cfg.litellm.base_url, status: res.status });
       }
