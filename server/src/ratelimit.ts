@@ -24,7 +24,15 @@ export interface RateLimitResult {
   reason?: string;
 }
 
+function sweepBuckets() {
+  const now = Date.now();
+  for (const [k, b] of buckets) {
+    if (b.concurrentStreams === 0 && now - b.lastHourReset > 7_200_000) buckets.delete(k);
+  }
+}
+
 export function checkRateLimit(sub: string): RateLimitResult {
+  sweepBuckets();
   const cfg = getConfig().rate_limits;
   const b = getBucket(sub);
   const now = Date.now();

@@ -30,8 +30,13 @@
       if (rect.bottom > window.innerHeight) top = untrack(() => y) - rect.height;
     }
     const close = () => onclose();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); };
     document.addEventListener('click', close, { once: true });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') onclose(); }, { once: true });
+    document.addEventListener('keydown', onKey, { once: true });
+    return () => {
+      document.removeEventListener('click', close);
+      document.removeEventListener('keydown', onKey);
+    };
   });
 </script>
 
