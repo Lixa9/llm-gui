@@ -34,15 +34,15 @@
   .msg-actions {
     display: flex;
     gap: 2px;
-    opacity: 0;
+    opacity: 0.3;
     transition: opacity 0.15s;
     margin-top: 4px;
   }
   :global(.msg-wrapper:hover) .msg-actions { opacity: 1; }
 
   .action-btn {
-    padding: 4px 9px;
-    font-size: 15px;
+    padding: 3px 7px;
+    font-size: 14px;
     color: var(--text-secondary);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
