@@ -17,7 +17,7 @@
   let atBottom = $state(true);
 
   function scrollToBottom() {
-    if (container) container.scrollTop = container.scrollHeight;
+    if (container) container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
   }
 
   $effect(() => {
@@ -77,7 +77,6 @@
     display: flex;
     flex-direction: column;
     padding: 8px 0;
-    scroll-behavior: smooth;
   }
 
   .list-center {

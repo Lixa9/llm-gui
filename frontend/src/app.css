@@ -177,6 +177,8 @@ input::placeholder, textarea::placeholder {
   margin: 0.75em 0;
   overflow: hidden;
 }
+.hljs { background: var(--code-bg) !important; }
+
 .prose pre code {
   background: none;
   border: none;
