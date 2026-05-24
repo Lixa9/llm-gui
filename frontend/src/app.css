@@ -206,15 +206,15 @@ input::placeholder, textarea::placeholder {
 .code-lang {
   font-family: var(--font-mono);
   font-size: 0.75em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .copy-btn {
   font-family: var(--font-mono);
   font-size: 0.7em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 0.15em 0.6em;
   cursor: pointer;
@@ -223,7 +223,7 @@ input::placeholder, textarea::placeholder {
 
 .copy-btn:hover {
   color: var(--text-primary);
-  border-color: var(--text-muted);
+  border-color: var(--text-secondary);
 }
 
 .prose pre code {
