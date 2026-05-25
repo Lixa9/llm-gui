@@ -212,19 +212,9 @@ export interface ScheduledDefinition {
   output?: 'new_conversation';
 }
 
-export interface PipelineStep {
-  model: string;
-  system_prompt?: string;
-  user_prompt: string;
-}
-
-export interface PipelineDefinition {
-  steps: PipelineStep[];
-}
-
 export interface AutomationYamlEntry {
   name: string;
-  type: 'scheduled' | 'pipeline';
+  type: 'scheduled';
   interval?: number;
   unit?: ScheduleUnit;
   allowed_roles?: Role[];

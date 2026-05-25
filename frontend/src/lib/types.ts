@@ -115,7 +115,7 @@ export interface ModelPreset {
   visible_to: Role[] | null;
 }
 
-export type AutomationType = 'scheduled' | 'pipeline';
+export type AutomationType = 'scheduled';
 
 export type ScheduleUnit = 'hours' | 'days' | 'weeks';
 
@@ -128,17 +128,7 @@ export interface ScheduledDefinition {
   output: 'new_conversation';
 }
 
-export interface PipelineStep {
-  model: string;
-  system_prompt: string;
-  user_prompt: string;
-}
-
-export interface PipelineDefinition {
-  steps: PipelineStep[];
-}
-
-export type AutomationDefinition = ScheduledDefinition | PipelineDefinition;
+export type AutomationDefinition = ScheduledDefinition;
 
 export interface Automation {
   id: string;
