@@ -214,7 +214,6 @@ export interface ScheduledDefinition {
 
 export interface AutomationYamlEntry {
   name: string;
-  type: 'scheduled';
   interval?: number;
   unit?: ScheduleUnit;
   allowed_roles?: Role[];
@@ -222,5 +221,4 @@ export interface AutomationYamlEntry {
   system_prompt?: string;
   user_prompt?: string;
   output?: string;
-  steps?: Array<{ model: string; system_prompt: string; user_prompt: string }>;
 }

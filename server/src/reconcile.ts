@@ -90,7 +90,7 @@ export function reconcileYaml(): void {
     if (!existing) {
       db.prepare(
         'INSERT INTO automations (id, owner_sub, name, type, definition, visible_to) VALUES (?, NULL, ?, ?, ?, ?)'
-      ).run(generateId(), ya.name, ya.type ?? 'scheduled', definition, visibleTo);
+      ).run(generateId(), ya.name, 'scheduled', definition, visibleTo);
     } else {
       if (existing.definition !== definition || existing.visible_to !== visibleTo || existing.deleted_at !== null) {
         db.prepare('UPDATE automations SET definition=?, visible_to=?, deleted_at=NULL WHERE id=?')

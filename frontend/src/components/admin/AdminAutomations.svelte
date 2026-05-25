@@ -23,13 +23,12 @@
   {:else}
     <table class="table">
       <thead>
-        <tr><th>Name</th><th>Type</th><th>Owner</th><th>Status</th></tr>
+        <tr><th>Name</th><th>Owner</th><th>Status</th></tr>
       </thead>
       <tbody>
         {#each automations as a (a.id)}
           <tr>
             <td class="cell-name">{a.name}</td>
-            <td><Badge variant="default">{a.type}</Badge></td>
             <td class="cell-owner">{a.owner_sub ?? 'system'}</td>
             <td><Badge variant={a.enabled ? 'success' : 'muted'}>{a.enabled ? 'enabled' : 'disabled'}</Badge></td>
           </tr>
