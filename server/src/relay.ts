@@ -64,7 +64,7 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
             resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${bytes.toString('base64')}` } });
           }
         }
-      } else {
+      } else if (url.startsWith('data:')) {
         resolved.push({ type: 'image_url', image_url: { url } });
       }
     } else if (part.type === 'file') {
