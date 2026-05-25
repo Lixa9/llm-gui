@@ -1,6 +1,5 @@
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/core';
-import DOMPurify from 'dompurify';
 
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -64,23 +63,59 @@ marked.use({
   breaks: false,
 });
 
-const PURIFY_CONFIG: DOMPurify.Config = {
-  ALLOWED_TAGS: [
-    'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'del', 'ins',
-    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'ul', 'ol', 'li',
-    'blockquote', 'pre', 'code',
-    'table', 'thead', 'tbody', 'tr', 'th', 'td',
-    'a', 'hr', 'img',
-    'span', 'div', 'button',
-    'details', 'summary',
-  ],
-  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'open', 'aria-label'],
-  ALLOW_DATA_ATTR: false,
-  FORCE_BODY: true,
-};
+const REMOVE_TAGS = new Set([
+  'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'form',
+]);
+const ALLOWED_TAGS = new Set([
+  'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'del', 'ins',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'ul', 'ol', 'li',
+  'blockquote', 'pre', 'code',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  'a', 'hr', 'img',
+  'span', 'div', 'button',
+  'details', 'summary',
+]);
+const ALLOWED_ATTRS = new Set([
+  'href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'open', 'aria-label',
+]);
+
+function isSafeUrl(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  if (v.startsWith('javascript:')) return false;
+  if (v.startsWith('data:') && !v.startsWith('data:image/')) return false;
+  return true;
+}
+
+function sanitizeNode(el: Element): void {
+  for (const child of [...el.children]) {
+    const tag = child.tagName.toLowerCase();
+    if (REMOVE_TAGS.has(tag)) { child.remove(); continue; }
+    if (!ALLOWED_TAGS.has(tag)) {
+      child.replaceWith(...child.childNodes);
+      sanitizeNode(el);
+      return;
+    }
+    for (const attr of [...child.attributes]) {
+      if (!ALLOWED_ATTRS.has(attr.name)) {
+        child.removeAttribute(attr.name);
+        continue;
+      }
+      if ((attr.name === 'href' || attr.name === 'src') && !isSafeUrl(attr.value)) {
+        child.removeAttribute(attr.name);
+      }
+    }
+    sanitizeNode(child);
+  }
+}
+
+function sanitize(html: string): string {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  sanitizeNode(doc.body);
+  return doc.body.innerHTML;
+}
 
 export function renderMarkdown(text: string): string {
   const html = marked.parse(text) as string;
-  return DOMPurify.sanitize(html, PURIFY_CONFIG as Parameters<typeof DOMPurify.sanitize>[1]);
+  return sanitize(html);
 }
