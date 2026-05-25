@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { join, dirname } from 'path';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, rmSync } from 'fs';
 import { writeFile, readFile } from 'fs/promises';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
@@ -24,7 +24,6 @@ export const ALLOWED_TEXT_TYPES = new Set([
   'text/markdown',
   'text/csv',
   'text/tab-separated-values',
-  'text/html',
   'text/xml',
   'application/json',
   'application/yaml',
@@ -197,11 +196,63 @@ uploadsRouter.get('/:id', async (c) => {
   if (!existsSync(filePath)) return c.json({ error: 'File not found on disk' }, 404);
 
   const buffer = await readFile(filePath);
+  const disposition = ALLOWED_IMAGE_TYPES.has(row.mime_type) ? 'inline' : 'attachment';
   return new Response(buffer, {
     headers: {
       'Content-Type': row.mime_type,
       'Cache-Control': 'private, max-age=31536000, immutable',
-      'Content-Disposition': `inline; filename="${row.filename.replace(/[\x00-\x1f\x7f"\\]/g, '_')}"`,
+      'Content-Disposition': `${disposition}; filename="${row.filename.replace(/[\x00-\x1f\x7f"\\]/g, '_')}"`,
     },
   });
 });
+
+function deleteUploadFile(sha256: string, mimeType: string): void {
+  const uploadsDir = getUploadsDir();
+  const ext = MIME_TO_EXT[mimeType] ?? '';
+  const db = getDb();
+  const remaining = db.prepare('SELECT COUNT(*) as n FROM uploads WHERE sha256=?').get(sha256) as { n: number };
+  if (remaining.n > 0) return;
+  const filePath = join(uploadsDir, `${sha256}${ext}`);
+  if (existsSync(filePath)) rmSync(filePath, { force: true });
+  const pdfPagesDir = join(uploadsDir, 'pdf-pages', sha256);
+  if (existsSync(pdfPagesDir)) rmSync(pdfPagesDir, { recursive: true, force: true });
+  const docImagesDir = join(uploadsDir, 'doc-images', sha256);
+  if (existsSync(docImagesDir)) rmSync(docImagesDir, { recursive: true, force: true });
+}
+
+function extractUploadIds(content: string): string[] {
+  try {
+    const parts = JSON.parse(content) as Array<{ type: string; image_url?: { url: string }; file?: { url: string } }>;
+    const ids: string[] = [];
+    for (const part of parts) {
+      let url: string | undefined;
+      if (part.type === 'image_url') url = part.image_url?.url;
+      else if (part.type === 'file') url = part.file?.url;
+      if (url?.startsWith('/api/uploads/')) ids.push(url.split('/').pop()!);
+    }
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+export function deleteUploadsForConversation(conversationId: string, ownerSub: string): void {
+  const db = getDb();
+  const messages = db.prepare('SELECT content FROM messages WHERE conversation_id=?').all(conversationId) as { content: string }[];
+  const ids = messages.flatMap(m => extractUploadIds(m.content));
+  for (const id of ids) {
+    const row = db.prepare('SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?').get(id, ownerSub) as { sha256: string; mime_type: string } | undefined;
+    if (!row) continue;
+    db.prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, ownerSub);
+    deleteUploadFile(row.sha256, row.mime_type);
+  }
+}
+
+export function deleteAllUploadsForUser(ownerSub: string): void {
+  const db = getDb();
+  const rows = db.prepare('SELECT id, sha256, mime_type FROM uploads WHERE owner_sub=?').all(ownerSub) as { id: string; sha256: string; mime_type: string }[];
+  db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
+  for (const row of rows) {
+    deleteUploadFile(row.sha256, row.mime_type);
+  }
+}
