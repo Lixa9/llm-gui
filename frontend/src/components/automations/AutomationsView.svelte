@@ -20,7 +20,7 @@
   const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null));
   const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null));
 
-  async function save(data: Pick<Automation, 'name' | 'type' | 'definition'>) {
+  async function save(data: Pick<Automation, 'name' | 'definition'>) {
     try {
       if (editing) {
         await automationsStore.update(editing.id, data);
@@ -64,12 +64,10 @@
   function formatDefinition(auto: Automation): string {
     const def = auto.definition as unknown as Record<string, unknown>;
     const lines: string[] = [];
-    if (auto.type === 'scheduled') {
-      lines.push(`Schedule: every ${def.interval} ${def.unit}`);
-      if (def.model) lines.push(`Model: ${def.model}`);
-      if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
-      if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
-    }
+    lines.push(`Schedule: every ${def.interval} ${def.unit}`);
+    if (def.model) lines.push(`Model: ${def.model}`);
+    if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
+    if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
     return lines.join('\n');
   }
 
@@ -93,7 +91,6 @@
             <div class="auto-header">
               <div class="auto-info">
                 <span class="auto-name">{auto.name}</span>
-                <Badge variant={auto.type === 'scheduled' ? 'accent' : 'default'}>{auto.type}</Badge>
                 <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
               </div>
               <div class="auto-actions">
@@ -134,7 +131,6 @@
             <div class="auto-header">
               <div class="auto-info">
                 <span class="auto-name">{auto.name}</span>
-                <Badge variant={auto.type === 'scheduled' ? 'accent' : 'default'}>{auto.type}</Badge>
                 <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
               </div>
               <div class="auto-actions">

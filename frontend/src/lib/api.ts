@@ -96,7 +96,7 @@ export const api = {
 
   automations: {
     list: () => get<Automation[]>('/api/automations'),
-    create: (data: Pick<Automation, 'name' | 'type' | 'definition'>) =>
+    create: (data: Pick<Automation, 'name' | 'definition'>) =>
       post<Automation>('/api/automations', data),
     update: (id: string, data: Partial<Pick<Automation, 'name' | 'definition' | 'enabled'>>) =>
       patch<Automation>(`/api/automations/${id}`, data),

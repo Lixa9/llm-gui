@@ -115,8 +115,6 @@ export interface ModelPreset {
   visible_to: Role[] | null;
 }
 
-export type AutomationType = 'scheduled';
-
 export type ScheduleUnit = 'hours' | 'days' | 'weeks';
 
 export interface ScheduledDefinition {
@@ -134,7 +132,6 @@ export interface Automation {
   id: string;
   owner_sub: string | null;
   name: string;
-  type: AutomationType;
   definition: AutomationDefinition;
   enabled: boolean;
   created_at: number;

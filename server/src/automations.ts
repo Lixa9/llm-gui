@@ -8,7 +8,6 @@ import type { AutomationRow, AutomationRunRow, ScheduledDefinition } from './typ
 
 const automationCreateSchema = z.object({
   name: z.string().min(1).max(200),
-  type: z.enum(['scheduled']),
   definition: z.record(z.unknown()),
 });
 
@@ -29,7 +28,7 @@ automationsRouter.get('/', (c) => {
   // For system automations, replace `enabled` with the user's subscription state (default 0).
   const rows = db.prepare(`
     SELECT
-      a.id, a.owner_sub, a.name, a.type, a.definition, a.visible_to, a.created_at, a.deleted_at,
+      a.id, a.owner_sub, a.name, a.definition, a.visible_to, a.created_at, a.deleted_at,
       CASE WHEN a.owner_sub IS NULL
         THEN COALESCE((SELECT enabled FROM user_automation_subscriptions WHERE automation_id=a.id AND user_sub=?), 0)
         ELSE a.enabled
@@ -52,11 +51,11 @@ automationsRouter.post('/', async (c) => {
   const db = getDb();
   const id = generateId();
   db.prepare('INSERT INTO automations (id, owner_sub, name, type, definition) VALUES (?, ?, ?, ?, ?)')
-    .run(id, user.sub, body.name, body.type, JSON.stringify(body.definition));
+    .run(id, user.sub, body.name, 'scheduled', JSON.stringify(body.definition));
   const row = db.prepare('SELECT * FROM automations WHERE id=?').get(id) as AutomationRow;
   const auto = serializeAutomation(row);
 
-  if (auto.enabled && auto.type === 'scheduled') {
+  if (auto.enabled) {
     scheduleAutomation(auto);
   }
 
@@ -81,7 +80,7 @@ automationsRouter.patch('/:id', async (c) => {
 
   // Re-schedule if needed
   removeSchedule(id);
-  if (auto.enabled && auto.type === 'scheduled') {
+  if (auto.enabled) {
     scheduleAutomation(auto);
   }
 
@@ -179,7 +178,6 @@ function msUntilNext(interval: number, unit: string): number {
 }
 
 function scheduleAutomation(auto: ReturnType<typeof serializeAutomation>) {
-  if (auto.type !== 'scheduled') return;
   const def = auto.definition as ScheduledDefinition;
   const n = Math.max(1, Math.floor(def.interval));
   if (!['hours', 'days', 'weeks'].includes(def.unit) || !Number.isFinite(n)) return;
@@ -202,7 +200,7 @@ function removeSchedule(id: string) {
 export function initScheduler() {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT * FROM automations WHERE enabled=1 AND deleted_at IS NULL AND type='scheduled'"
+    "SELECT * FROM automations WHERE enabled=1 AND deleted_at IS NULL"
   ).all() as AutomationRow[];
 
   for (const row of rows) {
@@ -289,9 +287,6 @@ async function executePersonalAutomationRun(auto: ReturnType<typeof serializeAut
   const start = Date.now();
 
   try {
-    if (auto.type !== 'scheduled') {
-      throw new Error(`Unsupported automation type: ${auto.type}`);
-    }
     const def = auto.definition as ScheduledDefinition;
     const result = await fetchCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
     storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);

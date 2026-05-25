@@ -10,7 +10,7 @@
     open: boolean;
     automation?: Automation | null;
     onclose: () => void;
-    onsave: (data: Pick<Automation, 'name' | 'type' | 'definition'>) => Promise<void>;
+    onsave: (data: Pick<Automation, 'name' | 'definition'>) => Promise<void>;
   }
   let { open, automation = null, onclose, onsave }: Props = $props();
 
@@ -54,7 +54,7 @@
     saving = true;
     try {
       const definition = { interval, unit, model, system_prompt: systemPrompt, user_prompt: userPrompt, output: 'new_conversation' as const };
-      await onsave({ name: name.trim(), type: 'scheduled', definition });
+      await onsave({ name: name.trim(), definition });
       onclose();
     } finally {
       saving = false;
