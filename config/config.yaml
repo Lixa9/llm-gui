@@ -3,9 +3,9 @@ app:
   base_url: "http://localhost:3000"
   secret_key: "${SECRET_KEY}"
 
-litellm:
+openai:
   base_url: "http://127.0.0.1:1234/v1"
-  api_key: "${LITELLM_API_KEY}"
+  api_key: "${OPENAI_API_KEY}"
 
 database:
   path: "/data/chat.db"
