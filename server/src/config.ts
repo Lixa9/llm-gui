@@ -15,7 +15,7 @@ const configSchema = z.object({
     base_url: z.string().default('http://localhost:3000'),
     secret_key: z.string().min(1),
   }),
-  litellm: z.object({
+  openai: z.object({
     base_url: z.string().default(''),
     api_key: z.string().optional(),
   }).default({}),
@@ -56,9 +56,9 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     '  base_url: "http://localhost:3000"',
     '  secret_key: "${SECRET_KEY}"',
     '',
-    'litellm:',
-    '  base_url: "${LITELLM_BASE_URL}"',
-    '  api_key: "${LITELLM_API_KEY}"',
+    'openai:',
+    '  base_url: "${OPENAI_BASE_URL}"',
+    '  api_key: "${OPENAI_API_KEY}"',
     '',
     'database:',
     '  path: "/data/chat.db"',

@@ -144,7 +144,7 @@ export interface AppConfig {
     base_url: string;
     secret_key: string;
   };
-  litellm: {
+  openai: {
     base_url: string;
     api_key?: string;
   };

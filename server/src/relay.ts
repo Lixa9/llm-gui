@@ -184,8 +184,8 @@ relayRouter.post('/', async (c) => {
   };
 
   const cfg = getConfig();
-  if (!cfg.litellm.base_url) {
-    return c.json({ error: 'LiteLLM is not configured. Set litellm.base_url in config.yaml.' }, 503);
+  if (!cfg.openai.base_url) {
+    return c.json({ error: 'OpenAI-compatible endpoint is not configured. Set openai.base_url in config.yaml.' }, 503);
   }
 
   // Validate that the requested model is in the user's allowed list
@@ -280,12 +280,12 @@ relayRouter.post('/', async (c) => {
 
   const stream = new ReadableStream({
     async start(controller) {
-      let liteLLMRes: Response | null = null;
+      let upstreamRes: Response | null = null;
       try {
-        liteLLMRes = await fetch(`${cfg.litellm.base_url}/chat/completions`, {
+        upstreamRes = await fetch(`${cfg.openai.base_url}/chat/completions`, {
           method: 'POST',
           headers: {
-            ...(cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {}),
+            ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -297,9 +297,9 @@ relayRouter.post('/', async (c) => {
           signal: c.req.raw.signal,
         });
 
-        if (!liteLLMRes.ok) {
-          const errText = await liteLLMRes.text();
-          controller.enqueue(sse({ type: 'error', message: `LiteLLM error ${liteLLMRes.status}: ${errText}` }));
+        if (!upstreamRes.ok) {
+          const errText = await upstreamRes.text();
+          controller.enqueue(sse({ type: 'error', message: `upstream error ${upstreamRes.status}: ${errText}` }));
           controller.close();
           return;
         }
@@ -307,7 +307,7 @@ relayRouter.post('/', async (c) => {
         const buf = new TextDecoder();
         let lineBuf = '';
 
-        for await (const chunk of liteLLMRes.body as unknown as AsyncIterable<Uint8Array>) {
+        for await (const chunk of upstreamRes.body as unknown as AsyncIterable<Uint8Array>) {
           lineBuf += buf.decode(chunk, { stream: true });
           const parts = lineBuf.split('\n\n');
           lineBuf = parts.pop() ?? '';
@@ -441,9 +441,9 @@ async function generateTitle(
     const context = msgs.map(m => m.content_text).join('\n\n').slice(0, 2000);
     const titleModel = cfg.conversation.auto_title_model ?? model;
 
-    const res = await fetch(`${cfg.litellm.base_url}/chat/completions`, {
+    const res = await fetch(`${cfg.openai.base_url}/chat/completions`, {
       method: 'POST',
-      headers: { ...(cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {}), 'Content-Type': 'application/json' },
+      headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: titleModel,
         stream: false,

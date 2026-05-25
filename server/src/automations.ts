@@ -265,7 +265,7 @@ async function executeSystemAutomationRun(auto: ReturnType<typeof serializeAutom
 
     if (subscribers.length > 0) {
       // One LLM call regardless of subscriber count
-      const result = await fetchLiteLLMCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key ?? '');
+      const result = await fetchCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
       const title = makeConversationTitle(auto.name);
       for (const { user_sub } of subscribers) {
         const convId = generateId();
@@ -291,12 +291,12 @@ async function executePersonalAutomationRun(auto: ReturnType<typeof serializeAut
   try {
     if (auto.type === 'scheduled') {
       const def = auto.definition as ScheduledDefinition;
-      const result = await fetchLiteLLMCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key ?? '');
+      const result = await fetchCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
       storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);
     } else {
       const def = auto.definition as PipelineDefinition;
       for (const step of def.steps ?? []) {
-        const result = await fetchLiteLLMCompletion(auto.id, step.model, step.system_prompt ?? '', step.user_prompt, cfg.litellm.base_url, cfg.litellm.api_key ?? '');
+        const result = await fetchCompletion(auto.id, step.model, step.system_prompt ?? '', step.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
         storeConversationResult(convId, step.user_prompt, result.assistantText, step.model, result.usage);
       }
     }
@@ -324,7 +324,7 @@ function storeConversationResult(
     .run(generateId(), convId, 'assistant', assistantContent, assistantText, model, usage?.prompt_tokens ?? null, usage?.completion_tokens ?? null, 'done');
 }
 
-async function fetchLiteLLMCompletion(
+async function fetchCompletion(
   automationId: string,
   model: string,
   systemPrompt: string,
@@ -352,7 +352,7 @@ async function fetchLiteLLMCompletion(
 
   logger.info('automation llm response', { automation_id: automationId, model, status: res.status, latency_ms: Date.now() - llmStart });
 
-  if (!res.ok) throw new Error(`LiteLLM error: ${res.status}`);
+  if (!res.ok) throw new Error(`upstream error: ${res.status}`);
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }>; usage?: { prompt_tokens: number; completion_tokens: number } };
   return {

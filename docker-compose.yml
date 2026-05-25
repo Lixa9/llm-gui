@@ -12,8 +12,8 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
       # OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL}
-      LITELLM_API_KEY: ${LITELLM_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       # Optional — enable a local admin account (omit both to disable)
       # Accepts plain text or an argon2/bcrypt hash for LOCAL_ADMIN_PASSWORD
       LOCAL_ADMIN_USERNAME: admin

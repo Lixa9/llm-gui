@@ -7,7 +7,7 @@ import type { ModelYamlEntry } from './types';
 export const modelsRouter = new Hono();
 modelsRouter.use('*', requireAuth);
 
-interface LiteLLMModel {
+interface OpenAIModel {
   id: string;
 }
 
@@ -18,12 +18,12 @@ export function invalidateModelCache() {
   _cache = null;
 }
 
-function parseModels(data: unknown): LiteLLMModel[] | null {
-  if (Array.isArray(data)) return data as LiteLLMModel[];
+function parseModels(data: unknown): OpenAIModel[] | null {
+  if (Array.isArray(data)) return data as OpenAIModel[];
   if (data && typeof data === 'object') {
     const d = data as Record<string, unknown>;
-    if (Array.isArray(d.data)) return d.data as LiteLLMModel[];
-    if (Array.isArray(d.models)) return d.models as LiteLLMModel[];
+    if (Array.isArray(d.data)) return d.data as OpenAIModel[];
+    if (Array.isArray(d.models)) return d.models as OpenAIModel[];
   }
   return null;
 }
@@ -32,12 +32,12 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
   const cfg = getConfig();
 
   if (!_cache || Date.now() - _cache.at > CACHE_TTL) {
-    if (!cfg.litellm.base_url) {
+    if (!cfg.openai.base_url) {
       _cache = { models: cfg.models ?? [], at: Date.now() };
     } else {
       try {
-        const res = await fetch(`${cfg.litellm.base_url}/models`, {
-          headers: cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {},
+        const res = await fetch(`${cfg.openai.base_url}/models`, {
+          headers: cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {},
         });
         if (res.ok) {
           const raw = await res.json();
@@ -45,7 +45,7 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
           if (list) {
             const yamlModels = cfg.models ?? [];
             const yamlById = new Map(yamlModels.map(m => [m.id, m]));
-            const merged: ModelYamlEntry[] = list.map((m: LiteLLMModel) => yamlById.get(m.id) ?? {
+            const merged: ModelYamlEntry[] = list.map((m: OpenAIModel) => yamlById.get(m.id) ?? {
               id: m.id,
               display_name: m.id,
               show_tool_calls: true,
@@ -53,19 +53,19 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
             });
             _cache = { models: merged, at: Date.now() };
           } else {
-            logger.warn('Unexpected /models response format', { url: cfg.litellm.base_url });
+            logger.warn('Unexpected /models response format', { url: cfg.openai.base_url });
             _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };
           }
         } else {
           logger.warn('Failed to fetch models from inference engine', {
-            url: cfg.litellm.base_url,
+            url: cfg.openai.base_url,
             status: res.status,
           });
           _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };
         }
       } catch (e) {
         logger.error('Error fetching models from inference engine', {
-          url: cfg.litellm.base_url,
+          url: cfg.openai.base_url,
           error: (e as Error).message,
         });
         _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };

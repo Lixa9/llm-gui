@@ -1,13 +1,13 @@
 # LLM Chat Frontend
 
-A self-hosted chat frontend for [LiteLLM](https://github.com/BerriAI/litellm) (or any OpenAI-compatible API). Single container, no cloud dependencies, no inference inside the box.
+A self-hosted chat frontend for any OpenAI-compatible API (e.g. [LiteLLM](https://github.com/BerriAI/litellm), vLLM, Ollama, or any provider). Single container, no cloud dependencies, no inference inside the box.
 
 ## Features
 
 ### Chat
 - Streaming responses with a stop button that cancels the upstream request immediately
 - **File attachments** — images (JPEG, PNG, GIF, WebP), documents (PDF, DOCX, ODT, EPUB), spreadsheets (XLSX, XLS, ODS), and text files (plain text, Markdown, CSV, TSV, HTML, JSON, YAML, XML). Files are stored on the server; text is extracted and sent inline; PDFs are rendered to images page by page; DOCX/ODT/EPUB embedded images are extracted and forwarded alongside the text
-- Tool call display — when LiteLLM uses tools, each call appears as a collapsible block showing the function name, arguments, and result. Visibility is configurable per model in `models.yaml`
+- Tool call display — when the upstream API uses tools, each call appears as a collapsible block showing the function name, arguments, and result. Visibility is configurable per model in `models.yaml`
 - Auto-generated conversation titles after the first exchange (using a model you configure)
 - Sliding context window — older messages are quietly trimmed before the request if the conversation exceeds the configured token budget; they are never deleted from the database. Per-model overrides are supported in `models.yaml`
 - Optional audio notification when a response completes (configurable in user preferences)
@@ -84,17 +84,17 @@ Other automation features:
 
 ## Design choices
 
-**Pure relay.** The server does no inference, no embeddings, no RAG, no tool execution. It forwards requests to LiteLLM, streams the response to the browser, and saves the conversation to SQLite. LiteLLM owns everything intelligence-related.
+**Pure relay.** The server does no inference, no embeddings, no RAG, no tool execution. It forwards requests to the configured OpenAI-compatible endpoint, streams the response to the browser, and saves the conversation to SQLite. The upstream API owns everything intelligence-related.
 
 **Single container.** The Svelte SPA and the Node.js server are bundled together. SQLite lives in a mounted volume — no separate database container needed.
 
 **Config is YAML, user content is SQLite.** Auth, model display settings, RBAC, and admin-seeded prompts, presets, and automations are defined in mounted YAML files. Everything a user creates (conversations, personal prompts, presets, automations) lives in the database. On startup the server reconciles the YAML into the database — additions, updates, and removals (soft-deleted) are all handled automatically.
 
-**Models are discovered from LiteLLM.** The `/models` endpoint is polled at startup and cached. `models.yaml` only adds display metadata, role-based access control, and context configuration on top; any model not listed defaults to admin-only.
+**Models are discovered from the upstream API.** The `/models` endpoint is polled at startup and cached. `models.yaml` only adds display metadata, role-based access control, and context configuration on top; any model not listed defaults to admin-only.
 
-**Agent models.** Set `context_mode: session_only` on a model entry to connect an agentic workflow (e.g. n8n) registered in LiteLLM. The relay sends only the new message and the `conversation_id`; the agent manages its own context. Use `context_mode: passthrough` to forward the full history without truncation.
+**Agent models.** Set `context_mode: session_only` on a model entry to connect an agentic workflow (e.g. n8n). The relay sends only the new message and the `conversation_id`; the agent manages its own context. Use `context_mode: passthrough` to forward the full history without truncation.
 
-**Stop = abort.** The browser's `AbortController` closes the SSE connection. The server propagates the abort signal directly to the upstream fetch, so LiteLLM (and any agentic loop it's running) stops immediately — no polling, no special endpoint.
+**Stop = abort.** The browser's `AbortController` closes the SSE connection. The server propagates the abort signal directly to the upstream fetch, so the API (and any agentic loop it's running) stops immediately — no polling, no special endpoint.
 
 ---
 
@@ -103,7 +103,7 @@ Other automation features:
 ### Prerequisites
 
 - Docker and Docker Compose
-- A running LiteLLM instance (or any OpenAI-compatible API endpoint)
+- A running OpenAI-compatible API endpoint (e.g. LiteLLM, vLLM, Ollama)
 - Optionally: an OIDC provider for SSO
 
 ### 1. Create your working directory
@@ -128,8 +128,8 @@ services:
       SECRET_KEY: change-me-to-a-random-32-char-string
       # Local admin account (admin/admin) — for testing only, disabled by default
       # LOCAL_AUTH: "true"
-      # Only needed if LiteLLM requires authentication
-      # LITELLM_API_KEY: your-key-here
+      # Only needed if the upstream API requires authentication
+      # OPENAI_API_KEY: your-key-here
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
       # OIDC_CLIENT_SECRET: your-secret-here
     healthcheck:
@@ -153,9 +153,9 @@ app:
   base_url: "http://localhost:3000"
   secret_key: "${SECRET_KEY}"
 
-litellm:
-  base_url: "http://192.168.1.100:4000/v1"  # your LiteLLM address
-  # api_key: "${LITELLM_API_KEY}"
+openai:
+  base_url: "http://192.168.1.100:4000/v1"  # your OpenAI-compatible API address
+  # api_key: "${OPENAI_API_KEY}"
 
 database:
   path: "/data/chat.db"
@@ -186,11 +186,11 @@ conversation:
   context_window_reserve: 1000   # tokens kept free for the model's reply
 ```
 
-> **Docker networking note:** use your host machine's LAN IP (or `host.docker.internal` on Mac/Windows) for `litellm.base_url`. `127.0.0.1` inside a container refers to the container itself, not your host.
+> **Docker networking note:** use your host machine's LAN IP (or `host.docker.internal` on Mac/Windows) for `openai.base_url`. `127.0.0.1` inside a container refers to the container itself, not your host.
 
 ### 4. Create `config/models.yaml`
 
-Controls which models are visible to which roles and how context is handled. Any model returned by LiteLLM but not listed here defaults to admin-only.
+Controls which models are visible to which roles and how context is handled. Any model returned by the upstream API but not listed here defaults to admin-only.
 
 ```yaml
 models:
@@ -206,7 +206,7 @@ models:
     allowed_roles: [admin, user]
 ```
 
-The `id` must match the model ID as LiteLLM returns it from its `/models` endpoint.
+The `id` must match the model ID as the upstream API returns it from its `/models` endpoint.
 
 **Context modes** (optional `context_mode` field):
 
@@ -288,7 +288,7 @@ Open [http://localhost:3000](http://localhost:3000). Log in with your OIDC crede
 | `SECRET_KEY` | Yes | Signs session JWTs. Any random string ≥ 32 characters. If unset, an ephemeral key is generated and sessions don't survive restarts. |
 | `LOCAL_AUTH` | No | Set to `true` to enable the local admin account (`admin`/`admin`). Disabled by default. Intended for testing when no OIDC provider is available. |
 | `OIDC_CLIENT_SECRET` | No | Required only if `config.yaml` references `${OIDC_CLIENT_SECRET}`. |
-| `LITELLM_API_KEY` | No | Sent as `Authorization: Bearer` to LiteLLM. Required only if your LiteLLM instance has auth enabled. |
+| `OPENAI_API_KEY` | No | Sent as `Authorization: Bearer` to the upstream API. Required only if your API endpoint has auth enabled. |
 
 ---
 

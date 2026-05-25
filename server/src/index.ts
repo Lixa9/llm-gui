@@ -146,21 +146,21 @@ initScheduler();
 const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 function startBackendHealthCheck() {
-  if (!getConfig().litellm.base_url) return;
+  if (!getConfig().openai.base_url) return;
   setInterval(async () => {
     const cfg = getConfig();
-    if (!cfg.litellm.base_url) return;
+    if (!cfg.openai.base_url) return;
     try {
-      const res = await fetch(`${cfg.litellm.base_url}/models`, {
-        headers: cfg.litellm.api_key ? { Authorization: `Bearer ${cfg.litellm.api_key}` } : {},
+      const res = await fetch(`${cfg.openai.base_url}/models`, {
+        headers: cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
       await res.body?.cancel().catch(() => {});
       if (!res.ok) {
-        logger.warn('backend unreachable', { url: cfg.litellm.base_url, status: res.status });
+        logger.warn('backend unreachable', { url: cfg.openai.base_url, status: res.status });
       }
     } catch (e) {
-      logger.warn('backend unreachable', { url: cfg.litellm.base_url, error: (e as Error).message });
+      logger.warn('backend unreachable', { url: cfg.openai.base_url, error: (e as Error).message });
     }
   }, BACKEND_CHECK_INTERVAL_MS);
 }
