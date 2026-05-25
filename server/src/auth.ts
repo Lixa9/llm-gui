@@ -10,7 +10,7 @@ import type { Role, SessionPayload } from './types';
 
 // JWKS cache — createRemoteJWKSet handles caching internally
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-let _discoveredEndpoints: { token_endpoint: string; end_session_endpoint?: string } | null = null;
+let _discoveredEndpoints: { authorization_endpoint: string; token_endpoint: string; end_session_endpoint?: string } | null = null;
 let _discoveredAt = 0;
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -48,9 +48,10 @@ async function discover() {
   const cfg = getConfig().oidc;
   if (!cfg) throw new Error('OIDC is not configured');
   const res = await fetch(`${cfg.issuer}/.well-known/openid-configuration`);
-  const data = await res.json() as { jwks_uri: string; token_endpoint: string; end_session_endpoint?: string };
+  const data = await res.json() as { jwks_uri: string; authorization_endpoint: string; token_endpoint: string; end_session_endpoint?: string };
   _jwks = createRemoteJWKSet(new URL(data.jwks_uri));
   _discoveredEndpoints = {
+    authorization_endpoint: data.authorization_endpoint,
     token_endpoint: data.token_endpoint,
     end_session_endpoint: data.end_session_endpoint,
   };
@@ -153,7 +154,7 @@ authRouter.get('/login', async (c) => {
     code_challenge_method: 'S256',
   });
 
-  return c.redirect(`${oidc.issuer}/oauth2/authorize?${params}`);
+  return c.redirect(`${endpoints.authorization_endpoint}?${params}`);
 });
 
 authRouter.get('/callback', async (c) => {

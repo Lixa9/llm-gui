@@ -4,11 +4,11 @@ import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
 import { logger } from './logger';
-import type { AutomationRow, AutomationRunRow, ScheduledDefinition, PipelineDefinition } from './types';
+import type { AutomationRow, AutomationRunRow, ScheduledDefinition } from './types';
 
 const automationCreateSchema = z.object({
   name: z.string().min(1).max(200),
-  type: z.enum(['scheduled', 'pipeline']),
+  type: z.enum(['scheduled']),
   definition: z.record(z.unknown()),
 });
 
@@ -289,17 +289,12 @@ async function executePersonalAutomationRun(auto: ReturnType<typeof serializeAut
   const start = Date.now();
 
   try {
-    if (auto.type === 'scheduled') {
-      const def = auto.definition as ScheduledDefinition;
-      const result = await fetchCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
-      storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);
-    } else {
-      const def = auto.definition as PipelineDefinition;
-      for (const step of def.steps ?? []) {
-        const result = await fetchCompletion(auto.id, step.model, step.system_prompt ?? '', step.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
-        storeConversationResult(convId, step.user_prompt, result.assistantText, step.model, result.usage);
-      }
+    if (auto.type !== 'scheduled') {
+      throw new Error(`Unsupported automation type: ${auto.type}`);
     }
+    const def = auto.definition as ScheduledDefinition;
+    const result = await fetchCompletion(auto.id, def.model, def.system_prompt ?? '', def.user_prompt, cfg.openai.base_url, cfg.openai.api_key ?? '');
+    storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);
     db.prepare('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
     logger.info('automation run finished', { automation_id: auto.id, run_id: runId, status: 'done', latency_ms: Date.now() - start });
   } catch (e) {

@@ -3,6 +3,7 @@ import type { Db } from './db/index';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
+import { deleteUploadsForConversation, deleteAllUploadsForUser } from './uploads';
 
 export const conversationsRouter = new Hono();
 conversationsRouter.use('*', requireAuth);
@@ -140,6 +141,7 @@ conversationsRouter.patch('/:id', async (c) => {
 conversationsRouter.delete('/', (c) => {
   const user = c.get('user');
   const db = getDb();
+  deleteAllUploadsForUser(user.sub);
   db.prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
   return c.body(null, 204);
 });
@@ -149,6 +151,7 @@ conversationsRouter.delete('/:id', (c) => {
   const user = c.get('user');
   const db = getDb();
   const id = c.req.param('id');
+  deleteUploadsForConversation(id, user.sub);
   db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
   return c.body(null, 204);
 });
