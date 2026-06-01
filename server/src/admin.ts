@@ -7,6 +7,9 @@ import type { UserRow, SystemPromptRow, AutomationRow } from './types';
 export const adminRouter = new Hono();
 adminRouter.use('*', requireRole('admin'));
 
+// config.yaml contains secrets and core deployment info, do not expose to the web UI
+const EDITABLE_CONFIG_FILES = CONFIG_FILES.filter(f => f !== 'config.yaml');
+
 adminRouter.get('/users', (c) => {
   const db = getDb();
   const cfg = getConfig();
@@ -47,7 +50,7 @@ adminRouter.get('/automations', (c) => {
 });
 
 adminRouter.get('/config', (c) => {
-  const files = CONFIG_FILES.map(name => ({
+  const files = EDITABLE_CONFIG_FILES.map(name => ({
     name,
     content: getConfigFileContent(name),
     writable: isConfigWritable(name),
@@ -57,7 +60,7 @@ adminRouter.get('/config', (c) => {
 
 adminRouter.put('/config/:file', async (c) => {
   const name = c.req.param('file');
-  if (!CONFIG_FILES.includes(name)) return c.json({ error: 'Invalid file' }, 400);
+  if (!EDITABLE_CONFIG_FILES.includes(name)) return c.json({ error: 'Invalid file' }, 400);
   if (!isConfigWritable(name)) return c.json({ error: 'Config is read-only' }, 403);
 
   const body = await c.req.json() as { content: string };
