@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { requireAuth } from './auth';
-import { getDb, generateId, runTransaction } from './db/index';
+import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
 import type { Db } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
 import { deleteUploadsForConversation, deleteAllUploadsForUser } from './uploads';
@@ -57,16 +57,11 @@ function copyMessages(db: Db, srcId: string, destId: string, stopAtMsgId?: strin
   }
 }
 
-function tryParse(s: string | null, fallback: unknown = null): unknown {
-  if (!s) return fallback;
-  try { return JSON.parse(s); } catch { return fallback; }
-}
-
 function serializeMessage(row: MessageRow) {
   return {
     ...row,
-    content: tryParse(row.content, []),
-    tool_calls: tryParse(row.tool_calls),
+    content: safeParseJson<unknown[]>(row.content, []),
+    tool_calls: safeParseJson<unknown | null>(row.tool_calls, null),
   };
 }
 

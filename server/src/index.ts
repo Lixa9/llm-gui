@@ -6,7 +6,7 @@ import { readFile } from 'fs/promises';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
-import { authRouter, purgeExpiredSessions } from './auth';
+import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth';
 import { relayRouter } from './relay';
 import { conversationsRouter } from './conversations';
 import { foldersRouter } from './folders';
@@ -190,6 +190,12 @@ const server = serve({
 });
 
 logger.info(`Server started on port ${PORT}`);
+
+if (isLocalAuthEnabled()) {
+  process.stderr.write(
+    '\n\x1b[33m\x1b[1mWARNING: LOCAL_AUTH is active. This fallback configuration bypasses OIDC and should not be used in production.\x1b[22m\x1b[39m\n\n'
+  );
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

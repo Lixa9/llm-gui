@@ -11,6 +11,70 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+interface XmlTag {
+  name: string;
+  isEnd: boolean;
+  selfClosing?: boolean;
+  attributes: Record<string, string>;
+}
+
+interface XmlToken {
+  type: 'tag' | 'text';
+  tag?: XmlTag;
+  text?: string;
+}
+
+function parseXml(xml: string): XmlToken[] {
+  const tokens: XmlToken[] = [];
+  let i = 0;
+  while (i < xml.length) {
+    const start = xml.indexOf('<', i);
+    if (start === -1) {
+      const text = xml.slice(i);
+      if (text.trim()) tokens.push({ type: 'text', text: text.trim() });
+      break;
+    }
+    if (start > i) {
+      const text = xml.slice(i, start);
+      if (text.trim()) tokens.push({ type: 'text', text: text.trim() });
+    }
+    const end = xml.indexOf('>', start);
+    if (end === -1) break;
+    const rawTag = xml.slice(start + 1, end);
+    i = end + 1;
+
+    if (rawTag.startsWith('?') || rawTag.startsWith('!')) continue;
+
+    const isEnd = rawTag.startsWith('/');
+    const selfClosing = rawTag.endsWith('/');
+    const cleanTag = isEnd ? rawTag.slice(1) : selfClosing ? rawTag.slice(0, -1) : rawTag;
+    
+    const trimmed = cleanTag.trim();
+    const firstSpace = trimmed.search(/\s/);
+    let name = '';
+    const attributes: Record<string, string> = {};
+    if (firstSpace === -1) {
+      name = trimmed;
+    } else {
+      name = trimmed.slice(0, firstSpace);
+      const attrStr = trimmed.slice(firstSpace).trim();
+      const attrRegex = /([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+      let match;
+      while ((match = attrRegex.exec(attrStr)) !== null) {
+        const key = match[1];
+        const val = match[2] ?? match[3] ?? match[4] ?? '';
+        attributes[key] = val;
+      }
+    }
+
+    tokens.push({
+      type: 'tag',
+      tag: { name, isEnd, selfClosing, attributes }
+    });
+  }
+  return tokens;
+}
+
 export interface FileMeta {
   format: 'plain' | 'pdf' | 'docx' | 'odt' | 'xlsx' | 'ods' | 'html' | 'epub';
   page_count?: number;
@@ -94,13 +158,23 @@ async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
   const entry = zip.getEntry('word/document.xml');
   if (!entry) throw new Error('DOCX has no word/document.xml');
   const xml = entry.getData().toString('utf-8');
-  const raw = xml
-    .replace(/<w:p[ >]/g, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim() || '[File appears empty or has no extractable text]';
-  const { text, warning } = truncate(raw);
-  return { text, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+
+  const tokens = parseXml(xml);
+  let text = '';
+  let inTextTag = false;
+  for (const token of tokens) {
+    if (token.type === 'tag' && token.tag) {
+      if (token.tag.name === 'w:t' && !token.tag.isEnd) inTextTag = true;
+      if (token.tag.name === 'w:t' && token.tag.isEnd) inTextTag = false;
+      if (token.tag.name === 'w:p' && !token.tag.isEnd) text += '\n';
+    } else if (token.type === 'text' && inTextTag && token.text) {
+      text += token.text + ' ';
+    }
+  }
+
+  const raw = text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
+  const { text: truncatedText, warning } = truncate(raw);
+  return { text: truncatedText, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
@@ -109,12 +183,22 @@ async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
   const entry = zip.getEntry('content.xml');
   if (!entry) throw new Error('ODT file has no content.xml');
   const xml = entry.getData().toString('utf-8');
-  const raw = xml
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim() || '[File appears empty or has no extractable text]';
-  const { text, warning } = truncate(raw);
-  return { text, meta: { format: 'odt', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+
+  const tokens = parseXml(xml);
+  let text = '';
+  let inP = false;
+  for (const token of tokens) {
+    if (token.type === 'tag' && token.tag) {
+      if (token.tag.name === 'text:p' && !token.tag.isEnd) { inP = true; text += '\n'; }
+      if (token.tag.name === 'text:p' && token.tag.isEnd) inP = false;
+    } else if (token.type === 'text' && inP && token.text) {
+      text += token.text + ' ';
+    }
+  }
+
+  const raw = text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
+  const { text: truncatedText, warning } = truncate(raw);
+  return { text: truncatedText, meta: { format: 'odt', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
@@ -133,23 +217,61 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     const entry = zip.getEntry('content.xml');
     if (!entry) throw new Error('ODS has no content.xml');
     const xml = entry.getData().toString('utf-8');
+    const tokens = parseXml(xml);
     const sheetNames: string[] = [];
     const sections: string[] = [];
 
-    for (const tableMatch of xml.matchAll(/<table:table\s[^>]*table:name="([^"]+)"[^>]*>([\s\S]*?)<\/table:table>/g)) {
-      const sheetName = tableMatch[1];
-      sheetNames.push(sheetName);
-      const tableBody = tableMatch[2];
-      const rows: string[] = [];
-      for (const rowMatch of tableBody.matchAll(/<table:table-row[^>]*>([\s\S]*?)<\/table:table-row>/g)) {
-        const cells: string[] = [];
-        for (const cellMatch of rowMatch[1].matchAll(/<table:table-cell[^>]*>([\s\S]*?)<\/table:table-cell>/g)) {
-          const val = cellMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-          cells.push(val.includes(',') ? `"${val.replace(/"/g, '""')}"` : val);
+    let currentSheetName = '';
+    let sheetRows: string[] = [];
+    let currentRowCells: string[] = [];
+    let currentCellText = '';
+    let inCell = false;
+    let cellRepeated = 1;
+
+    for (const token of tokens) {
+      if (token.type === 'tag' && token.tag) {
+        const { name, isEnd, attributes } = token.tag;
+        if (name === 'table:table') {
+          if (!isEnd) {
+            currentSheetName = attributes['table:name'] || '';
+            sheetNames.push(currentSheetName);
+            sheetRows = [];
+          } else {
+            if (sheetRows.length > 0) {
+              sections.push(`=== Sheet: ${currentSheetName} ===\n${sheetRows.join('\n')}`);
+            }
+          }
+        } else if (name === 'table:table-row') {
+          if (!isEnd) {
+            currentRowCells = [];
+          } else {
+            if (currentRowCells.some(c => c !== '')) {
+              let lastNonEmpty = currentRowCells.length - 1;
+              while (lastNonEmpty >= 0 && currentRowCells[lastNonEmpty] === '') {
+                lastNonEmpty--;
+              }
+              const rowJoined = currentRowCells.slice(0, lastNonEmpty + 1).join(',');
+              sheetRows.push(rowJoined);
+            }
+          }
+        } else if (name === 'table:table-cell') {
+          if (!isEnd) {
+            inCell = true;
+            currentCellText = '';
+            const rep = attributes['table:number-columns-repeated'];
+            cellRepeated = rep ? Math.min(parseInt(rep, 10), 100) : 1;
+          } else {
+            inCell = false;
+            const val = currentCellText.replace(/\s+/g, ' ').trim();
+            const formatted = val.includes(',') ? `"${val.replace(/"/g, '""')}"` : val;
+            for (let k = 0; k < cellRepeated; k++) {
+              currentRowCells.push(formatted);
+            }
+          }
         }
-        if (cells.some(c => c !== '')) rows.push(cells.join(','));
+      } else if (token.type === 'text' && inCell && token.text) {
+        currentCellText += token.text + ' ';
       }
-      if (rows.length) sections.push(`=== Sheet: ${sheetName} ===\n${rows.join('\n')}`);
     }
 
     const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
@@ -165,17 +287,33 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   // Sheet name → rId mapping from workbook
   const sheetNames: string[] = [];
   const sheetRels: { name: string; rId: string }[] = [];
-  for (const m of workbookXml.matchAll(/<sheet\s[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)) {
-    sheetNames.push(m[1]);
-    sheetRels.push({ name: m[1], rId: m[2] });
+  const workbookTokens = parseXml(workbookXml);
+  for (const token of workbookTokens) {
+    if (token.type === 'tag' && token.tag && token.tag.name === 'sheet' && !token.tag.isEnd) {
+      const name = token.tag.attributes['name'] || '';
+      const rId = token.tag.attributes['r:id'] || token.tag.attributes['id'] || '';
+      if (name && rId) {
+        sheetNames.push(name);
+        sheetRels.push({ name, rId });
+      }
+    }
   }
 
   // rId → target path from xl/_rels/workbook.xml.rels
   const relsEntry = zip.getEntry('xl/_rels/workbook.xml.rels');
   const relsXml = relsEntry ? relsEntry.getData().toString('utf-8') : '';
   const relMap = new Map<string, string>();
-  for (const m of relsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
-    relMap.set(m[1], m[2]);
+  if (relsXml) {
+    const relsTokens = parseXml(relsXml);
+    for (const token of relsTokens) {
+      if (token.type === 'tag' && token.tag && token.tag.name === 'Relationship' && !token.tag.isEnd) {
+        const id = token.tag.attributes['Id'] || '';
+        const target = token.tag.attributes['Target'] || '';
+        if (id && target) {
+          relMap.set(id, target);
+        }
+      }
+    }
   }
 
   // Shared strings
@@ -183,8 +321,27 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   const sharedStrings: string[] = [];
   if (ssEntry) {
     const ssXml = ssEntry.getData().toString('utf-8');
-    for (const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
-      sharedStrings.push(m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    const ssTokens = parseXml(ssXml);
+    let currentString = '';
+    let inSi = false;
+    let inT = false;
+    for (const token of ssTokens) {
+      if (token.type === 'tag' && token.tag) {
+        const { name, isEnd } = token.tag;
+        if (name === 'si') {
+          if (!isEnd) {
+            inSi = true;
+            currentString = '';
+          } else {
+            inSi = false;
+            sharedStrings.push(currentString.replace(/\s+/g, ' ').trim());
+          }
+        } else if (name === 't') {
+          inT = !isEnd;
+        }
+      } else if (token.type === 'text' && inSi && inT && token.text) {
+        currentString += token.text;
+      }
     }
   }
 
@@ -200,21 +357,56 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     // Collect cell addresses and values to build a 2D grid
     const cellMap = new Map<string, string>();
     let maxRow = 0, maxCol = 0;
-    for (const m of wsXml.matchAll(/<c r="([A-Z]+)(\d+)"(?:\s[^>]*)?\s*t="([^"]*)"[^>]*>[\s\S]*?<v>([\s\S]*?)<\/v>/g)) {
-      const col = colIndex(m[1]), row = parseInt(m[2], 10) - 1;
-      const t = m[3], raw = m[4];
-      const val = t === 's' ? (sharedStrings[parseInt(raw, 10)] ?? '') : raw;
-      cellMap.set(`${row}:${col}`, val);
-      if (row > maxRow) maxRow = row;
-      if (col > maxCol) maxCol = col;
-    }
-    // Also handle cells with no explicit type (numeric)
-    for (const m of wsXml.matchAll(/<c r="([A-Z]+)(\d+)"(?:\s[^>]*)?>[^<]*<v>([\s\S]*?)<\/v>/g)) {
-      const col = colIndex(m[1]), row = parseInt(m[2], 10) - 1;
-      const key = `${row}:${col}`;
-      if (!cellMap.has(key)) cellMap.set(key, m[3]);
-      if (row > maxRow) maxRow = row;
-      if (col > maxCol) maxCol = col;
+
+    const wsTokens = parseXml(wsXml);
+    let currentCellRef = '';
+    let currentCellType = '';
+    let inV = false;
+    let currentVal = '';
+
+    const commitCell = () => {
+      if (currentCellRef) {
+        const match = currentCellRef.match(/^([A-Z]+)(\d+)$/);
+        if (match) {
+          const col = colIndex(match[1]);
+          const row = parseInt(match[2], 10) - 1;
+          let val = '';
+          if (currentCellType === 's') {
+            const idx = parseInt(currentVal, 10);
+            val = sharedStrings[idx] ?? '';
+          } else {
+            val = currentVal;
+          }
+          cellMap.set(`${row}:${col}`, val);
+          if (row > maxRow) maxRow = row;
+          if (col > maxCol) maxCol = col;
+        }
+      }
+      currentCellRef = '';
+      currentCellType = '';
+      currentVal = '';
+    };
+
+    for (const token of wsTokens) {
+      if (token.type === 'tag' && token.tag) {
+        const { name: tagName, isEnd, selfClosing, attributes } = token.tag;
+        if (tagName === 'c') {
+          if (!isEnd) {
+            currentCellRef = attributes['r'] || '';
+            currentCellType = attributes['t'] || '';
+            currentVal = '';
+            if (selfClosing) {
+              commitCell();
+            }
+          } else {
+            commitCell();
+          }
+        } else if (tagName === 'v') {
+          inV = !isEnd;
+        }
+      } else if (token.type === 'text' && inV && token.text) {
+        currentVal += token.text;
+      }
     }
 
     const rows: string[] = [];
@@ -248,7 +440,15 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   const containerEntry = zip.getEntry('META-INF/container.xml');
   if (!containerEntry) throw new Error('EPUB missing META-INF/container.xml');
   const containerXml = containerEntry.getData().toString('utf-8');
-  const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
+
+  const containerTokens = parseXml(containerXml);
+  let opfPath = '';
+  for (const token of containerTokens) {
+    if (token.type === 'tag' && token.tag && token.tag.name === 'rootfile') {
+      opfPath = token.tag.attributes['full-path'] || '';
+      if (opfPath) break;
+    }
+  }
   if (!opfPath) throw new Error('EPUB container.xml has no rootfile full-path');
 
   const opfBase = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
@@ -257,17 +457,24 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   if (!opfEntry) throw new Error(`EPUB OPF not found: ${opfPath}`);
   const opfXml = opfEntry.getData().toString('utf-8');
 
-  // Parse manifest: id → { href, mediaType }
+  // Parse manifest and spine via parseXml
   const manifest = new Map<string, { href: string; mediaType: string }>();
-  for (const item of opfXml.match(/<item\s[^>]+>/g) ?? []) {
-    const id = item.match(/\bid="([^"]+)"/)?.[1];
-    const href = item.match(/\bhref="([^"]+)"/)?.[1];
-    const mediaType = item.match(/\bmedia-type="([^"]+)"/)?.[1] ?? '';
-    if (id && href) manifest.set(id, { href, mediaType });
+  const spineIds: string[] = [];
+  const opfTokens = parseXml(opfXml);
+  for (const token of opfTokens) {
+    if (token.type === 'tag' && token.tag) {
+      const { name, attributes } = token.tag;
+      if (name === 'item') {
+        const id = attributes['id'];
+        const href = attributes['href'];
+        const mediaType = attributes['media-type'] || '';
+        if (id && href) manifest.set(id, { href, mediaType });
+      } else if (name === 'itemref') {
+        const idref = attributes['idref'];
+        if (idref) spineIds.push(idref);
+      }
+    }
   }
-
-  // Parse spine: ordered idrefs
-  const spineIds = [...opfXml.matchAll(/\bidref="([^"]+)"/g)].map(m => m[1]);
 
   // Extract text from spine HTML files in order
   const textParts: string[] = [];
@@ -333,20 +540,35 @@ export async function extractDocImages(
   if (format === 'epub') {
     // Discover images via OPF manifest (handles any directory layout)
     const containerXml = zip.getEntry('META-INF/container.xml')?.getData().toString('utf-8') ?? '';
-    const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
+    const containerTokens = parseXml(containerXml);
+    let opfPath = '';
+    for (const token of containerTokens) {
+      if (token.type === 'tag' && token.tag && token.tag.name === 'rootfile') {
+        opfPath = token.tag.attributes['full-path'] || '';
+        if (opfPath) break;
+      }
+    }
     const opfBase = opfPath?.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
     const opfXml = opfPath ? (zip.getEntry(opfPath)?.getData().toString('utf-8') ?? '') : '';
 
-    imageEntries = (opfXml.match(/<item\s[^>]+>/g) ?? [])
-      .flatMap(item => {
-        const href = item.match(/\bhref="([^"]+)"/)?.[1];
-        const mediaType = item.match(/\bmedia-type="(image\/[^"]+)"/)?.[1];
-        if (!href || !mediaType) return [];
-        const entry = zip.getEntry(opfBase + href) ?? zip.getEntry(href);
-        if (!entry) return [];
-        const ext = mediaType === 'image/png' ? '.png' : mediaType === 'image/gif' ? '.gif' : mediaType === 'image/webp' ? '.webp' : '.jpg';
-        return [{ data: entry.getData(), ext }];
-      });
+    const imageEntriesList: { data: Buffer; ext: string }[] = [];
+    if (opfXml) {
+      const opfTokens = parseXml(opfXml);
+      for (const token of opfTokens) {
+        if (token.type === 'tag' && token.tag && token.tag.name === 'item') {
+          const href = token.tag.attributes['href'];
+          const mediaType = token.tag.attributes['media-type'] || '';
+          if (href && mediaType.startsWith('image/')) {
+            const entry = zip.getEntry(opfBase + href) ?? zip.getEntry(href);
+            if (entry) {
+              const ext = mediaType === 'image/png' ? '.png' : mediaType === 'image/gif' ? '.gif' : mediaType === 'image/webp' ? '.webp' : '.jpg';
+              imageEntriesList.push({ data: entry.getData(), ext });
+            }
+          }
+        }
+      }
+    }
+    imageEntries = imageEntriesList;
   } else {
     const prefix = format === 'docx' ? 'word/media/' : 'Pictures/';
     imageEntries = zip.getEntries()

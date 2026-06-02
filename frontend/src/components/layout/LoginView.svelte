@@ -45,6 +45,13 @@
     {#if authStore.localAuthEnabled}
       <div class="divider"><span>or</span></div>
 
+      <div class="local-warning-banner">
+        <svg class="warning-icon" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
+        </svg>
+        <span><strong>Security Warning:</strong> Local fallback credentials are active. Bypasses OIDC.</span>
+      </div>
+
       <form class="local-form" onsubmit={handleLocalLogin}>
         <div class="field">
           <label for="login-username">Username</label>
@@ -155,6 +162,32 @@
     flex: 1;
     height: 1px;
     background: var(--border);
+  }
+
+  .local-warning-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(217, 119, 6, 0.15);
+    border: 1px solid rgba(217, 119, 6, 0.3);
+    border-radius: var(--radius-sm);
+    color: #f59e0b;
+    font-size: 11px;
+    line-height: 1.4;
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  .warning-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .local-form {
