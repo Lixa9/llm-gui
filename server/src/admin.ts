@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { requireRole } from './auth';
-import { getDb } from './db/index';
+import { getDb, safeParseJson, sqliteBool } from './db/index';
 import { getConfig, isConfigWritable, getConfigFileContent, writeConfigFile, CONFIG_FILES } from './config';
 import type { UserRow, SystemPromptRow, AutomationRow } from './types';
 
@@ -15,7 +15,7 @@ adminRouter.get('/prompts', (c) => {
   const rows = db.prepare(
     'SELECT * FROM system_prompts WHERE deleted_at IS NULL ORDER BY owner_sub ASC, name ASC'
   ).all() as SystemPromptRow[];
-  return c.json(rows.map(r => ({ ...r, visible_to: r.visible_to ? JSON.parse(r.visible_to) : null })));
+  return c.json(rows.map(r => ({ ...r, visible_to: safeParseJson<string[] | null>(r.visible_to, null) })));
 });
 
 adminRouter.get('/automations', (c) => {
@@ -23,7 +23,7 @@ adminRouter.get('/automations', (c) => {
   const rows = db.prepare(
     'SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY owner_sub ASC, name ASC'
   ).all() as AutomationRow[];
-  return c.json(rows.map(r => ({ ...r, enabled: r.enabled === 1, definition: JSON.parse(r.definition) })));
+  return c.json(rows.map(r => ({ ...r, enabled: sqliteBool(r.enabled), definition: safeParseJson<Record<string, unknown>>(r.definition, {}) })));
 });
 
 adminRouter.get('/config', (c) => {

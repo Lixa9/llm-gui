@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
+import { getDb, generateId, safeParseJson } from './db/index';
 import { getConfig } from './config';
 import { logger } from './logger';
 import type { AutomationRow, AutomationRunRow, ScheduledDefinition } from './types';
@@ -18,7 +18,7 @@ function serializeAutomation(row: AutomationRow) {
   return {
     ...row,
     enabled: row.enabled === 1,
-    definition: JSON.parse(row.definition),
+    definition: safeParseJson<any>(row.definition, {}),
   };
 }
 

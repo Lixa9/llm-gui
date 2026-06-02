@@ -86,7 +86,7 @@ async function signSession(payload: Omit<SessionPayload, 'exp' | 'iat' | 'jti'>)
     .sign(secret);
 }
 
-function isLocalAuthEnabled(): boolean {
+export function isLocalAuthEnabled(): boolean {
   const v = process.env.LOCAL_AUTH?.trim().toLowerCase();
   return v === 'true' || v === '1' || v === 'yes';
 }
