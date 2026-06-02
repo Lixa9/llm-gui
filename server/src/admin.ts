@@ -10,29 +10,6 @@ adminRouter.use('*', requireRole('admin'));
 // config.yaml contains secrets and core deployment info, do not expose to the web UI
 const EDITABLE_CONFIG_FILES = CONFIG_FILES.filter(f => f !== 'config.yaml');
 
-adminRouter.get('/users', (c) => {
-  const db = getDb();
-  const cfg = getConfig();
-  const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC').all() as UserRow[];
-
-  const resolved = users.map(u => {
-    const role = u.role_override ?? cfg.rbac.default_role;
-    return { ...u, resolved_role: role };
-  });
-  return c.json(resolved);
-});
-
-adminRouter.patch('/users/:sub', async (c) => {
-  const body = await c.req.json() as { role_override: string | null };
-  if (body.role_override !== null && body.role_override !== 'admin' && body.role_override !== 'user') {
-    return c.json({ error: 'Invalid role' }, 400);
-  }
-  const db = getDb();
-  db.prepare('UPDATE users SET role_override=? WHERE sub=?')
-    .run(body.role_override ?? null, c.req.param('sub'));
-  return c.body(null, 204);
-});
-
 adminRouter.get('/prompts', (c) => {
   const db = getDb();
   const rows = db.prepare(

@@ -49,7 +49,7 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
               id: m.id,
               display_name: m.id,
               show_tool_calls: true,
-              allowed_roles: ['admin', 'user'],
+              allowed_roles: ['admin'],
             });
             _cache = { models: merged, at: Date.now() };
           } else {

@@ -35,9 +35,7 @@ A self-hosted chat frontend for any OpenAI-compatible API (e.g. [LiteLLM](https:
 
 ### Automations
 
-Automations are recurring LLM jobs. There are two types:
-
-**Scheduled** — runs a single prompt on a cron schedule. Each run creates a new conversation owned by the user.
+Automations are recurring LLM jobs. An automation is a single prompt that runs on a cron schedule. Each run creates a new conversation owned by the user.
 
 ```yaml
 - name: "Daily digest"
@@ -47,19 +45,6 @@ Automations are recurring LLM jobs. There are two types:
   model: "llama-3.3-70b"
   system_prompt: "You are a concise summarizer."
   user_prompt: "Summarize the top tech news today."
-```
-
-**Pipeline** — chains multiple prompts sequentially in a single conversation. Each step's output is appended before the next step runs.
-
-```yaml
-- name: "Research pipeline"
-  type: pipeline
-  steps:
-    - model: "llama-3.3-70b"
-      user_prompt: "List 5 recent AI research papers."
-    - model: "llama-3.3-70b"
-      system_prompt: "You are an expert reviewer."
-      user_prompt: "Summarize each paper in two sentences."
 ```
 
 **System automations** (admin-seeded from `automations.yaml`) are shared across users. Users subscribe individually — each subscribed user gets their own copy of the conversation on each run, but only one LLM call is made regardless of subscriber count.

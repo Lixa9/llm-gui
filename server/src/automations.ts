@@ -178,6 +178,7 @@ function msUntilNext(interval: number, unit: string): number {
 }
 
 function scheduleAutomation(auto: ReturnType<typeof serializeAutomation>) {
+  if (auto.type !== 'scheduled') return;
   const def = auto.definition as ScheduledDefinition;
   const n = Math.max(1, Math.floor(def.interval));
   if (!['hours', 'days', 'weeks'].includes(def.unit) || !Number.isFinite(n)) return;
@@ -334,7 +335,7 @@ async function fetchCompletion(
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model, messages, stream: false }),

@@ -2,13 +2,14 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
-import { existsSync, readFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
 import { authRouter, purgeExpiredSessions } from './auth';
 import { relayRouter } from './relay';
-import { conversationsRouter, foldersRouter } from './conversations';
+import { conversationsRouter } from './conversations';
+import { foldersRouter } from './folders';
 import { modelsRouter } from './models';
 import { promptsRouter } from './prompts';
 import { presetsRouter } from './presets';
@@ -17,6 +18,7 @@ import { automationsRouter, initScheduler } from './automations';
 import { adminRouter } from './admin';
 import { uploadsRouter } from './uploads';
 import { logger } from './logger';
+import { sweepBuckets } from './ratelimit';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
@@ -132,11 +134,14 @@ app.use('*', async (c, next) => {
 
 // SPA fallback — serve index.html for all non-API routes
 app.use('*', serveStatic({ root: STATIC_DIR }));
-app.get('*', (c) => {
+app.get('*', async (c) => {
   const indexPath = `${STATIC_DIR}/index.html`;
-  return existsSync(indexPath)
-    ? c.html(readFileSync(indexPath, 'utf-8'))
-    : c.text('Not found', 404);
+  try {
+    const content = await readFile(indexPath, 'utf-8');
+    return c.html(content);
+  } catch {
+    return c.text('Not found', 404);
+  }
 });
 
 // Init scheduler
@@ -170,6 +175,10 @@ startBackendHealthCheck();
 // Purge expired sessions at startup and every hour
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 60 * 60 * 1000);
+
+// Sweep rate limit buckets every 5 minutes
+sweepBuckets();
+setInterval(sweepBuckets, 5 * 60 * 1000);
 
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);

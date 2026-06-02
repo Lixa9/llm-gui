@@ -14,33 +14,36 @@ let _discoveredEndpoints: { authorization_endpoint: string; token_endpoint: stri
 let _discoveredAt = 0;
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-// Brute-force protection for local login — keyed on username so IP rotation cannot bypass it
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
-const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
 
 function isLoginLocked(username: string): boolean {
-  const entry = loginAttempts.get(username);
-  if (!entry) return false;
-  if (entry.lockedUntil === 0) return false;
-  if (entry.lockedUntil > Date.now()) return true;
-  loginAttempts.delete(username);
+  const db = getDb();
+  const row = db.prepare('SELECT locked_until FROM login_lockouts WHERE username=?').get(username) as { locked_until: number } | undefined;
+  if (!row) return false;
+  if (row.locked_until === 0) return false;
+  if (row.locked_until > Date.now()) return true;
+  db.prepare('DELETE FROM login_lockouts WHERE username=?').run(username);
   return false;
 }
 
 function recordLoginFailure(username: string): void {
-  const entry = loginAttempts.get(username) ?? { count: 0, lockedUntil: 0 };
-  entry.count++;
-  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
-    entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
-    entry.count = 0;
+  const db = getDb();
+  const row = db.prepare('SELECT attempts FROM login_lockouts WHERE username=?').get(username) as { attempts: number } | undefined;
+  const attempts = (row?.attempts ?? 0) + 1;
+  let lockedUntil = 0;
+  if (attempts >= LOGIN_MAX_ATTEMPTS) {
+    lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
     logger.warn('Local login locked out', { username });
+    db.prepare('INSERT INTO login_lockouts (username, attempts, locked_until) VALUES (?, 0, ?) ON CONFLICT(username) DO UPDATE SET attempts=0, locked_until=excluded.locked_until').run(username, lockedUntil);
+  } else {
+    db.prepare('INSERT INTO login_lockouts (username, attempts, locked_until) VALUES (?, ?, 0) ON CONFLICT(username) DO UPDATE SET attempts=excluded.attempts').run(username, attempts);
   }
-  loginAttempts.set(username, entry);
 }
 
 function clearLoginFailures(username: string): void {
-  loginAttempts.delete(username);
+  const db = getDb();
+  db.prepare('DELETE FROM login_lockouts WHERE username=?').run(username);
 }
 
 async function discover() {
@@ -64,7 +67,9 @@ function resolveRole(groups: string[]): Role {
   for (const mapping of cfg.rbac.mappings) {
     if (groups.includes(mapping.oidc_group)) return mapping.role;
   }
-  return cfg.rbac.default_role;
+  const role = cfg.rbac.default_role;
+  if (role === 'admin' || role === 'user') return role;
+  return 'user';
 }
 
 async function signSession(payload: Omit<SessionPayload, 'exp' | 'iat' | 'jti'>): Promise<string> {
@@ -173,8 +178,19 @@ authRouter.get('/callback', async (c) => {
   const pkceRaw = getCookie(c, 'oidc_pkce');
   if (!pkceRaw) return c.text('Missing PKCE cookie', 400);
 
-  const { verifier, state } = JSON.parse(pkceRaw) as { verifier: string; state: string };
-  if (!returnedState || !timingSafeStringEqual(state, returnedState)) return c.text('State mismatch', 400);
+  let verifier: string;
+  let state: string;
+  try {
+    const parsed = JSON.parse(pkceRaw) as { verifier: string; state: string };
+    verifier = parsed.verifier;
+    state = parsed.state;
+  } catch {
+    logger.warn('Failed to parse PKCE cookie', { pkceRaw });
+    return c.text('Invalid PKCE cookie', 400);
+  }
+  if (!verifier || !state || !returnedState || !timingSafeStringEqual(state, returnedState)) {
+    return c.text('State mismatch', 400);
+  }
 
   deleteCookie(c, 'oidc_pkce', { path: '/' });
 
@@ -224,17 +240,11 @@ authRouter.get('/callback', async (c) => {
   const name = (idPayload['name'] as string) ?? (idPayload['preferred_username'] as string) ?? email;
   const groups = (idPayload[cfg.rbac.group_claim] as string[]) ?? [];
 
-  // Resolve role
-  const db = getDb();
-  const existingOverride = db.prepare(
-    'SELECT role_override FROM users WHERE sub = ?'
-  ).get(sub) as { role_override: string | null } | undefined;
-
-  const role: Role = existingOverride?.role_override
-    ? existingOverride.role_override as Role
-    : resolveRole(groups);
+  // Resolve role strictly from OIDC groups
+  const role: Role = resolveRole(groups);
 
   // Upsert user
+  const db = getDb();
   db.prepare(
     `INSERT INTO users (sub, email, name) VALUES (?, ?, ?)
      ON CONFLICT(sub) DO UPDATE SET email=excluded.email, name=excluded.name`
