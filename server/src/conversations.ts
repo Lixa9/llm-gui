@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { Db } from './db/index';
 import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
+import { getDb, generateId, runTransaction } from './db/index';
+import type { Db } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
 import { deleteUploadsForConversation, deleteAllUploadsForUser } from './uploads';
 
@@ -14,6 +14,36 @@ function serializeConversation(row: ConversationRow) {
     title_auto: row.title_auto === 1,
     pinned: row.pinned === 1,
   };
+}
+
+function checkPromptAccess(db: Db, promptId: string, userSub: string, userRole: string): boolean {
+  const row = db.prepare('SELECT owner_sub, visible_to FROM system_prompts WHERE id=?').get(promptId) as { owner_sub: string | null; visible_to: string | null } | undefined;
+  if (!row) return false;
+  if (row.owner_sub) return row.owner_sub === userSub;
+  if (row.visible_to) {
+    try {
+      const roles = JSON.parse(row.visible_to) as string[];
+      return roles.includes(userRole);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function checkPresetAccess(db: Db, presetId: string, userSub: string, userRole: string): boolean {
+  const row = db.prepare('SELECT owner_sub, visible_to FROM model_presets WHERE id=?').get(presetId) as { owner_sub: string | null; visible_to: string | null } | undefined;
+  if (!row) return false;
+  if (row.owner_sub) return row.owner_sub === userSub;
+  if (row.visible_to) {
+    try {
+      const roles = JSON.parse(row.visible_to) as string[];
+      return roles.includes(userRole);
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function copyMessages(db: Db, srcId: string, destId: string, stopAtMsgId?: string) {
@@ -86,6 +116,14 @@ conversationsRouter.post('/', async (c) => {
   const user = c.get('user');
   const body = await c.req.json() as Partial<ConversationRow>;
   const db = getDb();
+
+  if (body.preset_id && !checkPresetAccess(db, body.preset_id, user.sub, user.role)) {
+    return c.json({ error: 'Preset not available' }, 403);
+  }
+  if (body.system_prompt_id && !checkPromptAccess(db, body.system_prompt_id, user.sub, user.role)) {
+    return c.json({ error: 'System prompt not available' }, 403);
+  }
+
   const id = generateId();
   db.prepare(
     `INSERT INTO conversations (id, owner_sub, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
@@ -125,8 +163,18 @@ conversationsRouter.patch('/:id', async (c) => {
   if (body.pinned !== undefined) { updates.push('pinned=?'); vals.push(body.pinned ? 1 : 0); }
   if (body.custom_system_prompt !== undefined) { updates.push('custom_system_prompt=?'); vals.push(body.custom_system_prompt); }
   if (body.model_id !== undefined) { updates.push('model_id=?'); vals.push(body.model_id); }
-  if (body.preset_id !== undefined) { updates.push('preset_id=?'); vals.push(body.preset_id); }
-  if (body.system_prompt_id !== undefined) { updates.push('system_prompt_id=?'); vals.push(body.system_prompt_id); }
+  if (body.preset_id !== undefined) {
+    if (body.preset_id !== null && !checkPresetAccess(db, body.preset_id, user.sub, user.role)) {
+      return c.json({ error: 'Preset not available' }, 403);
+    }
+    updates.push('preset_id=?'); vals.push(body.preset_id);
+  }
+  if (body.system_prompt_id !== undefined) {
+    if (body.system_prompt_id !== null && !checkPromptAccess(db, body.system_prompt_id, user.sub, user.role)) {
+      return c.json({ error: 'System prompt not available' }, 403);
+    }
+    updates.push('system_prompt_id=?'); vals.push(body.system_prompt_id);
+  }
 
   if (updates.length > 0) {
     vals.push(id);
@@ -138,20 +186,20 @@ conversationsRouter.patch('/:id', async (c) => {
 });
 
 // Delete all (user's own conversations)
-conversationsRouter.delete('/', (c) => {
+conversationsRouter.delete('/', async (c) => {
   const user = c.get('user');
   const db = getDb();
-  deleteAllUploadsForUser(user.sub);
+  await deleteAllUploadsForUser(user.sub);
   db.prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
   return c.body(null, 204);
 });
 
 // Delete
-conversationsRouter.delete('/:id', (c) => {
+conversationsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const db = getDb();
   const id = c.req.param('id');
-  deleteUploadsForConversation(id, user.sub);
+  await deleteUploadsForConversation(id, user.sub);
   db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
   return c.body(null, 204);
 });
@@ -165,16 +213,22 @@ conversationsRouter.post('/:id/duplicate', (c) => {
   ).get(c.req.param('id'), user.sub) as ConversationRow | undefined;
   if (!src) return c.json({ error: 'Not found' }, 404);
 
-  const newId = generateId();
-  db.prepare(
-    `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(newId, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
+  try {
+    const newConv = runTransaction(() => {
+      const newId = generateId();
+      db.prepare(
+        `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(newId, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
 
-  copyMessages(db, src.id, newId);
+      copyMessages(db, src.id, newId);
 
-  const newConv = db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
-  return c.json(serializeConversation(newConv), 201);
+      return db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
+    });
+    return c.json(serializeConversation(newConv), 201);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 // Fork
@@ -187,16 +241,22 @@ conversationsRouter.post('/:id/fork', async (c) => {
   ).get(c.req.param('id'), user.sub) as ConversationRow | undefined;
   if (!src) return c.json({ error: 'Not found' }, 404);
 
-  const newId = generateId();
-  db.prepare(
-    `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(newId, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
+  try {
+    const newConv = runTransaction(() => {
+      const newId = generateId();
+      db.prepare(
+        `INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(newId, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
 
-  copyMessages(db, src.id, newId, body.message_id);
+      copyMessages(db, src.id, newId, body.message_id);
 
-  const newConv = db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
-  return c.json(serializeConversation(newConv), 201);
+      return db.prepare('SELECT * FROM conversations WHERE id=?').get(newId) as ConversationRow;
+    });
+    return c.json(serializeConversation(newConv), 201);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 // Messages
@@ -251,51 +311,5 @@ conversationsRouter.delete('/:id/messages/:msgId', (c) => {
     'DELETE FROM messages WHERE conversation_id=? AND timestamp >= ?'
   ).run(c.req.param('id'), msg.timestamp);
 
-  return c.body(null, 204);
-});
-
-// Folders router
-export const foldersRouter = new Hono();
-foldersRouter.use('*', requireAuth);
-
-foldersRouter.get('/', (c) => {
-  const user = c.get('user');
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM conversation_folders WHERE owner_sub=? ORDER BY name').all(user.sub);
-  return c.json(rows);
-});
-
-foldersRouter.post('/', async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json() as { name: string; parent_id?: string };
-  const db = getDb();
-  const id = generateId();
-  db.prepare('INSERT INTO conversation_folders (id, owner_sub, name, parent_id) VALUES (?, ?, ?, ?)')
-    .run(id, user.sub, body.name, body.parent_id ?? null);
-  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=?').get(id);
-  return c.json(row, 201);
-});
-
-foldersRouter.patch('/:id', async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json() as { name?: string; parent_id?: string };
-  const db = getDb();
-  const id = c.req.param('id');
-  const updates: string[] = [];
-  const vals: unknown[] = [];
-  if (body.name !== undefined) { updates.push('name=?'); vals.push(body.name); }
-  if (body.parent_id !== undefined) { updates.push('parent_id=?'); vals.push(body.parent_id ?? null); }
-  if (updates.length > 0) {
-    db.prepare(`UPDATE conversation_folders SET ${updates.join(', ')} WHERE id=? AND owner_sub=?`).run(...vals, id, user.sub);
-  }
-  const row = db.prepare('SELECT * FROM conversation_folders WHERE id=? AND owner_sub=?').get(id, user.sub);
-  if (!row) return c.json({ error: 'Not found' }, 404);
-  return c.json(row);
-});
-
-foldersRouter.delete('/:id', (c) => {
-  const user = c.get('user');
-  const db = getDb();
-  db.prepare('DELETE FROM conversation_folders WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
   return c.body(null, 204);
 });

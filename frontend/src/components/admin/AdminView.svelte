@@ -1,14 +1,12 @@
 <script lang="ts">
-  import AdminUsers from './AdminUsers.svelte';
   import AdminPrompts from './AdminPrompts.svelte';
   import AdminAutomations from './AdminAutomations.svelte';
   import AdminConfig from './AdminConfig.svelte';
 
-  type Tab = 'users' | 'prompts' | 'automations' | 'config';
-  let activeTab = $state<Tab>('users');
+  type Tab = 'prompts' | 'automations' | 'config';
+  let activeTab = $state<Tab>('prompts');
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'users', label: 'Users' },
     { id: 'prompts', label: 'Prompts' },
     { id: 'automations', label: 'Automations' },
     { id: 'config', label: 'Config' },
@@ -28,9 +26,7 @@
   </div>
 
   <div class="admin-body">
-    {#if activeTab === 'users'}
-      <AdminUsers />
-    {:else if activeTab === 'prompts'}
+    {#if activeTab === 'prompts'}
       <AdminPrompts />
     {:else if activeTab === 'automations'}
       <AdminAutomations />

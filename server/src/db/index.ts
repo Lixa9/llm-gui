@@ -67,3 +67,30 @@ export function getDb(): Db {
 export function generateId(): string {
   return crypto.randomUUID();
 }
+
+export function safeParseJson<T>(s: string | null, fallback: T): T {
+  if (!s) return fallback;
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function sqliteBool(v: number | boolean | null | undefined): boolean {
+  if (v === null || v === undefined) return false;
+  return v === 1 || v === true;
+}
+
+export function runTransaction<T>(fn: () => T): T {
+  const db = getDb();
+  db.exec('BEGIN TRANSACTION');
+  try {
+    const res = fn();
+    db.exec('COMMIT');
+    return res;
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}

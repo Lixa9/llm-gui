@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { join, dirname } from 'path';
-import { mkdirSync, existsSync, rmSync } from 'fs';
-import { writeFile, readFile } from 'fs/promises';
+import { writeFile, readFile, mkdir, rm, access } from 'fs/promises';
 import { requireAuth } from './auth';
 import { getDb, generateId } from './db/index';
 import { getConfig } from './config';
@@ -79,6 +78,15 @@ export function getUploadsDir(): string {
   return join(dirname(cfg.database.path), 'uploads');
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 uploadsRouter.post('/', async (c) => {
   const user = c.get('user');
 
@@ -117,10 +125,10 @@ uploadsRouter.post('/', async (c) => {
 
   const ext = MIME_TO_EXT[file.type] ?? '';
   const uploadsDir = getUploadsDir();
-  mkdirSync(uploadsDir, { recursive: true });
+  await mkdir(uploadsDir, { recursive: true });
 
   const filePath = join(uploadsDir, `${sha256}${ext}`);
-  if (!existsSync(filePath)) {
+  if (!(await exists(filePath))) {
     await writeFile(filePath, buf);
   }
 
@@ -193,7 +201,7 @@ uploadsRouter.get('/:id', async (c) => {
   const ext = MIME_TO_EXT[row.mime_type] ?? '';
   const filePath = join(getUploadsDir(), `${row.sha256}${ext}`);
 
-  if (!existsSync(filePath)) return c.json({ error: 'File not found on disk' }, 404);
+  if (!(await exists(filePath))) return c.json({ error: 'File not found on disk' }, 404);
 
   const buffer = await readFile(filePath);
   const disposition = ALLOWED_IMAGE_TYPES.has(row.mime_type) ? 'inline' : 'attachment';
@@ -206,18 +214,18 @@ uploadsRouter.get('/:id', async (c) => {
   });
 });
 
-function deleteUploadFile(sha256: string, mimeType: string): void {
+async function deleteUploadFile(sha256: string, mimeType: string): Promise<void> {
   const uploadsDir = getUploadsDir();
   const ext = MIME_TO_EXT[mimeType] ?? '';
   const db = getDb();
   const remaining = db.prepare('SELECT COUNT(*) as n FROM uploads WHERE sha256=?').get(sha256) as { n: number };
   if (remaining.n > 0) return;
   const filePath = join(uploadsDir, `${sha256}${ext}`);
-  if (existsSync(filePath)) rmSync(filePath, { force: true });
+  if (await exists(filePath)) await rm(filePath, { force: true });
   const pdfPagesDir = join(uploadsDir, 'pdf-pages', sha256);
-  if (existsSync(pdfPagesDir)) rmSync(pdfPagesDir, { recursive: true, force: true });
+  if (await exists(pdfPagesDir)) await rm(pdfPagesDir, { recursive: true, force: true });
   const docImagesDir = join(uploadsDir, 'doc-images', sha256);
-  if (existsSync(docImagesDir)) rmSync(docImagesDir, { recursive: true, force: true });
+  if (await exists(docImagesDir)) await rm(docImagesDir, { recursive: true, force: true });
 }
 
 function extractUploadIds(content: string): string[] {
@@ -236,7 +244,7 @@ function extractUploadIds(content: string): string[] {
   }
 }
 
-export function deleteUploadsForConversation(conversationId: string, ownerSub: string): void {
+export async function deleteUploadsForConversation(conversationId: string, ownerSub: string): Promise<void> {
   const db = getDb();
   const messages = db.prepare('SELECT content FROM messages WHERE conversation_id=?').all(conversationId) as { content: string }[];
   const ids = messages.flatMap(m => extractUploadIds(m.content));
@@ -244,15 +252,15 @@ export function deleteUploadsForConversation(conversationId: string, ownerSub: s
     const row = db.prepare('SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?').get(id, ownerSub) as { sha256: string; mime_type: string } | undefined;
     if (!row) continue;
     db.prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, ownerSub);
-    deleteUploadFile(row.sha256, row.mime_type);
+    await deleteUploadFile(row.sha256, row.mime_type);
   }
 }
 
-export function deleteAllUploadsForUser(ownerSub: string): void {
+export async function deleteAllUploadsForUser(ownerSub: string): Promise<void> {
   const db = getDb();
   const rows = db.prepare('SELECT id, sha256, mime_type FROM uploads WHERE owner_sub=?').all(ownerSub) as { id: string; sha256: string; mime_type: string }[];
   db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
   for (const row of rows) {
-    deleteUploadFile(row.sha256, row.mime_type);
+    await deleteUploadFile(row.sha256, row.mime_type);
   }
 }

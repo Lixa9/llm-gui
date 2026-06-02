@@ -216,4 +216,12 @@ export function applySchema(db: Db): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_sub ON sessions(sub)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS login_lockouts (
+      username TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until INTEGER NOT NULL DEFAULT 0
+    )
+  `);
 }

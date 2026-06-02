@@ -132,9 +132,6 @@ uploads: {
   },
 
   admin: {
-    users: () => get<AdminUser[]>('/api/admin/users'),
-    setRoleOverride: (sub: string, role: Role | null) =>
-      patch<void>(`/api/admin/users/${sub}`, { role_override: role }),
     prompts: () => get<SystemPrompt[]>('/api/admin/prompts'),
     automations: () => get<Automation[]>('/api/admin/automations'),
     config: () => get<ConfigFile[]>('/api/admin/config'),
