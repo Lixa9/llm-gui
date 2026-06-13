@@ -213,20 +213,23 @@ authRouter.get('/callback', async (c) => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-www-form-urlencoded',
     };
+    const bodyParams: Record<string, string> = {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+    };
+
     if (oidc.client_secret) {
       headers['Authorization'] = `Basic ${Buffer.from(`${encodeURIComponent(oidc.client_id)}:${encodeURIComponent(oidc.client_secret)}`).toString('base64')}`;
+    } else {
+      bodyParams['client_id'] = oidc.client_id;
     }
 
     const tokenRes = await fetch(endpoints.token_endpoint, {
       method: 'POST',
       headers,
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: verifier,
-        client_id: oidc.client_id,
-      }),
+      body: new URLSearchParams(bodyParams),
     });
 
     if (!tokenRes.ok) {
