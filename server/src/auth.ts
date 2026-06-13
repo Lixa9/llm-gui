@@ -203,16 +203,17 @@ authRouter.get('/callback', async (c) => {
   const oidc = cfg.oidc;
   if (!oidc) return c.redirect('/#/chat?auth_error=1');
 
-  // Exchange code for tokens
+  // Exchange code for tokens using client_secret_basic (Authorization header)
   const tokenRes = await fetch(endpoints.token_endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${Buffer.from(`${encodeURIComponent(oidc.client_id)}:${encodeURIComponent(oidc.client_secret)}`).toString('base64')}`,
+    },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: `${cfg.app.base_url}/api/auth/callback`,
-      client_id: oidc.client_id,
-      client_secret: oidc.client_secret,
       code_verifier: verifier,
     }),
   });
