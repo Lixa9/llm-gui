@@ -149,10 +149,12 @@ authRouter.get('/login', async (c) => {
 
   const oidc = cfg.oidc;
   if (!oidc) return c.html('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem"><h2>SSO unavailable</h2><p>OIDC is not configured.</p><a href="/">← Back</a></body></html>', 503);
+  
+  const redirectUri = `${cfg.app.base_url.replace(/\/$/, '')}/api/auth/callback`;
   const params = new URLSearchParams({
     client_id: oidc.client_id,
     response_type: 'code',
-    redirect_uri: `${cfg.app.base_url}/api/auth/callback`,
+    redirect_uri: redirectUri,
     scope: oidc.scopes.join(' '),
     state,
     code_challenge: challenge,
@@ -203,34 +205,57 @@ authRouter.get('/callback', async (c) => {
   const oidc = cfg.oidc;
   if (!oidc) return c.redirect('/#/chat?auth_error=1');
 
-  // Exchange code for tokens using client_secret_basic (Authorization header)
-  const tokenRes = await fetch(endpoints.token_endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': `Basic ${Buffer.from(`${encodeURIComponent(oidc.client_id)}:${encodeURIComponent(oidc.client_secret)}`).toString('base64')}`,
-    },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: `${cfg.app.base_url}/api/auth/callback`,
-      code_verifier: verifier,
-    }),
-  });
+  const redirectUri = `${cfg.app.base_url.replace(/\/$/, '')}/api/auth/callback`;
 
-  if (!tokenRes.ok) {
-    logger.error('Token exchange failed', { status: tokenRes.status });
+  // Exchange code for tokens
+  let tokens: { id_token: string; access_token: string };
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    if (oidc.client_secret) {
+      headers['Authorization'] = `Basic ${Buffer.from(`${encodeURIComponent(oidc.client_id)}:${encodeURIComponent(oidc.client_secret)}`).toString('base64')}`;
+    }
+
+    const tokenRes = await fetch(endpoints.token_endpoint, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+        client_id: oidc.client_id,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text().catch(() => '');
+      logger.error('Token exchange failed', { status: tokenRes.status, error: errText });
+      return c.redirect('/#/chat?auth_error=1');
+    }
+
+    tokens = await tokenRes.json() as { id_token: string; access_token: string };
+  } catch (e) {
+    logger.error('OIDC token exchange connection failed', { error: String(e) });
     return c.redirect('/#/chat?auth_error=1');
   }
 
-  const tokens = await tokenRes.json() as { id_token: string; access_token: string };
-
   // Verify ID token
   if (!_jwks) return c.text('JWKS not loaded', 500);
-  const { payload: idPayload } = await jwtVerify(tokens.id_token, _jwks, {
-    issuer: oidc.issuer,
-    audience: oidc.client_id,
-  });
+  
+  let idPayload;
+  try {
+    const verified = await jwtVerify(tokens.id_token, _jwks, {
+      issuer: oidc.issuer,
+      audience: oidc.client_id,
+      clockTolerance: 30, // allow 30 seconds clock drift between server and IDP
+    });
+    idPayload = verified.payload;
+  } catch (e) {
+    logger.error('ID token verification failed', { error: String(e) });
+    return c.redirect('/#/chat?auth_error=1');
+  }
 
   const sub = idPayload.sub;
   if (!sub) {
