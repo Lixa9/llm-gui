@@ -8,12 +8,32 @@ function createPreferencesStore() {
     sound_volume: '0.6',
     default_model_id: '',
     default_preset_id: '',
+    theme: '',
   });
+
+  let systemTheme = $state<'dark' | 'light'>('dark');
+
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    systemTheme = media.matches ? 'light' : 'dark';
+
+    const handler = (e: MediaQueryListEvent) => {
+      systemTheme = e.matches ? 'light' : 'dark';
+    };
+
+    try {
+      media.addEventListener('change', handler);
+    } catch {
+      // Fallback for older browsers
+      (media as any).addListener(handler);
+    }
+  }
 
   const soundEnabled = $derived(prefs.sound_enabled === 'true');
   const soundVolume = $derived(parseFloat(prefs.sound_volume ?? '0.6'));
   const defaultModelId = $derived(prefs.default_model_id ?? '');
   const defaultPresetId = $derived(prefs.default_preset_id ?? '');
+  const theme = $derived(prefs.theme === 'dark' || prefs.theme === 'light' ? prefs.theme : systemTheme);
 
   async function load() {
     try {
@@ -40,6 +60,7 @@ function createPreferencesStore() {
     get soundVolume() { return soundVolume; },
     get defaultModelId() { return defaultModelId; },
     get defaultPresetId() { return defaultPresetId; },
+    get theme() { return theme; },
     load, set,
   };
 }
