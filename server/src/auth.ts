@@ -10,7 +10,7 @@ import type { Role, SessionPayload } from './types';
 
 // JWKS cache — createRemoteJWKSet handles caching internally
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-let _discoveredEndpoints: { authorization_endpoint: string; token_endpoint: string; end_session_endpoint?: string } | null = null;
+let _discoveredEndpoints: { authorization_endpoint: string; token_endpoint: string; userinfo_endpoint?: string; end_session_endpoint?: string } | null = null;
 let _discoveredAt = 0;
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -51,15 +51,22 @@ async function discover() {
   const cfg = getConfig().oidc;
   if (!cfg) throw new Error('OIDC is not configured');
   const res = await fetch(`${cfg.issuer}/.well-known/openid-configuration`);
-  const data = await res.json() as { jwks_uri: string; authorization_endpoint: string; token_endpoint: string; end_session_endpoint?: string };
+  const data = await res.json() as { jwks_uri: string; authorization_endpoint: string; token_endpoint: string; userinfo_endpoint?: string; end_session_endpoint?: string };
   _jwks = createRemoteJWKSet(new URL(data.jwks_uri));
   _discoveredEndpoints = {
     authorization_endpoint: data.authorization_endpoint,
     token_endpoint: data.token_endpoint,
+    userinfo_endpoint: data.userinfo_endpoint,
     end_session_endpoint: data.end_session_endpoint,
   };
   _discoveredAt = Date.now();
   return _discoveredEndpoints;
+}
+
+function normalizeGroups(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === 'string' && raw.length > 0) return raw.split(',').map(s => s.trim()).filter(Boolean);
+  return [];
 }
 
 function resolveRole(groups: string[]): Role {
@@ -265,12 +272,29 @@ authRouter.get('/callback', async (c) => {
     logger.error('OIDC token missing sub claim');
     return c.redirect('/#/chat?auth_error=1');
   }
-  const email = (idPayload['email'] as string) ?? '';
-  const name = (idPayload['name'] as string) ?? (idPayload['preferred_username'] as string) ?? email;
-  const groups = (idPayload[cfg.rbac.group_claim] as string[]) ?? [];
+
+  // Fetch userinfo to get claims (like groups) that Authelia may not include in the ID token
+  let userinfo: Record<string, unknown> = {};
+  if (endpoints.userinfo_endpoint) {
+    try {
+      const uiRes = await fetch(endpoints.userinfo_endpoint, {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      if (uiRes.ok) userinfo = await uiRes.json() as Record<string, unknown>;
+    } catch (e) {
+      logger.warn('Failed to fetch userinfo', { error: String(e) });
+    }
+  }
+
+  const email = (idPayload['email'] as string) ?? (userinfo['email'] as string) ?? '';
+  const name = (idPayload['name'] as string) ?? (idPayload['preferred_username'] as string) ?? (userinfo['name'] as string) ?? email;
+  // Prefer userinfo groups claim over ID token (Authelia may only include it in userinfo)
+  const rawGroups = userinfo[cfg.rbac.group_claim] ?? idPayload[cfg.rbac.group_claim];
+  const groups = normalizeGroups(rawGroups);
 
   // Resolve role strictly from OIDC groups
   const role: Role = resolveRole(groups);
+  logger.info('oidc groups resolved', { sub, groups, role });
 
   // Upsert user
   const db = getDb();
