@@ -1,5 +1,6 @@
 <script lang="ts">
   import { authStore } from '../../stores/auth.svelte';
+  import { preferencesStore } from '../../stores/preferences.svelte';
 
   interface Props {
     currentView: string;
@@ -19,6 +20,11 @@
   function navigate(view: string) {
     onNavigate(view);
     userMenuOpen = false;
+  }
+
+  function toggleTheme() {
+    const nextTheme = preferencesStore.theme === 'dark' ? 'light' : 'dark';
+    preferencesStore.set('theme', nextTheme);
   }
 
   function closeMenu(e: MouseEvent) {
@@ -54,6 +60,14 @@
   </div>
 
   <div class="topbar-right">
+    <button class="theme-toggle-btn" onclick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">
+      {#if preferencesStore.theme === 'dark'}
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      {:else}
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      {/if}
+    </button>
+
     <div class="user-menu-wrapper">
       <button class="user-btn" onclick={(e) => { e.stopPropagation(); userMenuOpen = !userMenuOpen; }}>
         <span class="user-initial">
@@ -107,6 +121,25 @@
   .nav-btn.active { color: var(--text-primary); background: var(--bg-elevated); }
 
   .topbar-right { display: flex; align-items: center; }
+
+  .theme-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-right: 12px;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .theme-toggle-btn:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+  }
 
   .user-menu-wrapper { position: relative; }
   .user-btn {

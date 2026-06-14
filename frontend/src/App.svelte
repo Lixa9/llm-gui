@@ -65,6 +65,11 @@
       preferencesStore.load();
     }
   });
+
+  // Apply the theme from preferences globally
+  $effect(() => {
+    document.documentElement.setAttribute('data-theme', preferencesStore.theme);
+  });
 </script>
 
 {#if authStore.loading}

@@ -60,15 +60,15 @@
 
 /* --- Dark Mode --- */
 [data-theme="dark"] {
-  --color-background: #0f172a;
-  --color-surface: #1e293b;
-  --color-text: #f8fafc;
-  --color-text-muted: #94a3b8;
-  --color-border: #334155;
-  --color-primary: #3b82f6;
-  --color-primary-hover: #60a5fa;
-  --color-primary-alpha: rgba(59, 130, 246, 0.15);
-  --color-primary-shadow: rgba(59, 130, 246, 0.3);
+  --color-background: #121212;
+  --color-surface: #1e1e1e;
+  --color-text: #f3f4f6;
+  --color-text-muted: #9ca3af;
+  --color-border: #2c2c2c;
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #2563eb;
+  --color-primary-alpha: rgba(29, 78, 216, 0.15);
+  --color-primary-shadow: rgba(29, 78, 216, 0.3);
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
   --color-success-text: #34d399;
