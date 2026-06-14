@@ -6,7 +6,6 @@
   import { toast } from '../ui/Toast.svelte';
 
   let searchQuery = $state('');
-  let collapsed = $state(false);
   let noFolderDragOver = $state(false);
 
   const rootFolders = $derived(conversationsStore.folders.filter(f => f.parent_id === null));
@@ -54,67 +53,62 @@
   }
 </script>
 
-<aside class="sidebar" class:collapsed>
+<aside class="sidebar">
   <div class="sidebar-header">
     <button class="new-chat-btn" onclick={newChat}>
       <span>+</span> New Chat
     </button>
-    <button class="icon-btn" onclick={() => collapsed = !collapsed} title={collapsed ? 'Expand' : 'Collapse'}>
-      {collapsed ? '»' : '«'}
-    </button>
   </div>
 
-  {#if !collapsed}
-    <div class="sidebar-search">
-      <input
-        class="search-input"
-        type="search"
-        placeholder="Search conversations..."
-        bind:value={searchQuery}
-        oninput={handleSearchInput}
-      />
-    </div>
+  <div class="sidebar-search">
+    <input
+      class="search-input"
+      type="search"
+      placeholder="Search conversations..."
+      bind:value={searchQuery}
+      oninput={handleSearchInput}
+    />
+  </div>
 
-    <div class="sidebar-body">
-      {#if isSearching}
-        {#if conversationsStore.searching}
-          <div class="sidebar-hint">Searching…</div>
-        {:else if conversationsStore.searchResults.length === 0}
-          <div class="sidebar-hint">No results</div>
-        {:else}
-          {#each conversationsStore.searchResults as conv (conv.id)}
-            <SidebarConversation conversation={conv} />
-          {/each}
-        {/if}
+  <div class="sidebar-body">
+    {#if isSearching}
+      {#if conversationsStore.searching}
+        <div class="sidebar-hint">Searching…</div>
+      {:else if conversationsStore.searchResults.length === 0}
+        <div class="sidebar-hint">No results</div>
       {:else}
-        {#each rootFolders as folder (folder.id)}
-          <SidebarFolder {folder} />
-        {/each}
-        {#each unfolderedConvs as conv (conv.id)}
+        {#each conversationsStore.searchResults as conv (conv.id)}
           <SidebarConversation conversation={conv} />
         {/each}
-        {#if conversationsStore.sorted.length === 0}
-          <div class="sidebar-hint">No conversations yet</div>
-        {/if}
       {/if}
-      {#if conversationsStore.draggingConvId !== null}
-        <div
-          class="no-folder-drop"
-          class:drag-over={noFolderDragOver}
-          role="region"
-          aria-label="Drop here to remove from folder"
-          ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
-          ondragleave={() => { noFolderDragOver = false; }}
-          ondrop={onNoFolderDrop}
-        >No folder</div>
+    {:else}
+      {#each rootFolders as folder (folder.id)}
+        <SidebarFolder {folder} />
+      {/each}
+      {#each unfolderedConvs as conv (conv.id)}
+        <SidebarConversation conversation={conv} />
+      {/each}
+      {#if conversationsStore.sorted.length === 0}
+        <div class="sidebar-hint">No conversations yet</div>
       {/if}
-    </div>
+    {/if}
+    {#if conversationsStore.draggingConvId !== null}
+      <div
+        class="no-folder-drop"
+        class:drag-over={noFolderDragOver}
+        role="region"
+        aria-label="Drop here to remove from folder"
+        ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
+        ondragleave={() => { noFolderDragOver = false; }}
+        ondrop={onNoFolderDrop}
+      >No folder</div>
+    {/if}
+  </div>
 
-    <div class="sidebar-footer">
-      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
-      <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
-    </div>
-  {/if}
+  <div class="sidebar-footer">
+    <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
+    <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
+  </div>
 </aside>
 
 <style>
@@ -129,7 +123,6 @@
     transition: width 0.2s, min-width 0.2s;
     flex-shrink: 0;
   }
-  .sidebar.collapsed { width: 40px; min-width: 40px; }
 
   .sidebar-header {
     display: flex;
@@ -155,18 +148,6 @@
     transition: background 0.1s;
   }
   .new-chat-btn:hover { background: var(--accent-hover); }
-
-  .icon-btn {
-    padding: 6px 7px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    font-size: 13px;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-  .icon-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
   .sidebar-search { padding: 0 10px 8px; }
   .search-input {

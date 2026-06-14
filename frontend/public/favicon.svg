@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c6af7" />
+      <stop offset="100%" stop-color="#9d8eff" />
+    </linearGradient>
+  </defs>
+  <!-- Sleek chatbot bubble -->
+  <rect x="3" y="3" width="26" height="20" rx="8" fill="url(#grad)" />
+  <path d="M10,23 L6,28 C5.5,28.6 4.5,28.2 4.5,27.3 L4.5,23 Z" fill="url(#grad)" />
+  <!-- Spark/AI design inside -->
+  <path d="M16,7 L17.5,11.5 L22,13 L17.5,14.5 L16,19 L14.5,14.5 L10,13 L14.5,11.5 Z" fill="#ffffff" />
+</svg>
