@@ -39,58 +39,36 @@
   onclick={handleBackdrop}
 >
   {#if open}
-    <div class="modal-content">
-      {#if title}
-        <div class="modal-header">
-          <h3 class="modal-title">{title}</h3>
-          <button class="modal-close" onclick={onclose} aria-label="Close">✕</button>
-        </div>
-      {/if}
-      <div class="modal-body">
-        {@render children()}
+    {#if title}
+      <div class="modal-header">
+        <span>{title}</span>
+        <button class="modal-close" onclick={onclose} aria-label="Close">✕</button>
       </div>
+    {/if}
+    <div class="modal-body">
+      {@render children()}
     </div>
   {/if}
 </dialog>
 
 <style>
-  .modal {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    color: var(--text-primary);
-    padding: 0;
-    width: 100%;
-    box-shadow: var(--shadow);
-    animation: modalIn 0.15s ease;
-  }
-  .modal::backdrop {
-    background: rgba(0, 0, 0, 0.6);
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.65);
     backdrop-filter: blur(2px);
   }
 
-  @keyframes modalIn {
-    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
-    to { opacity: 1; transform: none; }
+  dialog[open] {
+    animation: modalIn 0.2s ease-out;
   }
 
-  .modal-content { padding: 20px; }
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
+  @keyframes modalIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
-  .modal-title { font-size: 15px; font-weight: 600; }
-  .modal-close {
-    color: var(--text-muted);
-    font-size: 14px;
-    padding: 4px 6px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    background: transparent;
-    border: none;
-  }
-  .modal-close:hover { color: var(--text-primary); background: var(--bg-hover); }
-  .modal-body { display: flex; flex-direction: column; gap: 12px; }
 </style>
