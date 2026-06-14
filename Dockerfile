@@ -1,6 +1,7 @@
 # Stage 1: Build Svelte frontend
 FROM node:24-alpine AS build-frontend
 WORKDIR /app
+RUN npm install -g npm@latest
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
@@ -9,13 +10,14 @@ RUN npm run build
 # Stage 2: Build server (bundle TS)
 FROM node:24-alpine AS build-server
 WORKDIR /app
+RUN npm install -g npm@latest
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci
 COPY server/ .
 RUN node_modules/.bin/esbuild src/index.ts \
       --bundle --platform=node --target=node24 \
       --packages=external --outfile=dist/index.js
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 # Stage 3: Clean runtime image
 FROM node:24-alpine
