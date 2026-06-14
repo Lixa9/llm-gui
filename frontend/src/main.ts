@@ -1,3 +1,4 @@
+import './design-system-1.css';
 import './app.css';
 import 'highlight.js/styles/github-dark.css';
 import App from './App.svelte';

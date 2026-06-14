@@ -13,41 +13,25 @@
     onclick={() => open = !open}
     aria-expanded={open}
   >
-    <span class="accordion-arrow">{open ? '▾' : '▸'}</span>
     {@render header()}
+    <svg 
+      class="accordion-chevron" 
+      class:open 
+      width="16" 
+      height="16" 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      stroke="currentColor" 
+      stroke-width="2" 
+      stroke-linecap="round" 
+      stroke-linejoin="round"
+    >
+      <polyline points="6 9 12 15 18 9"></polyline>
+    </svg>
   </button>
-  {#if open}
-    <div class="accordion-body">
+  <div class="accordion-content-wrapper" style="height: {open ? 'auto' : '0px'}">
+    <div class="accordion-content">
       {@render children()}
     </div>
-  {/if}
+  </div>
 </div>
-
-<style>
-  .accordion { width: 100%; }
-  .accordion-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 6px 8px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-family: var(--font-mono);
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.1s;
-  }
-  .accordion-header:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .accordion-arrow { flex-shrink: 0; font-size: 10px; width: 10px; }
-  .accordion-body {
-    padding: 8px;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  }
-</style>

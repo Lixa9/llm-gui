@@ -20,7 +20,6 @@
   {id}
   bind:value
   {disabled}
-  class="select"
   onchange={handleChange}
 >
   {#if placeholder}
@@ -30,22 +29,3 @@
     <option value={opt.value}>{opt.label}</option>
   {/each}
 </select>
-
-<style>
-  .select {
-    width: 100%;
-    padding: 6px 10px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 13px;
-    outline: none;
-    cursor: pointer;
-    transition: border-color 0.15s;
-    appearance: auto;
-  }
-  .select:focus { border-color: var(--accent); }
-  .select:disabled { opacity: 0.5; }
-  option { background: var(--bg-elevated); }
-</style>
