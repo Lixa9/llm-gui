@@ -9,6 +9,7 @@ const ALLOWED_PREF_KEYS = new Set([
   'default_model_id',
   'default_system_prompt',
   'default_preset_id',
+  'theme',
 ]);
 const MAX_PREF_VALUE_LEN = 4096;
 
@@ -27,6 +28,7 @@ preferencesRouter.get('/', (c) => {
     sound_volume: '0.6',
     default_model_id: '',
     default_system_prompt: '',
+    theme: '',
   };
   for (const row of rows) {
     prefs[row.key] = row.value;
