@@ -143,6 +143,7 @@ automationsRouter.get('/:id/runs', (c) => {
 
 // Scheduler
 const scheduledTasks = new Map<string, NodeJS.Timeout>();
+const runningAutomations = new Set<string>();
 
 function msUntilNext(interval: number, unit: string): number {
   const n = Math.max(1, Math.floor(interval));
@@ -184,6 +185,8 @@ function scheduleAutomation(auto: ReturnType<typeof serializeAutomation>) {
   if (!['hours', 'days', 'weeks'].includes(def.unit) || !Number.isFinite(n)) return;
 
   const fireAndReschedule = () => {
+    // Guard against stale timers that fired after removeSchedule() cleared the entry
+    if (!scheduledTasks.has(auto.id)) return;
     runAutomation(auto, 'scheduled').catch(e => logger.error('Automation run failed', { id: auto.id, error: String(e) }));
     const timer = setTimeout(fireAndReschedule, msUntilNext(def.interval, def.unit));
     scheduledTasks.set(auto.id, timer);
@@ -221,16 +224,29 @@ function makeConversationTitle(autoName: string): string {
 }
 
 async function runAutomation(auto: ReturnType<typeof serializeAutomation>, source: 'scheduled' | 'manual'): Promise<AutomationRunRow> {
+  if (runningAutomations.has(auto.id)) {
+    logger.warn('automation already running, skipping concurrent trigger', { automation_id: auto.id, source });
+    const db = getDb();
+    const existing = db.prepare(
+      "SELECT * FROM automation_runs WHERE automation_id=? AND status='running' ORDER BY started_at DESC LIMIT 1"
+    ).get(auto.id) as AutomationRunRow | undefined;
+    if (existing) return existing;
+  }
+  runningAutomations.add(auto.id);
+
   const db = getDb();
   const runId = generateId();
 
   logger.info('automation run started', { automation_id: auto.id, name: auto.name, source });
 
+  const clearRunning = () => runningAutomations.delete(auto.id);
+
   if (auto.owner_sub === null) {
     // System automation: no pre-created conversation; fan-out happens in executeAutomationRun
     db.prepare('INSERT INTO automation_runs (id, automation_id, status) VALUES (?, ?, ?)')
       .run(runId, auto.id, 'running');
-    executeSystemAutomationRun(auto, runId).catch(e => {
+    executeSystemAutomationRun(auto, runId).then(clearRunning).catch(e => {
+      clearRunning();
       db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
       logger.error('automation run error', { automation_id: auto.id, run_id: runId, error: String(e) });
     });
@@ -242,7 +258,8 @@ async function runAutomation(auto: ReturnType<typeof serializeAutomation>, sourc
       .run(convId, auto.owner_sub, makeConversationTitle(auto.name), model);
     db.prepare('INSERT INTO automation_runs (id, automation_id, conversation_id, status) VALUES (?, ?, ?, ?)')
       .run(runId, auto.id, convId, 'running');
-    executePersonalAutomationRun(auto, convId, runId).catch(e => {
+    executePersonalAutomationRun(auto, convId, runId).then(clearRunning).catch(e => {
+      clearRunning();
       db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(e), runId);
       logger.error('automation run error', { automation_id: auto.id, run_id: runId, error: String(e) });
     });

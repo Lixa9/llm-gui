@@ -276,7 +276,11 @@ relayRouter.post('/', async (c) => {
   let fullText = '';
   const toolAccumulators = new Map<number, ToolCallAccumulator>();
   let assistantMsgId = generateId();
-  let isFirstExchange = !allMessages.some(m => m.role === 'user');
+  const existingUserMsgCount = (db.prepare(
+    "SELECT COUNT(*) as n FROM messages WHERE conversation_id=? AND role='user'"
+  ).get(convId) as { n: number }).n;
+  // The user message was just inserted above, so count=1 means this is the first exchange
+  let isFirstExchange = existingUserMsgCount === 1;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -459,7 +463,7 @@ async function generateTitle(
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
     const title = data.choices[0]?.message?.content?.trim().slice(0, 80);
     if (title) {
-      db.prepare('UPDATE conversations SET title=?, title_auto=1 WHERE id=?').run(title, convId);
+      db.prepare('UPDATE conversations SET title=?, title_auto=1 WHERE id=? AND title IS NULL').run(title, convId);
     }
     return title ?? null;
   } catch {

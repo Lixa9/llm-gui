@@ -2,11 +2,23 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
 import { timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 import type { Context, Next } from 'hono';
 import { getConfig } from './config';
 import { getDb, generateId } from './db/index';
 import { logger } from './logger';
 import type { Role, SessionPayload } from './types';
+
+const sessionPayloadSchema = z.object({
+  sub: z.string(),
+  email: z.string(),
+  name: z.string(),
+  role: z.enum(['admin', 'user']),
+  method: z.enum(['oidc', 'local']),
+  jti: z.string(),
+  exp: z.number(),
+  iat: z.number(),
+});
 
 // JWKS cache — createRemoteJWKSet handles caching internally
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -118,7 +130,9 @@ async function verifySession(token: string): Promise<SessionPayload | null> {
     const db = getDb();
     const row = db.prepare('SELECT id FROM sessions WHERE id=? AND expires_at>?').get(jti, Date.now());
     if (!row) return null;
-    return payload as unknown as SessionPayload;
+    const result = sessionPayloadSchema.safeParse(payload);
+    if (!result.success) return null;
+    return result.data as SessionPayload;
   } catch {
     return null;
   }
