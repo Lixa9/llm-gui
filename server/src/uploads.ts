@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { join, dirname } from 'path';
 import { writeFile, readFile, mkdir, rm, access } from 'fs/promises';
 import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
+import { getDb, generateId, runTransaction } from './db/index';
 import { getConfig } from './config';
 import { checkRateLimit } from './ratelimit';
 import { logger } from './logger';
@@ -214,12 +214,9 @@ uploadsRouter.get('/:id', async (c) => {
   });
 });
 
-async function deleteUploadFile(sha256: string, mimeType: string): Promise<void> {
+async function deleteUploadFiles(sha256: string, mimeType: string): Promise<void> {
   const uploadsDir = getUploadsDir();
   const ext = MIME_TO_EXT[mimeType] ?? '';
-  const db = getDb();
-  const remaining = db.prepare('SELECT COUNT(*) as n FROM uploads WHERE sha256=?').get(sha256) as { n: number };
-  if (remaining.n > 0) return;
   const filePath = join(uploadsDir, `${sha256}${ext}`);
   if (await exists(filePath)) await rm(filePath, { force: true });
   const pdfPagesDir = join(uploadsDir, 'pdf-pages', sha256);
@@ -248,19 +245,39 @@ export async function deleteUploadsForConversation(conversationId: string, owner
   const db = getDb();
   const messages = db.prepare('SELECT content FROM messages WHERE conversation_id=?').all(conversationId) as { content: string }[];
   const ids = messages.flatMap(m => extractUploadIds(m.content));
-  for (const id of ids) {
-    const row = db.prepare('SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?').get(id, ownerSub) as { sha256: string; mime_type: string } | undefined;
-    if (!row) continue;
-    db.prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, ownerSub);
-    await deleteUploadFile(row.sha256, row.mime_type);
+
+  // Collect which SHA256s reach zero references inside a transaction so no
+  // concurrent upload can insert a new row between the DELETE and the COUNT.
+  const toDelete: { sha256: string; mime_type: string }[] = [];
+  runTransaction(() => {
+    for (const id of ids) {
+      const row = db.prepare('SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?').get(id, ownerSub) as { sha256: string; mime_type: string } | undefined;
+      if (!row) continue;
+      db.prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, ownerSub);
+      const remaining = (db.prepare('SELECT COUNT(*) as n FROM uploads WHERE sha256=?').get(row.sha256) as { n: number }).n;
+      if (remaining === 0) toDelete.push(row);
+    }
+  });
+
+  for (const row of toDelete) {
+    await deleteUploadFiles(row.sha256, row.mime_type);
   }
 }
 
 export async function deleteAllUploadsForUser(ownerSub: string): Promise<void> {
   const db = getDb();
   const rows = db.prepare('SELECT id, sha256, mime_type FROM uploads WHERE owner_sub=?').all(ownerSub) as { id: string; sha256: string; mime_type: string }[];
-  db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
-  for (const row of rows) {
-    await deleteUploadFile(row.sha256, row.mime_type);
+
+  const toDelete: { sha256: string; mime_type: string }[] = [];
+  runTransaction(() => {
+    db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
+    for (const row of rows) {
+      const remaining = (db.prepare('SELECT COUNT(*) as n FROM uploads WHERE sha256=?').get(row.sha256) as { n: number }).n;
+      if (remaining === 0) toDelete.push({ sha256: row.sha256, mime_type: row.mime_type });
+    }
+  });
+
+  for (const row of toDelete) {
+    await deleteUploadFiles(row.sha256, row.mime_type);
   }
 }
