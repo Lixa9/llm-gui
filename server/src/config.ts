@@ -13,7 +13,7 @@ const configSchema = z.object({
   app: z.object({
     name: z.string().default('Chat'),
     base_url: z.string().default('http://localhost:3000'),
-    secret_key: z.string().min(1),
+    secret_key: z.string().default(''),
   }),
   openai: z.object({
     base_url: z.string().default(''),
@@ -54,7 +54,6 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     'app:',
     '  name: "Chat"',
     '  base_url: "http://localhost:3000"',
-    '  secret_key: "${SECRET_KEY}"',
     '',
     'openai:',
     '  base_url: "${OPENAI_BASE_URL}"',
@@ -199,6 +198,12 @@ export function loadConfig(): AppConfig {
 export function getConfig(): AppConfig {
   if (!_config) throw new Error('Config not loaded');
   return _config;
+}
+
+export function updateConfigSecretKey(key: string): void {
+  if (_config) {
+    _config.app.secret_key = key;
+  }
 }
 
 export function reloadConfig(): void {
