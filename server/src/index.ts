@@ -98,8 +98,18 @@ app.route('/api/automations', automationsRouter);
 app.route('/api/admin', adminRouter);
 app.route('/api/uploads', uploadsRouter);
 
-// Health check — minimal response; does not probe internal services
+// Health check — minimal, no dependency probing (used as liveness probe)
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+// Readiness check — verifies DB is accessible (used as readiness + startup probe)
+app.get('/ready', (c) => {
+  try {
+    getDb().prepare('SELECT 1').get();
+    return c.json({ status: 'ok' });
+  } catch {
+    return c.json({ status: 'error' }, 503);
+  }
+});
 
 // CSP for all non-API routes (API routes serve JSON, not HTML)
 app.use('*', async (c, next) => {
@@ -175,8 +185,19 @@ if (isLocalAuthEnabled()) {
   );
 }
 
-// Graceful shutdown
+// Graceful shutdown — drain in-flight connections within K8s terminationGracePeriodSeconds
+const activeConnections = new Set<import('net').Socket>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(server as any).on?.('connection', (sock: import('net').Socket) => {
+  activeConnections.add(sock);
+  sock.once('close', () => activeConnections.delete(sock));
+});
+
 process.on('SIGTERM', () => {
-  server.close();
-  process.exit(0);
+  server.close(() => process.exit(0));
+  // Force-close any remaining connections after 25 s (inside the 30 s K8s grace window)
+  setTimeout(() => {
+    for (const sock of activeConnections) sock.destroy();
+    process.exit(0);
+  }, 25_000).unref();
 });

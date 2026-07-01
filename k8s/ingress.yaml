@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llm-gui
+  labels:
+    app: llm-gui
+  annotations:
+    # Remove or replace if not using cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"    # allow long SSE streams
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"       # required for SSE streaming
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - chat.example.com   # replace with your hostname
+      secretName: llm-gui-tls
+  rules:
+    - host: chat.example.com   # replace with your hostname (must match BASE_URL in deployment.yaml)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: llm-gui
+                port:
+                  number: 80
