@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gui
+  labels:
+    app: llm-gui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-gui
+  template:
+    metadata:
+      labels:
+        app: llm-gui
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000   # node user in node:alpine
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: llm-gui
+          image: ghcr.io/lixa9/llm-gui:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: llm-gui-secrets
+          env:
+            # Injected into config.yaml via ${BASE_URL} — must match your Ingress host
+            - name: BASE_URL
+              value: "https://chat.example.com"
+            # Injected into config.yaml via ${OPENAI_BASE_URL}
+            - name: OPENAI_BASE_URL
+              value: "https://api.openai.com/v1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            failureThreshold: 12  # 12 × 5 s = 60 s for first-boot DB schema init
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: llm-gui-data
+        - name: config
+          configMap:
+            name: llm-gui-config
