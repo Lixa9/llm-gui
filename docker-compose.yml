@@ -9,7 +9,6 @@ services:
       - ./data:/data
       - ./config:/app/config
     environment:
-      SECRET_KEY: ${SECRET_KEY}
       # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
       # OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
