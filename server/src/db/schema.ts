@@ -224,19 +224,4 @@ export function applySchema(db: Db): void {
       locked_until INTEGER NOT NULL DEFAULT 0
     )
   `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS system_secrets (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS active_instances (
-      id TEXT PRIMARY KEY,
-      last_heartbeat INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    )
-  `);
 }
