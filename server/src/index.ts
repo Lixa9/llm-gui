@@ -3,8 +3,8 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
 import { readFile } from 'fs/promises';
-import { loadConfig, reloadConfig, getConfig, updateConfigSecretKey } from './config';
-import { openDatabase, initDatabaseSecret } from './db/index';
+import { loadConfig, reloadConfig, getConfig } from './config';
+import { openDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
 import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth';
 import { relayRouter } from './relay';
@@ -23,6 +23,33 @@ import { sweepBuckets } from './ratelimit';
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
 
+// Startup checks
+const KNOWN_WEAK_SECRETS = new Set([
+  'change-me-to-a-random-32-char-string',
+  'changeme',
+  'secret',
+  'mysecret',
+  'supersecret',
+  'password',
+]);
+
+if (!process.env.SECRET_KEY?.trim()) {
+  const generated = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex');
+  process.env.SECRET_KEY = generated;
+  process.stderr.write(
+    'WARNING: SECRET_KEY not set — using ephemeral generated key. Sessions will not persist across restarts.\n' +
+    `  Set SECRET_KEY=${generated} in your environment to make sessions persistent.\n`
+  );
+} else if (
+  process.env.SECRET_KEY.length < 32 ||
+  KNOWN_WEAK_SECRETS.has(process.env.SECRET_KEY.trim().toLowerCase())
+) {
+  process.stderr.write(
+    'FATAL: SECRET_KEY is too short or a known default. Set it to a random string of at least 32 characters.\n'
+  );
+  process.exit(1);
+}
+
 // Load config
 try {
   loadConfig();
@@ -35,11 +62,6 @@ try {
 // Open database
 const db = openDatabase(getConfig().database.path);
 logger.info('Database opened', { path: getConfig().database.path });
-
-// Initialize database-backed secret key
-const dbSecret = initDatabaseSecret(db);
-process.env.SECRET_KEY = dbSecret;
-updateConfigSecretKey(dbSecret);
 
 // Reconcile YAML
 reconcileYaml();

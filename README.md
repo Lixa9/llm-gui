@@ -110,6 +110,7 @@ services:
       - ./data:/data
       - ./config:/app/config
     environment:
+      SECRET_KEY: change-me-to-a-random-32-char-string
       # Local admin account (admin/admin) — for testing only, disabled by default
       # LOCAL_AUTH: "true"
       # Only needed if the upstream API requires authentication
@@ -135,6 +136,7 @@ services:
 app:
   name: "Chat"
   base_url: "http://localhost:3000"
+  secret_key: "${SECRET_KEY}"
 
 openai:
   base_url: "http://192.168.1.100:4000/v1"  # your OpenAI-compatible API address
@@ -268,6 +270,7 @@ Open [http://localhost:3000](http://localhost:3000). Log in with your OIDC crede
 
 | Variable | Required | Description |
 |---|---|---|
+| `SECRET_KEY` | Yes | Signs session JWTs. Any random string ≥ 32 characters. If unset, an ephemeral key is generated and sessions don't survive restarts. |
 | `LOCAL_AUTH` | No | Set to `true` to enable the local admin account (`admin`/`admin`). Disabled by default. Intended for testing when no OIDC provider is available. |
 | `OIDC_CLIENT_SECRET` | No | Required only if `config.yaml` references `${OIDC_CLIENT_SECRET}`. |
 | `OPENAI_API_KEY` | No | Sent as `Authorization: Bearer` to the upstream API. Required only if your API endpoint has auth enabled. |
