@@ -69,7 +69,7 @@ Other automation features:
 
 ## Design choices
 
-**Pure relay.** The server does no inference, no embeddings, no RAG, no tool execution. It forwards requests to the configured OpenAI-compatible endpoint, streams the response to the browser, and saves the conversation to SQLite. The upstream API owns everything intelligence-related.
+**Pure relay.** The server does no inference, no embeddings, no RAG, and **no tool execution**. All intelligence—including agent reasoning loops and tool calling—lives entirely upstream (e.g. via vLLM, Ollama, or an external agent gateway). The application acts as a pure visual relay, displaying streaming reasoning processes, tool execution logs, and text responses directly to the client without running any actions locally.
 
 **Single container.** The Svelte SPA and the Node.js server are bundled together. SQLite lives in a mounted volume — no separate database container needed.
 

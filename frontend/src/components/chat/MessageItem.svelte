@@ -3,7 +3,6 @@
   import type { PendingMessage } from '../../stores/chat.svelte';
   import MessageContent from './MessageContent.svelte';
   import MessageActions from './MessageActions.svelte';
-  import ToolCallAccordion from './ToolCallAccordion.svelte';
   import StreamingCursor from './StreamingCursor.svelte';
   import Badge from '../ui/Badge.svelte';
   import { formatRelativeDate } from '$lib/utils';
@@ -24,15 +23,7 @@
 
   const isFullMessage = $derived('id' in message && !isPending);
 
-  const showToolCalls = $derived.by(() => {
-    if (!('tool_calls' in message) || !message.tool_calls?.length) return false;
-    if (isPending) return true;
-    const fullMsg = message as Message;
-    const model = fullMsg.model;
-    if (!model) return true;
-    const modelInfo = modelsStore.models.find(m => m.id === model);
-    return modelInfo?.show_tool_calls ?? true;
-  });
+
 
   const content = $derived(
     isPending
@@ -84,15 +75,7 @@
       {/if}
     </div>
 
-    {#if showToolCalls && message.tool_calls?.length}
-      <div class="tool-calls">
-        {#each message.tool_calls as tc (tc.index)}
-          <ToolCallAccordion
-            toolCall={tc}
-          />
-        {/each}
-      </div>
-    {/if}
+
 
     <MessageContent
       role={message.role}
@@ -160,5 +143,4 @@
   .msg-role { font-size: 13px; font-weight: 600; }
   .msg-time { font-size: 11px; color: var(--text-muted); }
 
-  .tool-calls { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
 </style>
