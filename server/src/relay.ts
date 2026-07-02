@@ -285,6 +285,8 @@ relayRouter.post('/', async (c) => {
   const stream = new ReadableStream({
     async start(controller) {
       let upstreamRes: Response | null = null;
+      let promptTokens: number | null = null;
+      let completionTokens: number | null = null;
       try {
         upstreamRes = await fetch(`${cfg.openai.base_url}/chat/completions`, {
           method: 'POST',
@@ -296,6 +298,7 @@ relayRouter.post('/', async (c) => {
             model: body.model,
             messages: openaiMessages,
             stream: true,
+            stream_options: { include_usage: true },
             ...(contextMode === 'session_only' ? { session_id: convId } : {}),
           }),
           signal: c.req.raw.signal,
@@ -340,14 +343,14 @@ relayRouter.post('/', async (c) => {
                   : null;
                 const assistantContent = JSON.stringify([{ type: 'text', text: fullText }]);
                 db.prepare(
-                  'INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, model, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-                ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, toolCallsJson, body.model, 'done');
+                  'INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, toolCallsJson, body.model, promptTokens, completionTokens, 'done');
 
-                controller.enqueue(sse({ type: 'done' }));
+                controller.enqueue(sse({ type: 'done', tokens_in: promptTokens, tokens_out: completionTokens }));
 
                 // Auto-title
                 if (isFirstExchange && cfg.conversation.auto_title) {
-                  generateTitle(convId!, body.model, cfg, db).then(title => {
+                  generateTitle(convId!, body.model, cfg, db, userText, fullText).then(title => {
                     if (title) {
                       controller.enqueue(sse({ type: 'title', title }));
                     }
@@ -360,13 +363,23 @@ relayRouter.post('/', async (c) => {
 
               try {
                 const parsed = JSON.parse(dataStr) as {
-                  choices: Array<{
-                    delta: {
+                  choices?: Array<{
+                    delta?: {
                       content?: string;
                       tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
                     };
                   }>;
+                  usage?: {
+                    prompt_tokens: number;
+                    completion_tokens: number;
+                  };
                 };
+
+                if (parsed.usage) {
+                  promptTokens = parsed.usage.prompt_tokens;
+                  completionTokens = parsed.usage.completion_tokens;
+                }
+
                 const delta = parsed.choices?.[0]?.delta;
                 if (!delta) continue;
 
@@ -400,8 +413,8 @@ relayRouter.post('/', async (c) => {
           if (fullText) {
             const partialContent = JSON.stringify([{ type: 'text', text: fullText }]);
             db.prepare(
-              'INSERT INTO messages (id, conversation_id, role, content, content_text, model, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-            ).run(assistantMsgId, convId, 'assistant', partialContent, fullText, body.model, 'aborted');
+              'INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).run(assistantMsgId, convId, 'assistant', partialContent, fullText, body.model, promptTokens, completionTokens, 'aborted');
           }
         } else {
           controller.enqueue(sse({ type: 'error', message: (e as Error).message }));
@@ -435,13 +448,11 @@ async function generateTitle(
   model: string,
   cfg: ReturnType<typeof getConfig>,
   db: ReturnType<typeof getDb>,
+  userPrompt: string,
+  assistantResponse: string,
 ): Promise<string | null> {
   try {
-    const msgs = db.prepare(
-      "SELECT content_text FROM messages WHERE conversation_id=? AND role IN ('user','assistant') ORDER BY timestamp LIMIT 4"
-    ).all(convId) as { content_text: string }[];
-
-    const context = msgs.map(m => m.content_text).join('\n\n').slice(0, 2000);
+    const context = `${userPrompt}\n\n${assistantResponse}`.slice(0, 2000);
     const titleModel = cfg.conversation.auto_title_model ?? model;
 
     const res = await fetch(`${cfg.openai.base_url}/chat/completions`, {
