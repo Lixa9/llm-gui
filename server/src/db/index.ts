@@ -41,6 +41,11 @@ export class Db {
     if (!s) { s = this.inner.prepare(sql); this.stmtCache.set(sql, s); }
     return new Stmt(s);
   }
+
+  close(): void {
+    this.stmtCache.clear();
+    this.inner.close();
+  }
 }
 
 let _db: Db | null = null;
@@ -58,6 +63,14 @@ export function openDatabase(path: string): Db {
 
   _db = db;
   return db;
+}
+
+export function closeDatabase(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+    logger.info('Database closed cleanly');
+  }
 }
 
 export function getDb(): Db {
@@ -96,7 +109,7 @@ export function runTransaction<T>(fn: () => T): T {
   }
 }
 
-export function initDatabaseSecret(db: Db): string {
+export function initDatabaseSecret(db: Db): { secretKey: string; cleanup: () => void } {
   const instanceId = crypto.randomUUID();
   const heartbeatThreshold = 30000; // 30 seconds
   const heartbeatInterval = 10000; // 10 seconds
@@ -162,15 +175,16 @@ export function initDatabaseSecret(db: Db): string {
   }, heartbeatInterval);
   timer.unref();
 
-  // Cleanup on exit
+  // Cleanup function to be called on graceful shutdown
   const cleanup = () => {
+    clearInterval(timer);
     try {
       db.prepare('DELETE FROM active_instances WHERE id = ?').run(instanceId);
-    } catch {}
+      logger.info('Deregistered instance from active_instances');
+    } catch (e) {
+      logger.error('Failed to deregister instance from active_instances', { error: String(e) });
+    }
   };
-  process.on('exit', cleanup);
-  process.on('SIGINT', () => { cleanup(); process.exit(0); });
-  process.on('SIGTERM', () => { cleanup(); process.exit(0); });
 
-  return secretKey;
+  return { secretKey, cleanup };
 }

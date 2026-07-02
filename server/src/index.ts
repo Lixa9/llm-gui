@@ -4,7 +4,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
 import { readFile } from 'fs/promises';
 import { loadConfig, reloadConfig, getConfig, updateConfigSecretKey } from './config';
-import { openDatabase, initDatabaseSecret } from './db/index';
+import { openDatabase, initDatabaseSecret, closeDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
 import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth';
 import { relayRouter } from './relay';
@@ -14,7 +14,7 @@ import { modelsRouter } from './models';
 import { promptsRouter } from './prompts';
 import { presetsRouter } from './presets';
 import { preferencesRouter } from './preferences';
-import { automationsRouter, initScheduler } from './automations';
+import { automationsRouter, initScheduler, stopScheduler } from './automations';
 import { adminRouter } from './admin';
 import { uploadsRouter } from './uploads';
 import { logger } from './logger';
@@ -37,7 +37,7 @@ const db = openDatabase(getConfig().database.path);
 logger.info('Database opened', { path: getConfig().database.path });
 
 // Initialize database-backed secret key
-const dbSecret = initDatabaseSecret(db);
+const { secretKey: dbSecret, cleanup: dbSecretCleanup } = initDatabaseSecret(db);
 process.env.SECRET_KEY = dbSecret;
 updateConfigSecretKey(dbSecret);
 
@@ -98,8 +98,15 @@ app.route('/api/automations', automationsRouter);
 app.route('/api/admin', adminRouter);
 app.route('/api/uploads', uploadsRouter);
 
+let isShuttingDown = false;
+
 // Health check — minimal response; does not probe internal services
-app.get('/health', (c) => c.json({ status: 'ok' }));
+app.get('/health', (c) => {
+  if (isShuttingDown) {
+    return c.json({ status: 'shutting_down' }, 503);
+  }
+  return c.json({ status: 'ok' });
+});
 
 // CSP for all non-API routes (API routes serve JSON, not HTML)
 app.use('*', async (c, next) => {
@@ -127,10 +134,11 @@ initScheduler();
 
 // Periodic backend connectivity warning
 const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+let backendCheckInterval: NodeJS.Timeout | null = null;
 
 function startBackendHealthCheck() {
   if (!getConfig().openai.base_url) return;
-  setInterval(async () => {
+  backendCheckInterval = setInterval(async () => {
     const cfg = getConfig();
     if (!cfg.openai.base_url) return;
     try {
@@ -152,11 +160,11 @@ startBackendHealthCheck();
 
 // Purge expired sessions at startup and every hour
 purgeExpiredSessions();
-setInterval(purgeExpiredSessions, 60 * 60 * 1000);
+const purgeInterval = setInterval(purgeExpiredSessions, 60 * 60 * 1000);
 
 // Sweep rate limit buckets every 5 minutes
 sweepBuckets();
-setInterval(sweepBuckets, 5 * 60 * 1000);
+const sweepInterval = setInterval(sweepBuckets, 5 * 60 * 1000);
 
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);
@@ -175,8 +183,59 @@ if (isLocalAuthEnabled()) {
   );
 }
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  server.close();
-  process.exit(0);
-});
+// Graceful shutdown handling
+let shutdownInProgress = false;
+
+function handleShutdown(signal: string) {
+  if (shutdownInProgress) return;
+  shutdownInProgress = true;
+  isShuttingDown = true;
+  logger.info(`Received ${signal}. Starting graceful shutdown...`);
+
+  // Stop accepting new connections
+  server.close((err) => {
+    if (err) {
+      logger.error('Error closing HTTP server', { error: String(err) });
+    } else {
+      logger.info('HTTP server closed');
+    }
+  });
+
+  // Force close remaining active connections after timeout
+  const forceCloseTimeout = setTimeout(() => {
+    logger.warn('Graceful shutdown timeout reached. Force closing connections...');
+    const s = server as any;
+    if (typeof s.closeAllConnections === 'function') {
+      s.closeAllConnections();
+    }
+  }, 10000);
+  forceCloseTimeout.unref();
+
+  // Clean up intervals and schedulers
+  if (backendCheckInterval) clearInterval(backendCheckInterval);
+  clearInterval(purgeInterval);
+  clearInterval(sweepInterval);
+  stopScheduler();
+
+  // Deregister db instance and close database
+  try {
+    dbSecretCleanup();
+  } catch (e) {
+    logger.error('Error during database secret cleanup', { error: String(e) });
+  }
+
+  try {
+    closeDatabase();
+  } catch (e) {
+    logger.error('Error closing database', { error: String(e) });
+  }
+
+  // Allow the node process to exit naturally, or force exit if still hanging after 12 seconds
+  setTimeout(() => {
+    logger.warn('Forcing process exit after shutdown sequence completion');
+    process.exit(0);
+  }, 12000).unref();
+}
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));
