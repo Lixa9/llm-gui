@@ -134,10 +134,10 @@ export async function extractText(bytes: Buffer, mimeType: string): Promise<Extr
     return extractEpub(bytes);
   }
 
-  return extractPlain(bytes, mimeType);
+  return extractPlain(bytes);
 }
 
-async function extractPlain(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
+async function extractPlain(bytes: Buffer): Promise<ExtractionResult> {
   let raw = bytes.toString('utf-8');
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const { text, warning } = truncate(raw.trim() || '[File appears empty or has no extractable text]');

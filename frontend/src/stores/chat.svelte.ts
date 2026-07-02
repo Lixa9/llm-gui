@@ -119,7 +119,8 @@ function createChatStore() {
   }
 
   async function editUserMessage(convId: string, msgId: string) {
-    // Delete this message and everything after it, then re-send
+    // Delete this message and everything after it on the server, then reload messages.
+    // Caller is responsible for triggering the re-send.
     await api.conversations.deleteMessage(convId, msgId);
     // Reload messages (server deleted this msg + subsequent)
     await loadMessages(convId);

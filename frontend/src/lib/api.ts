@@ -1,7 +1,7 @@
 import type {
   User, Conversation, ConversationFolder, Message, SystemPrompt,
   ModelInfo, ModelPreset, Automation, AutomationRun,
-  UserPreferences, AdminUser, ConfigFile, Role, UploadResult
+  UserPreferences, ConfigFile, UploadResult
 } from './types';
 
 class HttpError extends Error {

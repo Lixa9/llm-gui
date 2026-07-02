@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { requireRole } from './auth';
 import { getDb, safeParseJson, sqliteBool } from './db/index';
-import { getConfig, isConfigWritable, getConfigFileContent, writeConfigFile, CONFIG_FILES } from './config';
-import type { UserRow, SystemPromptRow, AutomationRow } from './types';
+import { isConfigWritable, getConfigFileContent, writeConfigFile, CONFIG_FILES } from './config';
+import type { SystemPromptRow, AutomationRow } from './types';
 
 export const adminRouter = new Hono();
 adminRouter.use('*', requireRole('admin'));

@@ -7,6 +7,8 @@ import { logger } from './logger';
 
 const CONFIG_DIR = process.env.CONFIG_DIR ?? '/app/config';
 
+export const CONFIG_FILES = ['config.yaml', 'models.yaml', 'prompts.yaml', 'presets.yaml', 'automations.yaml'];
+
 const roleSchema = z.enum(['admin', 'user']);
 
 const configSchema = z.object({
@@ -240,4 +242,3 @@ export function writeConfigFile(name: string, content: string): void {
   reloadConfig();
 }
 
-export const CONFIG_FILES = ['config.yaml', 'models.yaml', 'prompts.yaml', 'presets.yaml', 'automations.yaml'];
