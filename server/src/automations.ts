@@ -213,6 +213,14 @@ export function initScheduler() {
   logger.info('Automation scheduler initialized', { count: rows.length });
 }
 
+export function stopScheduler(): void {
+  for (const [id, timer] of scheduledTasks) {
+    clearTimeout(timer);
+  }
+  scheduledTasks.clear();
+  logger.info('Automation scheduler stopped');
+}
+
 function makeConversationTitle(autoName: string): string {
   const now = new Date();
   const dayAbbr = now.toLocaleString('en', { weekday: 'short' });
