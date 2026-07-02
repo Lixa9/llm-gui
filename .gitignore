@@ -4,3 +4,7 @@ frontend/dist/
 server/node_modules/
 *.env
 .env
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
