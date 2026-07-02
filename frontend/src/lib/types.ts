@@ -37,21 +37,13 @@ export interface UploadResult {
   warning?: string;
 }
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  arguments: unknown;
-  index: number;
-}
-
 export type MessageStatus = 'done' | 'aborted';
 
 export interface Message {
   id: string;
   conversation_id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: 'user' | 'assistant' | 'system';
   content: MessageContentPart[];
-  tool_calls: ToolCall[] | null;
   model: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
@@ -99,7 +91,6 @@ export interface SystemPrompt {
 export interface ModelInfo {
   id: string;
   display_name: string;
-  show_tool_calls: boolean;
   allowed_roles: Role[];
   context_window_tokens?: number;
   context_mode?: 'truncate' | 'passthrough' | 'session_only';
@@ -157,11 +148,8 @@ export interface UserPreferences {
   [key: string]: string;
 }
 
-// SSE event types emitted by the relay
 export type SSEEvent =
   | { type: 'delta'; content: string }
-  | { type: 'tool_call'; id: string; name: string; arguments: unknown; index: number }
-  | { type: 'tool_result'; tool_call_id: string; content: string }
   | { type: 'done'; tokens_in?: number; tokens_out?: number }
   | { type: 'title'; title: string }
   | { type: 'error'; message: string };
@@ -175,7 +163,6 @@ export interface ChatPayload {
   messages: Array<{
     role: 'user' | 'assistant';
     content: MessageContentPart[];
-    tool_calls?: ToolCall[];
   }>;
   new_user_message: {
     content: MessageContentPart[];

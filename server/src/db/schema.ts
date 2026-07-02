@@ -113,8 +113,6 @@ export function applySchema(db: Db): void {
       role TEXT NOT NULL,
       content TEXT NOT NULL DEFAULT '[]',
       content_text TEXT NOT NULL DEFAULT '',
-      tool_calls TEXT,
-      tool_results TEXT,
       model TEXT,
       tokens_in INTEGER,
       tokens_out INTEGER,

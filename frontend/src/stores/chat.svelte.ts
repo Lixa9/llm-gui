@@ -1,14 +1,13 @@
 import { streamChat } from '$lib/sse';
 import { api } from '$lib/api';
 import { playCompletionSound } from '$lib/audio';
-import type { Message, ToolCall, ChatPayload } from '$lib/types';
+import type { Message, ChatPayload } from '$lib/types';
 import { conversationsStore } from './conversations.svelte';
 import { preferencesStore } from './preferences.svelte';
 
 export interface PendingMessage {
   role: 'assistant';
   content: string;
-  tool_calls: ToolCall[];
   model: string;
 }
 
@@ -46,7 +45,6 @@ function createChatStore() {
       conversation_id: payload.conversation_id ?? '',
       role: 'user',
       content: payload.new_user_message.content,
-      tool_calls: null,
       model: null,
       tokens_in: null,
       tokens_out: null,
@@ -59,21 +57,12 @@ function createChatStore() {
     streaming = true;
     error = null;
     abortController = new AbortController();
-    pending = { role: 'assistant', content: '', tool_calls: [], model: payload.model };
+    pending = { role: 'assistant', content: '', model: payload.model };
 
     try {
       await streamChat(payload, abortController.signal, (event) => {
         if (event.type === 'delta') {
           if (pending) pending.content += event.content;
-        } else if (event.type === 'tool_call') {
-          if (pending) {
-            pending.tool_calls = [...pending.tool_calls, {
-              id: event.id,
-              name: event.name,
-              arguments: event.arguments,
-              index: event.index,
-            }];
-          }
         } else if (event.type === 'done') {
           if (pending) {
             const finishedMessage: Message = {
@@ -81,8 +70,7 @@ function createChatStore() {
               conversation_id: payload.conversation_id ?? '',
               role: 'assistant',
               content: [{ type: 'text', text: pending.content }],
-              tool_calls: pending.tool_calls.length > 0 ? pending.tool_calls : null,
-                      model: payload.model,
+              model: payload.model,
               tokens_in: event.tokens_in ?? null,
               tokens_out: event.tokens_out ?? null,
               status: 'done',

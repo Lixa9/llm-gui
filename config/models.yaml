@@ -1,20 +1,16 @@
 models:
   - id: "qwen3.5-0.8b"
     display_name: "Qwen 3.5 0.8B"
-    show_tool_calls: false
     allowed_roles: [admin, user]
 
   - id: "anthropic/claude-opus-4-5"
     display_name: "Claude Opus"
-    show_tool_calls: false
     allowed_roles: [admin, user]
 
   - id: "anthropic/claude-sonnet-4-5"
     display_name: "Claude Sonnet"
-    show_tool_calls: true
     allowed_roles: [admin, user]
 
   - id: "meta-llama/llama-3.3-70b-instruct"
     display_name: "Llama 3.3 70B"
-    show_tool_calls: true
     allowed_roles: [admin, user]
