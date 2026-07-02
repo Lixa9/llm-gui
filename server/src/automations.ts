@@ -214,7 +214,7 @@ export function initScheduler() {
 }
 
 export function stopScheduler(): void {
-  for (const [id, timer] of scheduledTasks) {
+  for (const timer of scheduledTasks.values()) {
     clearTimeout(timer);
   }
   scheduledTasks.clear();

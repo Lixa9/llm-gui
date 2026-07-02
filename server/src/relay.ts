@@ -9,7 +9,7 @@ import { checkRateLimit, openStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
 import { getUploadsDir, MIME_TO_EXT, classifyMime } from './uploads';
-import type { SessionPayload, MessageRow, MessageContentPart, ToolCall } from './types';
+import type { MessageContentPart, ToolCall } from './types';
 import type { FileMeta } from './extract';
 import { PDF_PAGE_CAP } from './extract';
 
@@ -347,7 +347,7 @@ relayRouter.post('/', async (c) => {
 
                 // Auto-title
                 if (isFirstExchange && cfg.conversation.auto_title) {
-                  generateTitle(convId!, body.model, cfg, user.sub, db).then(title => {
+                  generateTitle(convId!, body.model, cfg, db).then(title => {
                     if (title) {
                       controller.enqueue(sse({ type: 'title', title }));
                     }
@@ -434,7 +434,6 @@ async function generateTitle(
   convId: string,
   model: string,
   cfg: ReturnType<typeof getConfig>,
-  userSub: string,
   db: ReturnType<typeof getDb>,
 ): Promise<string | null> {
   try {
