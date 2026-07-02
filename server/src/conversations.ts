@@ -50,9 +50,9 @@ function copyMessages(db: Db, srcId: string, destId: string, stopAtMsgId?: strin
   const msgs = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp').all(srcId) as MessageRow[];
   for (const m of msgs) {
     db.prepare(
-      `INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, model, tokens_in, tokens_out, status, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(generateId(), destId, m.role, m.content, m.content_text, m.tool_calls, m.model, m.tokens_in, m.tokens_out, m.status, m.timestamp);
+      `INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(generateId(), destId, m.role, m.content, m.content_text, m.model, m.tokens_in, m.tokens_out, m.status, m.timestamp);
     if (stopAtMsgId && m.id === stopAtMsgId) break;
   }
 }
@@ -61,7 +61,6 @@ function serializeMessage(row: MessageRow) {
   return {
     ...row,
     content: safeParseJson<unknown[]>(row.content, []),
-    tool_calls: safeParseJson<unknown | null>(row.tool_calls, null),
   };
 }
 

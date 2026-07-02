@@ -26,13 +26,6 @@ export interface FilePart {
 
 export type MessageContentPart = ContentPart | ImageUrlPart | FilePart;
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  arguments: unknown;
-  index: number;
-}
-
 export type MessageStatus = 'done' | 'aborted';
 
 // DB row types (snake_case)
@@ -74,7 +67,6 @@ export interface MessageRow {
   role: string;
   content: string;
   content_text: string;
-  tool_calls: string | null;
   model: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
@@ -182,7 +174,6 @@ export interface AppConfig {
 export interface ModelYamlEntry {
   id: string;
   display_name: string;
-  show_tool_calls: boolean;
   allowed_roles: Role[];
   context_window_tokens?: number;
   context_mode?: 'truncate' | 'passthrough' | 'session_only';

@@ -118,7 +118,6 @@
       messages: chatStore.messages.map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
-        tool_calls: m.tool_calls ?? undefined,
       })),
       new_user_message: { content: contentParts },
     };

@@ -9,7 +9,7 @@ import { checkRateLimit, openStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
 import { getUploadsDir, MIME_TO_EXT, classifyMime } from './uploads';
-import type { MessageContentPart, ToolCall } from './types';
+import type { MessageContentPart } from './types';
 import type { FileMeta } from './extract';
 import { PDF_PAGE_CAP } from './extract';
 
@@ -139,12 +139,6 @@ async function resolveContentParts(parts: MessageContentPart[], ownerSub: string
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
 
-interface ToolCallAccumulator {
-  id: string;
-  name: string;
-  argumentsBuffer: string;
-}
-
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -160,13 +154,6 @@ function sse(data: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function serializeToolCalls(calls: ToolCall[] | null | undefined) {
-  return calls?.length ? { tool_calls: calls.map(tc => ({
-    id: tc.id, type: 'function' as const,
-    function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-  })) } : {};
-}
-
 relayRouter.post('/', async (c) => {
   const user = c.get('user');
   const start = Date.now();
@@ -178,7 +165,6 @@ relayRouter.post('/', async (c) => {
     messages: Array<{
       role: 'user' | 'assistant';
       content: MessageContentPart[];
-      tool_calls?: ToolCall[];
     }>;
     new_user_message: { content: MessageContentPart[] };
   };
@@ -244,7 +230,6 @@ relayRouter.post('/', async (c) => {
       openaiMessages.push({
         role: msg.role,
         content: await resolveContentParts(msg.content, user.sub),
-        ...serializeToolCalls(msg.tool_calls),
       });
     }
   } else {
@@ -264,7 +249,6 @@ relayRouter.post('/', async (c) => {
       openaiMessages.push({
         role: msg.role,
         content: await resolveContentParts(msg.content, user.sub),
-        ...serializeToolCalls(msg.tool_calls),
       });
     }
   }
@@ -274,7 +258,6 @@ relayRouter.post('/', async (c) => {
   openStream(user.sub);
 
   let fullText = '';
-  const toolAccumulators = new Map<number, ToolCallAccumulator>();
   let assistantMsgId = generateId();
   const existingUserMsgCount = (db.prepare(
     "SELECT COUNT(*) as n FROM messages WHERE conversation_id=? AND role='user'"
@@ -324,27 +307,10 @@ relayRouter.post('/', async (c) => {
               if (!line.startsWith('data: ')) continue;
               const dataStr = line.slice(6).trim();
               if (dataStr === '[DONE]') {
-                // Emit accumulated tool calls
-                for (const [, acc] of toolAccumulators) {
-                  let parsedArgs: unknown;
-                  try { parsedArgs = JSON.parse(acc.argumentsBuffer); }
-                  catch { parsedArgs = acc.argumentsBuffer; }
-                  controller.enqueue(sse({ type: 'tool_call', id: acc.id, name: acc.name, arguments: parsedArgs, index: 0 }));
-                }
-
-                // Persist assistant message
-                const toolCallsJson = toolAccumulators.size > 0
-                  ? JSON.stringify([...toolAccumulators.values()].map((acc, idx) => ({
-                      id: acc.id,
-                      name: acc.name,
-                      arguments: (() => { try { return JSON.parse(acc.argumentsBuffer); } catch { return acc.argumentsBuffer; } })(),
-                      index: idx,
-                    })))
-                  : null;
                 const assistantContent = JSON.stringify([{ type: 'text', text: fullText }]);
                 db.prepare(
-                  'INSERT INTO messages (id, conversation_id, role, content, content_text, tool_calls, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, toolCallsJson, body.model, promptTokens, completionTokens, 'done');
+                  'INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, body.model, promptTokens, completionTokens, 'done');
 
                 controller.enqueue(sse({ type: 'done', tokens_in: promptTokens, tokens_out: completionTokens }));
 
@@ -366,7 +332,6 @@ relayRouter.post('/', async (c) => {
                   choices?: Array<{
                     delta?: {
                       content?: string;
-                      tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
                     };
                   }>;
                   usage?: {
@@ -386,20 +351,6 @@ relayRouter.post('/', async (c) => {
                 if (delta.content) {
                   fullText += delta.content;
                   controller.enqueue(sse({ type: 'delta', content: delta.content }));
-                }
-
-                if (delta.tool_calls) {
-                  for (const tc of delta.tool_calls) {
-                    let acc = toolAccumulators.get(tc.index);
-                    if (!acc) {
-                      acc = { id: tc.id ?? '', name: tc.function?.name ?? '', argumentsBuffer: '' };
-                      toolAccumulators.set(tc.index, acc);
-                    } else {
-                      if (tc.id) acc.id = tc.id;
-                      if (tc.function?.name) acc.name = tc.function.name;
-                    }
-                    if (tc.function?.arguments) acc.argumentsBuffer += tc.function.arguments;
-                  }
                 }
               } catch {
                 // malformed chunk — skip

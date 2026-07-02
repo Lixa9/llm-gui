@@ -48,7 +48,6 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
             const merged: ModelYamlEntry[] = list.map((m: OpenAIModel) => yamlById.get(m.id) ?? {
               id: m.id,
               display_name: m.id,
-              show_tool_calls: true,
               allowed_roles: ['admin'],
             });
             _cache = { models: merged, at: Date.now() };
