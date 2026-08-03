@@ -53,9 +53,26 @@
     renaming = false;
   }
 
+  function folderLabel(folderId: string): string {
+    const parts: string[] = [];
+    let current = conversationsStore.folders.find(f => f.id === folderId);
+    for (let depth = 0; current && depth < 100; depth++) {
+      parts.unshift(current.name);
+      current = current.parent_id ? conversationsStore.folders.find(f => f.id === current!.parent_id) : undefined;
+    }
+    return parts.join(' / ');
+  }
+
   const menuItems = $derived<MenuItem[]>([
     { label: conversation.pinned ? 'Unpin' : 'Pin', icon: '📌', action: () => conversationsStore.pin(conversation.id, !conversation.pinned) },
     { label: 'Rename', icon: '✏', action: startRename },
+    { label: 'Move to: No folder', icon: '⊘', disabled: conversation.folder_id === null, action: () => conversationsStore.move(conversation.id, null) },
+    ...conversationsStore.folders.map(folder => ({
+      label: `Move to: ${folderLabel(folder.id)}`,
+      icon: '📁',
+      disabled: conversation.folder_id === folder.id,
+      action: () => conversationsStore.move(conversation.id, folder.id),
+    })),
     { label: 'Duplicate', icon: '⎘', action: () => conversationsStore.duplicate(conversation.id) },
     { label: 'Delete', icon: '🗑', danger: true, action: () => conversationsStore.remove(conversation.id) },
   ]);

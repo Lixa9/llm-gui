@@ -1,75 +1,120 @@
-import { DatabaseSync, StatementSync } from 'node:sqlite';
-import { mkdirSync, chmodSync, existsSync } from 'fs';
-import { dirname } from 'path';
-import { applySchema } from './schema';
+import { Pool, types as pgTypes, type PoolClient, type QueryResultRow } from 'pg';
 import { logger } from '../logger';
 
-// Thin wrapper over node:sqlite that matches the better-sqlite3 call-site interface.
-// node:sqlite's StatementSync returns Record<string, SQLOutputValue> from .all()/.get(),
-// which TypeScript won't let you directly cast to domain row types. Wrapping the
-// return as unknown restores the ergonomics of better-sqlite3.
-class Stmt {
-  constructor(private s: StatementSync) {}
+// Keep millisecond timestamps ergonomic for the existing API contracts.
+pgTypes.setTypeParser(20, value => Number.parseInt(value, 10));
 
-  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint } {
-    return this.s.run(...(params as Parameters<StatementSync['run']>));
+/**
+ * Small PostgreSQL adapter.  Keeping this wrapper deliberately thin lets the
+ * route modules use parameterized SQL without coupling them to a query builder.
+ */
+export class Db {
+  constructor(private readonly pool: Pool) {}
+
+  prepare(sql: string): Stmt {
+    return new Stmt(this.pool, sql);
   }
 
-  get(...params: unknown[]): unknown {
-    return this.s.get(...(params as Parameters<StatementSync['get']>));
+  async exec(sql: string): Promise<void> {
+    await this.pool.query(sql);
   }
 
-  all(...params: unknown[]): unknown[] {
-    return this.s.all(...(params as Parameters<StatementSync['all']>)) as unknown[];
+  async transaction<T>(fn: (client: TxDb) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(new TxDb(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async withAdvisoryLock<T>(key: string, fn: (db: TxDb) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+      const result = await fn(new TxDb(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+    logger.info('Database pool closed cleanly');
   }
 }
 
-export class Db {
-  private inner: DatabaseSync;
-  private stmtCache = new Map<string, StatementSync>();
-
-  constructor(path: string) {
-    this.inner = new DatabaseSync(path);
-  }
-
-  exec(sql: string): void {
-    this.inner.exec(sql);
-  }
+class QueryDb {
+  constructor(protected readonly client: Pool | PoolClient) {}
 
   prepare(sql: string): Stmt {
-    let s = this.stmtCache.get(sql);
-    if (!s) { s = this.inner.prepare(sql); this.stmtCache.set(sql, s); }
-    return new Stmt(s);
+    return new Stmt(this.client, sql);
+  }
+}
+
+export class TxDb extends QueryDb {}
+
+class Stmt {
+  constructor(private readonly client: Pool | PoolClient, private readonly sql: string) {}
+
+  async run(...params: unknown[]): Promise<{ changes: number }> {
+    const result = await this.client.query(this.convert(), params);
+    return { changes: result.rowCount ?? 0 };
   }
 
-  close(): void {
-    this.stmtCache.clear();
-    this.inner.close();
+  async get<T extends QueryResultRow = QueryResultRow>(...params: unknown[]): Promise<T | undefined> {
+    const result = await this.client.query<T>(this.convert(), params);
+    return result.rows[0];
+  }
+
+  async all<T extends QueryResultRow = QueryResultRow>(...params: unknown[]): Promise<T[]> {
+    const result = await this.client.query<T>(this.convert(), params);
+    return result.rows;
+  }
+
+  private convert(): string {
+    // Route modules use compact positional placeholders. Convert them once at
+    // execution time while preserving all parameterization.
+    let index = 0;
+    return this.sql.replace(/\?/g, () => `$${++index}`);
   }
 }
 
 let _db: Db | null = null;
 
-export function openDatabase(path: string): Db {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+export async function openDatabase(connectionString = process.env.DATABASE_URL): Promise<Db> {
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is required');
   }
-
-  const db = new Db(path);
-  applySchema(db);
-
-  try { chmodSync(path, 0o600); } catch { /* ignore on systems without chmod */ }
-
+  const pool = new Pool({
+    connectionString,
+    max: Number(process.env.DATABASE_POOL_MAX ?? 20),
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+    ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: process.env.DATABASE_SSL_VERIFY !== 'false' } : undefined,
+  });
+  const db = new Db(pool);
+  await applySchema(db);
   _db = db;
   return db;
 }
 
-export function closeDatabase(): void {
+export async function closeDatabase(): Promise<void> {
   if (_db) {
-    _db.close();
+    await _db.close();
     _db = null;
-    logger.info('Database closed cleanly');
   }
 }
 
@@ -82,109 +127,185 @@ export function generateId(): string {
   return crypto.randomUUID();
 }
 
-export function safeParseJson<T>(s: string | null, fallback: T): T {
-  if (!s) return fallback;
+export function safeParseJson<T>(value: unknown, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'object') return value as T;
+  if (typeof value !== 'string') return fallback;
   try {
-    return JSON.parse(s) as T;
+    return JSON.parse(value) as T;
   } catch {
     return fallback;
   }
 }
 
-export function sqliteBool(v: number | boolean | null | undefined): boolean {
-  if (v === null || v === undefined) return false;
-  return v === 1 || v === true;
+export async function runTransaction<T>(fn: (db: TxDb) => Promise<T>): Promise<T> {
+  return getDb().transaction(fn);
 }
 
-export function runTransaction<T>(fn: () => T): T {
-  const db = getDb();
-  db.exec('BEGIN TRANSACTION');
-  try {
-    const res = fn();
-    db.exec('COMMIT');
-    return res;
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-}
+async function applySchema(db: Db): Promise<void> {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version TEXT PRIMARY KEY,
+      applied_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
 
-export function initDatabaseSecret(db: Db): { secretKey: string; cleanup: () => void } {
-  const instanceId = crypto.randomUUID();
-  const heartbeatThreshold = 30000; // 30 seconds
-  const heartbeatInterval = 10000; // 10 seconds
-  const heartbeatExpiry = 60000; // 60 seconds
+    CREATE TABLE IF NOT EXISTS users (
+      sub TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
 
-  // Clean up any stale heartbeats first to avoid false active count
-  try {
-    db.prepare('DELETE FROM active_instances WHERE last_heartbeat < ?').run(Date.now() - heartbeatExpiry);
-  } catch (e) {
-    logger.error('Failed to clean up stale heartbeats', { error: String(e) });
-  }
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      PRIMARY KEY (user_sub, key)
+    );
 
-  // Check if there are other active instances
-  let hasActiveInstances = false;
-  try {
-    const activeRow = db.prepare('SELECT COUNT(*) as count FROM active_instances WHERE last_heartbeat > ?').get(Date.now() - heartbeatThreshold) as { count: number } | undefined;
-    hasActiveInstances = !!(activeRow && activeRow.count > 0);
-  } catch (e) {
-    logger.error('Failed to query active instances', { error: String(e) });
-  }
+    CREATE TABLE IF NOT EXISTS conversation_folders (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
+      parent_id UUID REFERENCES conversation_folders(id) ON DELETE SET NULL,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
+    CREATE INDEX IF NOT EXISTS idx_folders_owner ON conversation_folders(owner_sub, name);
 
-  let secretKey = '';
+    CREATE TABLE IF NOT EXISTS system_prompts (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      visible_to JSONB,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      deleted_at BIGINT
+    );
 
-  if (hasActiveInstances) {
-    // Other instances are running, read existing secret key
-    try {
-      const secretRow = db.prepare("SELECT value FROM system_secrets WHERE key = 'session_secret'").get() as { value: string } | undefined;
-      if (secretRow?.value) {
-        secretKey = secretRow.value;
-        logger.info('Using existing database-backed secret key (active instances detected)');
-      }
-    } catch (e) {
-      logger.error('Failed to retrieve secret key from db', { error: String(e) });
-    }
-  }
+    CREATE TABLE IF NOT EXISTS model_presets (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      base_model_id TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      visible_to JSONB,
+      deleted_at BIGINT
+    );
 
-  if (!secretKey) {
-    // No active instances or key not found in db, generate a new one
-    secretKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex');
-    try {
-      db.prepare("INSERT OR REPLACE INTO system_secrets (key, value) VALUES ('session_secret', ?)").run(secretKey);
-      logger.info('Generated new database-backed secret key');
-    } catch (e) {
-      logger.error('Failed to save generated secret key to db', { error: String(e) });
-    }
-  }
+    CREATE TABLE IF NOT EXISTS conversations (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'New conversation',
+      title_auto BOOLEAN NOT NULL DEFAULT false,
+      model_id TEXT,
+      preset_id UUID REFERENCES model_presets(id) ON DELETE SET NULL,
+      system_prompt_id UUID REFERENCES system_prompts(id) ON DELETE SET NULL,
+      custom_system_prompt TEXT,
+      folder_id UUID REFERENCES conversation_folders(id) ON DELETE SET NULL,
+      pinned BOOLEAN NOT NULL DEFAULT false,
+      forked_from_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+      forked_at_message_id UUID,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_owner ON conversations(owner_sub, created_at DESC);
 
-  // Register this instance
-  try {
-    db.prepare('INSERT INTO active_instances (id, last_heartbeat) VALUES (?, ?)').run(instanceId, Date.now());
-  } catch (e) {
-    logger.error('Failed to register instance in active_instances', { error: String(e) });
-  }
+    CREATE TABLE IF NOT EXISTS messages (
+      id UUID PRIMARY KEY,
+      conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+      content TEXT NOT NULL DEFAULT '[]',
+      content_text TEXT NOT NULL DEFAULT '',
+      model TEXT,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      status TEXT,
+      timestamp BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      edited_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp, id);
+    CREATE INDEX IF NOT EXISTS idx_msg_search ON messages USING GIN (to_tsvector('simple', content_text));
 
-  // Set up heartbeat timer
-  const timer = setInterval(() => {
-    try {
-      db.prepare('INSERT OR REPLACE INTO active_instances (id, last_heartbeat) VALUES (?, ?)').run(instanceId, Date.now());
-      db.prepare('DELETE FROM active_instances WHERE last_heartbeat < ?').run(Date.now() - heartbeatExpiry);
-    } catch (e) {
-      logger.error('Failed to update instance heartbeat', { error: String(e) });
-    }
-  }, heartbeatInterval);
-  timer.unref();
+    CREATE TABLE IF NOT EXISTS automations (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      deleted_at BIGINT,
+      visible_to JSONB,
+      next_run_at BIGINT
+    );
 
-  // Cleanup function to be called on graceful shutdown
-  const cleanup = () => {
-    clearInterval(timer);
-    try {
-      db.prepare('DELETE FROM active_instances WHERE id = ?').run(instanceId);
-      logger.info('Deregistered instance from active_instances');
-    } catch (e) {
-      logger.error('Failed to deregister instance from active_instances', { error: String(e) });
-    }
-  };
+    CREATE TABLE IF NOT EXISTS user_automation_subscriptions (
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      PRIMARY KEY (user_sub, automation_id)
+    );
 
-  return { secretKey, cleanup };
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id UUID PRIMARY KEY,
+      automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+      started_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS uploads (
+      id UUID PRIMARY KEY,
+      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      sha256 TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size BIGINT NOT NULL,
+      extracted_text TEXT,
+      file_meta JSONB,
+      data BYTEA NOT NULL,
+      derived_images JSONB,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
+    CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id UUID PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      email TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+      method TEXT NOT NULL CHECK (method IN ('oidc', 'local')),
+      expires_at BIGINT NOT NULL,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS login_lockouts (
+      username TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS rate_limit_counters (
+      subject TEXT NOT NULL,
+      bucket_start BIGINT NOT NULL,
+      window_seconds INTEGER NOT NULL,
+      requests INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(subject, bucket_start, window_seconds)
+    );
+
+    CREATE TABLE IF NOT EXISTS stream_leases (
+      id UUID PRIMARY KEY,
+      subject TEXT NOT NULL,
+      expires_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_leases_subject ON stream_leases(subject, expires_at);
+
+    INSERT INTO schema_migrations(version) VALUES ('001_initial_postgres')
+      ON CONFLICT(version) DO NOTHING;
+  `);
 }

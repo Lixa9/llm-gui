@@ -5,15 +5,19 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --packages=external --format=esm --outfile=dist/index.js"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.0",
-    "adm-zip": "^0.5.17",
-    "hono": "^4.5.0",
+    "@hono/node-server": "^2.0.12",
+    "@types/pg": "^8.20.3",
+    "adm-zip": "^0.6.0",
+    "hono": "^4.12.34",
     "jose": "^5.9.0",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^5.2.3",
     "mupdf": "^1.27.0",
+    "pg": "^8.22.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

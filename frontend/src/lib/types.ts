@@ -92,8 +92,7 @@ export interface ModelInfo {
   id: string;
   display_name: string;
   allowed_roles: Role[];
-  context_window_tokens?: number;
-  context_mode?: 'truncate' | 'passthrough' | 'session_only';
+  history_mode?: 'full' | 'latest_only';
 }
 
 export interface ModelPreset {
@@ -160,27 +159,7 @@ export interface ChatPayload {
   model: string;
   system_prompt?: string;
   system_prompt_id?: string;
-  messages: Array<{
-    role: 'user' | 'assistant';
-    content: MessageContentPart[];
-  }>;
   new_user_message: {
     content: MessageContentPart[];
   };
 }
-
-export interface AdminUser {
-  sub: string;
-  email: string;
-  name: string;
-  role_override: Role | null;
-  resolved_role: Role;
-  created_at: number;
-}
-
-export interface ConfigFile {
-  name: string;
-  content: string;
-  writable: boolean;
-}
-
