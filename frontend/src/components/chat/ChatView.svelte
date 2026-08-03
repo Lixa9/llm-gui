@@ -160,10 +160,6 @@
           model: messages[idx]?.model ?? selectedModel,
           system_prompt: systemPromptText || undefined,
           system_prompt_id: systemPromptId,
-          messages: history.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-          })),
           new_user_message: { content: [{ type: 'text', text: newContent }] },
         };
         await chatStore.send(payload);
@@ -189,10 +185,6 @@
       model: msg.model ?? history.find(m => m.model)?.model ?? selectedModel,
       system_prompt: systemPromptText || undefined,
       system_prompt_id: systemPromptId,
-      messages: history.slice(0, history.indexOf(lastUser)).map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      })),
       new_user_message: { content: lastUser.content },
     };
     await chatStore.send(payload);

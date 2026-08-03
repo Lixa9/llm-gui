@@ -1,6 +1,6 @@
-import { readFileSync, accessSync, constants, writeFileSync, renameSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import yaml from 'js-yaml';
+import { readFileSync, accessSync, constants, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { load as parseYaml } from 'js-yaml';
 import { z } from 'zod';
 import type { AppConfig } from './types';
 import { logger } from './logger';
@@ -15,14 +15,10 @@ const configSchema = z.object({
   app: z.object({
     name: z.string().default('Chat'),
     base_url: z.string().default('http://localhost:3000'),
-    secret_key: z.string().default(''),
   }),
   openai: z.object({
     base_url: z.string().default(''),
     api_key: z.string().optional(),
-  }).default({}),
-  database: z.object({
-    path: z.string().default('/data/chat.db'),
   }).default({}),
   oidc: z.object({
     issuer: z.string(),
@@ -46,8 +42,6 @@ const configSchema = z.object({
   conversation: z.object({
     auto_title: z.boolean().default(true),
     auto_title_model: z.string().default('qwen3.5-0.8b'),
-    context_window_tokens: z.number().default(100000),
-    context_window_reserve: z.number().default(1000),
   }).default({}),
 });
 
@@ -60,9 +54,6 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     'openai:',
     '  base_url: "${OPENAI_BASE_URL}"',
     '  api_key: "${OPENAI_API_KEY}"',
-    '',
-    'database:',
-    '  path: "/data/chat.db"',
     '',
   ].join('\n'),
   'models.yaml': 'models: []\n',
@@ -150,25 +141,14 @@ function loadYaml(name: string): unknown {
   const path = join(CONFIG_DIR, name);
   try {
     const raw = readFileSync(path, 'utf8');
-    return expandEnv(yaml.load(raw) as unknown ?? {});
+    return expandEnv(parseYaml(raw) as unknown ?? {});
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw e;
   }
 }
 
-function isWritable(name: string): boolean {
-  const path = join(CONFIG_DIR, name);
-  try {
-    accessSync(path, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 let _config: AppConfig | null = null;
-const _writability: Record<string, boolean> = {};
 
 export function loadConfig(): AppConfig {
   scaffoldConfigIfNeeded();
@@ -188,11 +168,6 @@ export function loadConfig(): AppConfig {
     automations: (automationsRaw.automations ?? []) as AppConfig['automations'],
   };
 
-  // Probe writability
-  for (const name of CONFIG_FILES) {
-    _writability[name] = isWritable(name);
-  }
-
   _config = config;
   return config;
 }
@@ -202,43 +177,9 @@ export function getConfig(): AppConfig {
   return _config;
 }
 
-export function updateConfigSecretKey(key: string): void {
-  if (_config) {
-    _config.app.secret_key = key;
-  }
-}
-
 export function reloadConfig(): void {
   logger.info('Reloading config (SIGHUP)');
   loadConfig();
   // Imported lazily to avoid circular dependency
   import('./models').then(m => m.invalidateModelCache());
 }
-
-export function isConfigWritable(name: string): boolean {
-  return _writability[name] ?? false;
-}
-
-export function getConfigFileContent(name: string): string {
-  const path = join(CONFIG_DIR, name);
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-export function writeConfigFile(name: string, content: string): void {
-  // Validate YAML syntax before touching the file on disk
-  const parsed = yaml.load(content);
-  // For the main config, also run schema validation so a bad write can't corrupt app state
-  if (name === 'config.yaml') {
-    configSchema.parse(expandEnv(parsed ?? {}));
-  }
-  const path = join(CONFIG_DIR, name);
-  const tmp = join(dirname(path), `.${name}.tmp.${Date.now()}`);
-  writeFileSync(tmp, content, 'utf8');
-  renameSync(tmp, path);
-  reloadConfig();
-}
-

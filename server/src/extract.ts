@@ -1,6 +1,14 @@
-import { mkdirSync } from 'fs';
-import { writeFile } from 'fs/promises';
-import { join, extname } from 'path';
+import { extname } from 'path';
+
+const MAX_ARCHIVE_ENTRIES = 2_000;
+const MAX_ARCHIVE_EXPANDED_BYTES = 200 * 1024 * 1024;
+
+function assertArchiveBudget(zip: { getEntries(): Array<{ header?: { size?: number } }> }): void {
+  const entries = zip.getEntries();
+  if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('Archive contains too many entries');
+  const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
+  if (expanded > MAX_ARCHIVE_EXPANDED_BYTES) throw new Error('Archive expands beyond the allowed size');
+}
 
 function stripHtml(html: string): string {
   return html
@@ -155,6 +163,7 @@ async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
 async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
+  assertArchiveBudget(zip);
   const entry = zip.getEntry('word/document.xml');
   if (!entry) throw new Error('DOCX has no word/document.xml');
   const xml = entry.getData().toString('utf-8');
@@ -180,6 +189,7 @@ async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
 async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
+  assertArchiveBudget(zip);
   const entry = zip.getEntry('content.xml');
   if (!entry) throw new Error('ODT file has no content.xml');
   const xml = entry.getData().toString('utf-8');
@@ -210,6 +220,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   }
 
   const zip = new AdmZip(bytes);
+  assertArchiveBudget(zip);
   const format = mimeType.includes('oasis') ? 'ods' : 'xlsx';
 
   if (format === 'ods') {
@@ -435,6 +446,7 @@ function colIndex(col: string): number {
 async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
+  assertArchiveBudget(zip);
 
   // Locate OPF file via META-INF/container.xml
   const containerEntry = zip.getEntry('META-INF/container.xml');
@@ -496,24 +508,19 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
 
 export async function renderPdfPages(
   bytes: Buffer,
-  sha256: string,
-  uploadsDir: string,
-): Promise<{ page_count: number; served: number; warning?: string }> {
+): Promise<{ page_count: number; served: number; pages: string[]; warning?: string }> {
   const mupdf = (await import('mupdf')).default;
-
-  const pagesDir = join(uploadsDir, 'pdf-pages', sha256);
-  mkdirSync(pagesDir, { recursive: true });
 
   const doc = mupdf.Document.openDocument(new Uint8Array(bytes), 'application/pdf');
   const page_count = doc.countPages();
   const served = Math.min(page_count, PDF_PAGE_CAP);
   const matrix = mupdf.Matrix.scale(150 / 72, 150 / 72);
 
+  const pages: string[] = [];
   for (let i = 0; i < served; i++) {
     const page = doc.loadPage(i);
     const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false);
-    const padded = String(i + 1).padStart(3, '0');
-    await writeFile(join(pagesDir, `page-${padded}.jpg`), Buffer.from(pixmap.asJPEG(85)));
+    pages.push(Buffer.from(pixmap.asJPEG(85)).toString('base64'));
     pixmap.destroy();
     page.destroy();
   }
@@ -522,18 +529,18 @@ export async function renderPdfPages(
   return {
     page_count,
     served,
+    pages,
     warning: page_count > PDF_PAGE_CAP ? `Showing first ${PDF_PAGE_CAP} of ${page_count} pages` : undefined,
   };
 }
 
 export async function extractDocImages(
   bytes: Buffer,
-  sha256: string,
-  uploadsDir: string,
   format: 'docx' | 'odt' | 'epub',
-): Promise<{ count: number; served: number; warning?: string }> {
+): Promise<{ count: number; served: number; images: { data: string; ext: string }[]; warning?: string }> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
+  assertArchiveBudget(zip);
 
   let imageEntries: { data: Buffer; ext: string }[];
 
@@ -577,21 +584,19 @@ export async function extractDocImages(
   }
 
   const count = imageEntries.length;
-  if (count === 0) return { count: 0, served: 0 };
-
-  const imagesDir = join(uploadsDir, 'doc-images', sha256);
-  mkdirSync(imagesDir, { recursive: true });
+  if (count === 0) return { count: 0, served: 0, images: [] };
 
   const served = Math.min(count, DOC_IMAGE_CAP);
+  const images: { data: string; ext: string }[] = [];
   for (let i = 0; i < served; i++) {
     const { data, ext } = imageEntries[i];
-    const padded = String(i + 1).padStart(3, '0');
-    await writeFile(join(imagesDir, `img-${padded}${ext}`), data);
+    images.push({ data: data.toString('base64'), ext });
   }
 
   return {
     count,
     served,
+    images,
     warning: count > DOC_IMAGE_CAP ? `Showing first ${DOC_IMAGE_CAP} of ${count} embedded images` : undefined,
   };
 }

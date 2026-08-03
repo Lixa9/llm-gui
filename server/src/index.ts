@@ -3,8 +3,8 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
 import { readFile } from 'fs/promises';
-import { loadConfig, reloadConfig, getConfig, updateConfigSecretKey } from './config';
-import { openDatabase, initDatabaseSecret, closeDatabase } from './db/index';
+import { loadConfig, reloadConfig, getConfig } from './config';
+import { openDatabase, closeDatabase } from './db/index';
 import { reconcileYaml } from './reconcile';
 import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth';
 import { relayRouter } from './relay';
@@ -33,16 +33,11 @@ try {
 }
 
 // Open database
-const db = openDatabase(getConfig().database.path);
-logger.info('Database opened', { path: getConfig().database.path });
-
-// Initialize database-backed secret key
-const { secretKey: dbSecret, cleanup: dbSecretCleanup } = initDatabaseSecret(db);
-process.env.SECRET_KEY = dbSecret;
-updateConfigSecretKey(dbSecret);
+await openDatabase();
+logger.info('PostgreSQL database opened');
 
 // Reconcile YAML
-reconcileYaml();
+await reconcileYaml();
 
 // Build Hono app
 const app = new Hono();
@@ -62,15 +57,16 @@ app.use('*', async (c, next) => {
   });
 });
 
-// CORS: same-origin only — localhost allowed on any port for dev convenience
-const LOCALHOST_ORIGIN = /^https?:\/\/localhost(:\d+)?$/;
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 app.use('/api/*', async (c, next) => {
+  const contentLength = Number(c.req.header('content-length') ?? 0);
+  if (contentLength > 60 * 1024 * 1024) return c.json({ error: 'Request body too large' }, 413);
   const origin = c.req.header('origin');
   if (origin) {
     const cfg = getConfig();
-    if (origin !== cfg.app.base_url && !LOCALHOST_ORIGIN.test(origin)) {
+    const allowDevOrigin = process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin);
+    if (origin !== cfg.app.base_url && !allowDevOrigin) {
       return c.json({ error: 'Forbidden' }, 403);
     }
   }
@@ -111,6 +107,10 @@ app.get('/health', (c) => {
 // CSP for all non-API routes (API routes serve JSON, not HTML)
 app.use('*', async (c, next) => {
   await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (getConfig().app.base_url.startsWith('https://')) c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   if (!c.req.path.startsWith('/api/')) {
     c.header('Content-Security-Policy',
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'");
@@ -130,7 +130,7 @@ app.get('*', async (c) => {
 });
 
 // Init scheduler
-initScheduler();
+await initScheduler();
 
 // Periodic backend connectivity warning
 const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -160,11 +160,11 @@ startBackendHealthCheck();
 
 // Purge expired sessions at startup and every hour
 purgeExpiredSessions();
-const purgeInterval = setInterval(purgeExpiredSessions, 60 * 60 * 1000);
+const purgeInterval = setInterval(() => { purgeExpiredSessions().catch(error => logger.warn('Session purge failed', { error: String(error) })); }, 60 * 60 * 1000);
 
 // Sweep rate limit buckets every 5 minutes
-sweepBuckets();
-const sweepInterval = setInterval(sweepBuckets, 5 * 60 * 1000);
+void sweepBuckets();
+const sweepInterval = setInterval(() => { void sweepBuckets(); }, 5 * 60 * 1000);
 
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);
@@ -186,7 +186,7 @@ if (isLocalAuthEnabled()) {
 // Graceful shutdown handling
 let shutdownInProgress = false;
 
-function handleShutdown(signal: string) {
+async function handleShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   isShuttingDown = true;
@@ -217,15 +217,8 @@ function handleShutdown(signal: string) {
   clearInterval(sweepInterval);
   stopScheduler();
 
-  // Deregister db instance and close database
   try {
-    dbSecretCleanup();
-  } catch (e) {
-    logger.error('Error during database secret cleanup', { error: String(e) });
-  }
-
-  try {
-    closeDatabase();
+    await closeDatabase();
   } catch (e) {
     logger.error('Error closing database', { error: String(e) });
   }
@@ -237,5 +230,5 @@ function handleShutdown(signal: string) {
   }, 12000).unref();
 }
 
-process.on('SIGTERM', () => handleShutdown('SIGTERM'));
-process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => { void handleShutdown('SIGTERM'); });
+process.on('SIGINT', () => { void handleShutdown('SIGINT'); });

@@ -7,6 +7,8 @@
 
   let searchQuery = $state('');
   let noFolderDragOver = $state(false);
+  let creatingFolder = $state(false);
+  let newFolderName = $state('');
 
   const rootFolders = $derived(conversationsStore.folders.filter(f => f.parent_id === null));
   const unfolderedConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === null));
@@ -23,17 +25,41 @@
     window.location.hash = '#/chat';
   }
 
-  async function newFolder() {
-    const name = prompt('Folder name:');
-    if (!name?.trim()) return;
+  function newFolder() {
+    creatingFolder = true;
+    newFolderName = '';
+  }
+
+  async function finishNewFolder() {
+    const name = newFolderName.trim();
+    if (!name) { creatingFolder = false; return; }
     try {
-      await conversationsStore.createFolder(name.trim());
+      await conversationsStore.createFolder(name);
+      creatingFolder = false;
+      newFolderName = '';
     } catch (e) {
       toast((e as Error).message, 'error');
     }
   }
 
+  function isSpecificDropTarget(e: DragEvent): boolean {
+    const target = e.target as HTMLElement | null;
+    return !!target?.closest('.folder-header, .conv-item');
+  }
+
+  function onSidebarDragOver(e: DragEvent) {
+    if (isSpecificDropTarget(e)) return;
+    e.preventDefault();
+    noFolderDragOver = true;
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  }
+
+  function onSidebarDragLeave(e: DragEvent) {
+    if (e.target === e.currentTarget) noFolderDragOver = false;
+  }
+
   function onNoFolderDrop(e: DragEvent) {
+    if (isSpecificDropTarget(e)) return;
     e.preventDefault();
     noFolderDragOver = false;
     const convId = conversationsStore.draggingConvId;
@@ -70,7 +96,15 @@
     />
   </div>
 
-  <div class="sidebar-body">
+  <div
+    class="sidebar-body"
+    class:no-folder-drag-over={noFolderDragOver}
+    role="region"
+    aria-label="Conversation list; drop on empty space to remove from folder"
+    ondragover={onSidebarDragOver}
+    ondragleave={onSidebarDragLeave}
+    ondrop={onNoFolderDrop}
+  >
     {#if isSearching}
       {#if conversationsStore.searching}
         <div class="sidebar-hint">Searching…</div>
@@ -85,28 +119,27 @@
       {#each rootFolders as folder (folder.id)}
         <SidebarFolder {folder} />
       {/each}
-      {#each unfolderedConvs as conv (conv.id)}
-        <SidebarConversation conversation={conv} />
-      {/each}
+      <div class="unfiled-label">No folder</div>
+      <div class="unfiled-list">
+        {#each unfolderedConvs as conv (conv.id)}
+          <SidebarConversation conversation={conv} />
+        {/each}
+      </div>
       {#if conversationsStore.sorted.length === 0}
         <div class="sidebar-hint">No conversations yet</div>
       {/if}
     {/if}
-    {#if conversationsStore.draggingConvId !== null}
-      <div
-        class="no-folder-drop"
-        class:drag-over={noFolderDragOver}
-        role="region"
-        aria-label="Drop here to remove from folder"
-        ondragover={(e) => { e.preventDefault(); noFolderDragOver = true; }}
-        ondragleave={() => { noFolderDragOver = false; }}
-        ondrop={onNoFolderDrop}
-      >No folder</div>
-    {/if}
   </div>
 
   <div class="sidebar-footer">
-    <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
+    {#if creatingFolder}
+      <form class="new-folder-form" onsubmit={(e) => { e.preventDefault(); finishNewFolder(); }}>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="new-folder-input" bind:value={newFolderName} placeholder="Folder name" autofocus onkeydown={(e) => { if (e.key === 'Escape') creatingFolder = false; }} />
+      </form>
+    {:else}
+      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
+    {/if}
     <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
   </div>
 </aside>
@@ -169,24 +202,22 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+    position: relative;
+  }
+  .sidebar-body.no-folder-drag-over {
+    background: var(--accent-subtle);
   }
 
-  .no-folder-drop {
-    padding: 14px 8px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-sm);
+  .unfiled-label {
+    padding: 8px 8px 3px;
     color: var(--text-muted);
-    font-size: 13px;
-    text-align: center;
-    margin-top: 4px;
-    cursor: copy;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
   }
-  .no-folder-drop.drag-over {
-    background: var(--accent-subtle);
-    color: var(--accent);
-    border-color: var(--accent);
-  }
+  .unfiled-list { min-height: 28px; }
 
   .sidebar-hint { font-size: 12px; color: var(--text-muted); padding: 8px 8px; }
 
@@ -209,4 +240,15 @@
   .sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
   .sidebar-footer-btn.danger { color: #f07070; }
   .sidebar-footer-btn.danger:hover { background: var(--bg-hover); color: #f07070; }
+  .new-folder-form { padding: 0 0 4px; }
+  .new-folder-input {
+    width: 100%;
+    padding: 6px 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+  }
 </style>

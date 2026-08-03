@@ -25,8 +25,9 @@ function createAuthStore() {
     user = await api.auth.me();
   }
 
-  function logout() {
-    window.location.href = '/api/auth/logout';
+  async function logout() {
+    await api.auth.logout().catch(() => {});
+    window.location.href = '/';
   }
 
   return {

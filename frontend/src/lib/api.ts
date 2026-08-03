@@ -1,7 +1,7 @@
 import type {
   User, Conversation, ConversationFolder, Message, SystemPrompt,
   ModelInfo, ModelPreset, Automation, AutomationRun,
-  UserPreferences, ConfigFile, UploadResult
+  UserPreferences, UploadResult
 } from './types';
 
 class HttpError extends Error {
@@ -39,7 +39,7 @@ const put = <T>(path: string, body?: unknown) => req<T>('PUT', path, body);
 export const api = {
   auth: {
     me: () => get<User>('/api/auth/me'),
-    logout: () => get<void>('/api/auth/logout'),
+    logout: () => post<void>('/api/auth/logout'),
     localEnabled: () => get<{ enabled: boolean }>('/api/auth/local-enabled'),
     localLogin: (username: string, password: string) =>
       post<{ ok: boolean }>('/api/auth/local', { username, password }),
@@ -134,9 +134,6 @@ uploads: {
   admin: {
     prompts: () => get<SystemPrompt[]>('/api/admin/prompts'),
     automations: () => get<Automation[]>('/api/admin/automations'),
-    config: () => get<ConfigFile[]>('/api/admin/config'),
-    updateConfig: (name: string, content: string) =>
-      put<void>(`/api/admin/config/${name}`, { content }),
   },
 };
 

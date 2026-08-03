@@ -16,7 +16,7 @@ RUN npm ci
 COPY server/ .
 RUN node_modules/.bin/esbuild src/index.ts \
       --bundle --platform=node --target=node24 \
-      --packages=external --outfile=dist/index.js
+      --packages=external --format=esm --outfile=dist/index.js
 RUN npm prune --omit=dev
 
 # Stage 3: Clean runtime image
@@ -30,11 +30,9 @@ COPY --chown=node:node --from=build-server /app/dist/index.js ./index.js
 COPY --chown=node:node --from=build-frontend /app/dist ./static
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
-RUN mkdir -p /data /app/config && \
-    chown -R node:node /data && \
+RUN mkdir -p /app/config && \
     chmod +x /docker-entrypoint.sh
 
-VOLUME ["/data"]
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

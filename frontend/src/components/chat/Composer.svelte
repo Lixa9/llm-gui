@@ -115,10 +115,6 @@
       model: selectedModel,
       system_prompt: systemPromptText || undefined,
       system_prompt_id: systemPromptId,
-      messages: chatStore.messages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      })),
       new_user_message: { content: contentParts },
     };
 

@@ -33,7 +33,6 @@ export interface UserRow {
   sub: string;
   email: string;
   name: string;
-  role_override: Role | null;
   created_at: number;
 }
 
@@ -49,13 +48,13 @@ export interface ConversationRow {
   id: string;
   owner_sub: string;
   title: string;
-  title_auto: number;
+  title_auto: boolean;
   model_id: string | null;
   preset_id: string | null;
   system_prompt_id: string | null;
   custom_system_prompt: string | null;
   folder_id: string | null;
-  pinned: number;
+  pinned: boolean;
   forked_from_id: string | null;
   forked_at_message_id: string | null;
   created_at: number;
@@ -80,7 +79,7 @@ export interface SystemPromptRow {
   owner_sub: string | null;
   name: string;
   content: string;
-  visible_to: string | null;
+  visible_to: string[] | null;
   created_at: number;
   deleted_at: number | null;
 }
@@ -92,7 +91,7 @@ export interface ModelPresetRow {
   base_model_id: string;
   system_prompt: string;
   created_at: number;
-  visible_to: string | null;
+  visible_to: string[] | null;
   deleted_at: number | null;
 }
 
@@ -101,11 +100,11 @@ export interface AutomationRow {
   owner_sub: string | null;
   name: string;
   type: string;
-  definition: string;
-  enabled: number;
+  definition: Record<string, unknown>;
+  enabled: boolean;
   created_at: number;
   deleted_at: number | null;
-  visible_to: string | null;
+  visible_to: string[] | null;
 }
 
 export interface AutomationRunRow {
@@ -117,16 +116,15 @@ export interface AutomationRunRow {
   error: string | null;
 }
 
-// Session JWT payload
+// Session identity loaded from the server-side session record.
 export interface SessionPayload {
   sub: string;
   email: string;
   name: string;
   role: Role;
   method: 'oidc' | 'local';
-  jti: string;
-  exp: number;
-  iat: number;
+  sessionId: string;
+  expiresAt: number;
 }
 
 // Config types
@@ -134,14 +132,10 @@ export interface AppConfig {
   app: {
     name: string;
     base_url: string;
-    secret_key: string;
   };
   openai: {
     base_url: string;
     api_key?: string;
-  };
-  database: {
-    path: string;
   };
   oidc?: {
     issuer: string;
@@ -162,8 +156,6 @@ export interface AppConfig {
   conversation: {
     auto_title: boolean;
     auto_title_model: string;
-    context_window_tokens: number;
-    context_window_reserve: number;
   };
   models?: ModelYamlEntry[];
   prompts?: PromptYamlEntry[];
@@ -175,8 +167,7 @@ export interface ModelYamlEntry {
   id: string;
   display_name: string;
   allowed_roles: Role[];
-  context_window_tokens?: number;
-  context_mode?: 'truncate' | 'passthrough' | 'session_only';
+  history_mode?: 'full' | 'latest_only';
 }
 
 export interface PromptYamlEntry {

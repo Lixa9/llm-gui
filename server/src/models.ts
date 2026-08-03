@@ -36,8 +36,9 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
       _cache = { models: cfg.models ?? [], at: Date.now() };
     } else {
       try {
-        const res = await fetch(`${cfg.openai.base_url}/models`, {
+        const res = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/models`, {
           headers: cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {},
+          signal: AbortSignal.timeout(10_000),
         });
         if (res.ok) {
           const raw = await res.json();

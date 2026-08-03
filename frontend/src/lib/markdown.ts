@@ -1,4 +1,5 @@
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -63,9 +64,6 @@ marked.use({
   breaks: false,
 });
 
-const REMOVE_TAGS = new Set([
-  'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'form',
-]);
 const ALLOWED_TAGS = new Set([
   'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'del', 'ins',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
@@ -76,43 +74,18 @@ const ALLOWED_TAGS = new Set([
   'span', 'div', 'button',
   'details', 'summary',
 ]);
-const ALLOWED_ATTRS = new Set([
+const ALLOWED_ATTRS = [
   'href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'open', 'aria-label',
-]);
-
-function isSafeUrl(value: string): boolean {
-  const v = value.trim().toLowerCase();
-  if (v.startsWith('javascript:')) return false;
-  if (v.startsWith('data:') && !v.startsWith('data:image/')) return false;
-  return true;
-}
-
-function sanitizeNode(el: Element): void {
-  for (const child of [...el.children]) {
-    const tag = child.tagName.toLowerCase();
-    if (REMOVE_TAGS.has(tag)) { child.remove(); continue; }
-    if (!ALLOWED_TAGS.has(tag)) {
-      child.replaceWith(...child.childNodes);
-      sanitizeNode(el);
-      return;
-    }
-    for (const attr of [...child.attributes]) {
-      if (!ALLOWED_ATTRS.has(attr.name)) {
-        child.removeAttribute(attr.name);
-        continue;
-      }
-      if ((attr.name === 'href' || attr.name === 'src') && !isSafeUrl(attr.value)) {
-        child.removeAttribute(attr.name);
-      }
-    }
-    sanitizeNode(child);
-  }
-}
+];
 
 function sanitize(html: string): string {
-  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
-  sanitizeNode(doc.body);
-  return doc.body.innerHTML;
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [...ALLOWED_TAGS],
+    ALLOWED_ATTR: ALLOWED_ATTRS,
+    FORBID_ATTR: ['style', 'onerror', 'onclick', 'onload'],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+  });
 }
 
 export function renderMarkdown(text: string): string {

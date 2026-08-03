@@ -1,17 +1,12 @@
 import { Hono } from 'hono';
-import { join } from 'path';
-import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { z } from 'zod';
 import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
+import { getDb, generateId, safeParseJson } from './db/index';
 import { getConfig } from './config';
-import { checkRateLimit, openStream, closeStream } from './ratelimit';
+import { checkRateLimit, closeStream, openStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
-import { getUploadsDir, MIME_TO_EXT, classifyMime } from './uploads';
 import type { MessageContentPart } from './types';
-import type { FileMeta } from './extract';
-import { PDF_PAGE_CAP } from './extract';
 
 interface UploadRow {
   sha256: string;
@@ -19,415 +14,229 @@ interface UploadRow {
   filename: string;
   size: number;
   extracted_text: string | null;
-  file_meta: string | null;
+  file_meta: unknown;
+  data: Buffer;
+  derived_images: unknown;
 }
 
-function buildFileJsonBlock(row: UploadRow): string {
-  const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
-  const ext = MIME_TO_EXT[row.mime_type] ?? '';
-  const obj: Record<string, unknown> = {
-    filename: row.filename,
-    ext,
-    size_kb: Math.round(row.size / 1024),
-    ...(meta?.sheet_names?.length && { sheets: meta.sheet_names }),
-    content: row.extracted_text ?? '[Text extraction was not available for this file]',
-  };
-  return JSON.stringify(obj, null, 2);
-}
-
-async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
-  const db = getDb();
-  const uploadsDir = getUploadsDir();
-  const resolved: unknown[] = [];
-
-  const hasText = parts.some(p => p.type === 'text');
-  const hasAttachments = parts.some(p => p.type === 'image_url' || p.type === 'file');
-  let separatorDone = !hasText || !hasAttachments;
-
-  for (const part of parts) {
-    if (!separatorDone && (part.type === 'image_url' || part.type === 'file')) {
-      resolved.push({ type: 'text', text: '---\nAttached files:' });
-      separatorDone = true;
-    }
-    if (part.type === 'image_url') {
-      const url = part.image_url.url;
-      if (url.startsWith('/api/uploads/')) {
-        const uploadId = url.split('/').pop()!;
-        const row = db.prepare(
-          'SELECT sha256, mime_type FROM uploads WHERE id=? AND owner_sub=?'
-        ).get(uploadId, ownerSub) as { sha256: string; mime_type: string } | undefined;
-        if (row) {
-          const ext = MIME_TO_EXT[row.mime_type] ?? '';
-          const filePath = join(uploadsDir, `${row.sha256}${ext}`);
-          if (existsSync(filePath)) {
-            const bytes = await readFile(filePath);
-            resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${bytes.toString('base64')}` } });
-          }
-        }
-      } else if (url.startsWith('data:')) {
-        resolved.push({ type: 'image_url', image_url: { url } });
-      }
-    } else if (part.type === 'file') {
-      const url = part.file.url;
-      if (url.startsWith('/api/uploads/')) {
-        const uploadId = url.split('/').pop()!;
-        const row = db.prepare(
-          'SELECT sha256, mime_type, filename, size, extracted_text, file_meta FROM uploads WHERE id=? AND owner_sub=?'
-        ).get(uploadId, ownerSub) as UploadRow | undefined;
-
-        if (row) {
-          const meta: FileMeta | null = row.file_meta ? JSON.parse(row.file_meta) : null;
-          const { isPdf, isDocx, isOdt, isEpub } = classifyMime(row.mime_type);
-
-          if (isPdf && meta?.page_count) {
-            const pagesDir = join(uploadsDir, 'pdf-pages', row.sha256);
-            const served = meta.served_pages ?? Math.min(meta.page_count, PDF_PAGE_CAP);
-            const ext = MIME_TO_EXT[row.mime_type] ?? '.pdf';
-
-            for (let i = 1; i <= served; i++) {
-              const padded = String(i).padStart(3, '0');
-              const pagePath = join(pagesDir, `page-${padded}.jpg`);
-              if (!existsSync(pagePath)) continue;
-
-              const label: Record<string, unknown> = i === 1
-                ? { filename: row.filename, ext, size_kb: Math.round(row.size / 1024), page: i, total_pages: meta.page_count }
-                : { filename: row.filename, page: i, total_pages: meta.page_count };
-              resolved.push({ type: 'text', text: JSON.stringify(label) });
-
-              const pageBytes = await readFile(pagePath);
-              resolved.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pageBytes.toString('base64')}` } });
-            }
-
-            if (meta.page_count > served) {
-              resolved.push({
-                type: 'text',
-                text: JSON.stringify({ filename: row.filename, note: `Truncated: showing ${served} of ${meta.page_count} pages` }),
-              });
-            }
-          } else if ((isDocx || isOdt || isEpub) && meta) {
-            resolved.push({ type: 'text', text: buildFileJsonBlock(row) });
-
-            const imagesDir = join(uploadsDir, 'doc-images', row.sha256);
-            if (existsSync(imagesDir) && (meta.served_image_count ?? 0) > 0) {
-              const files = (await readdir(imagesDir)).sort();
-              const served = meta.served_image_count ?? files.length;
-              for (let i = 0; i < Math.min(files.length, served); i++) {
-                const imgBytes = await readFile(join(imagesDir, files[i]));
-                const imgMime = files[i].endsWith('.png') ? 'image/png'
-                  : files[i].endsWith('.gif') ? 'image/gif'
-                  : files[i].endsWith('.webp') ? 'image/webp'
-                  : 'image/jpeg';
-                resolved.push({
-                  type: 'text',
-                  text: JSON.stringify({ filename: row.filename, embedded_image: i + 1, of: served }),
-                });
-                resolved.push({ type: 'image_url', image_url: { url: `data:${imgMime};base64,${imgBytes.toString('base64')}` } });
-              }
-            }
-          } else {
-            resolved.push({ type: 'text', text: buildFileJsonBlock(row) });
-          }
-        }
-      }
-    } else {
-      resolved.push(part);
-    }
-  }
-  return resolved;
-}
-
-export const relayRouter = new Hono();
-relayRouter.use('*', requireAuth);
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-function contentPartsToText(content: MessageContentPart[]): string {
-  return content
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map(p => p.text)
-    .join('\n');
+interface StoredMessage {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 function sse(data: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
+  const resolved: unknown[] = [];
+  const db = getDb();
+  for (const part of parts) {
+    if (part.type === 'text') {
+      resolved.push(part);
+      continue;
+    }
+    const url = part.type === 'image_url' ? part.image_url.url : part.file.url;
+    if (url.startsWith('data:')) {
+      resolved.push(part);
+      continue;
+    }
+    if (!url.startsWith('/api/uploads/')) continue;
+    const uploadId = url.split('/').pop();
+    if (!uploadId) continue;
+    const row = await db.prepare(`
+      SELECT sha256, mime_type, filename, size, extracted_text, file_meta, data, derived_images
+      FROM uploads WHERE id=? AND owner_sub=?
+    `).get<UploadRow>(uploadId, ownerSub);
+    if (!row) continue;
+
+    if (part.type === 'image_url') {
+      resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${row.data.toString('base64')}` } });
+      continue;
+    }
+
+    const meta = safeParseJson<Record<string, unknown>>(row.file_meta, {});
+    const derived = safeParseJson<Array<{ data: string; ext: string }>>(row.derived_images, []);
+    const isPdf = row.mime_type === 'application/pdf';
+    if (isPdf && derived.length > 0) {
+      for (let index = 0; index < derived.length; index++) {
+        const image = derived[index];
+        resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, page: index + 1, total_pages: meta.page_count }) });
+        resolved.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.data}` } });
+      }
+      if (Number(meta.page_count) > derived.length) resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, note: `Showing first ${derived.length} of ${meta.page_count} pages` }) });
+    } else if (derived.length > 0) {
+      resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, ext: MIME_TO_EXT[row.mime_type] ?? '', size_kb: Math.round(row.size / 1024), content: row.extracted_text ?? '[Text extraction unavailable]' }) });
+      for (let index = 0; index < derived.length; index++) {
+        const image = derived[index];
+        const mime = image.ext === '.png' ? 'image/png' : image.ext === '.gif' ? 'image/gif' : image.ext === '.webp' ? 'image/webp' : 'image/jpeg';
+        resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, embedded_image: index + 1, of: derived.length }) });
+        resolved.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${image.data}` } });
+      }
+    } else {
+      resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, ext: MIME_TO_EXT[row.mime_type] ?? '', size_kb: Math.round(row.size / 1024), content: row.extracted_text ?? '[Text extraction unavailable]' }) });
+    }
+  }
+  return resolved;
+}
+
+const MIME_TO_EXT: Record<string, string> = {
+  'application/pdf': '.pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.oasis.opendocument.text': '.odt',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.oasis.opendocument.spreadsheet': '.ods',
+  'application/epub+zip': '.epub',
+};
+
+function contentPartsToText(content: MessageContentPart[]): string {
+  return content.filter((part): part is { type: 'text'; text: string } => part.type === 'text').map(part => part.text).join('\n');
+}
+
+const contentPartSchema = z.union([
+  z.object({ type: z.literal('text'), text: z.string().max(1_000_000) }),
+  z.object({ type: z.literal('image_url'), image_url: z.object({ url: z.string().min(1).max(30_000_000) }), _filename: z.string().max(255).optional() }),
+  z.object({ type: z.literal('file'), file: z.object({ url: z.string().min(1).max(30_000_000) }), _filename: z.string().max(255).optional() }),
+]);
+const chatRequestSchema = z.object({
+  conversation_id: z.string().uuid().nullable().optional(),
+  model: z.string().trim().min(1).max(300),
+  system_prompt: z.string().max(100_000).optional(),
+  new_user_message: z.object({ content: z.array(contentPartSchema).min(1).max(200) }),
+});
+
+export const relayRouter = new Hono();
+relayRouter.use('*', requireAuth);
+
 relayRouter.post('/', async (c) => {
   const user = c.get('user');
-  const start = Date.now();
-
-  const body = await c.req.json() as {
-    conversation_id: string | null;
+  const cfg = getConfig();
+  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
+  const parsedBody = chatRequestSchema.safeParse(await c.req.json());
+  if (!parsedBody.success) return c.json({ error: 'Invalid chat request' }, 400);
+  const body = parsedBody.data as {
+    conversation_id?: string | null;
     model: string;
     system_prompt?: string;
-    messages: Array<{
-      role: 'user' | 'assistant';
-      content: MessageContentPart[];
-    }>;
     new_user_message: { content: MessageContentPart[] };
   };
-
-  const cfg = getConfig();
-  if (!cfg.openai.base_url) {
-    return c.json({ error: 'OpenAI-compatible endpoint is not configured. Set openai.base_url in config.yaml.' }, 503);
-  }
-
-  // Validate that the requested model is in the user's allowed list
   const allowedModels = await fetchModels(user.role);
-  if (allowedModels.length > 0 && !allowedModels.some(m => m.id === body.model)) {
-    return c.json({ error: 'Model not available' }, 400);
-  }
+  const modelEntry = allowedModels.find(model => model.id === body.model);
+  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
 
   const db = getDb();
-
-  // Resolve conversation (ownership validated before rate-limit is consumed)
   let convId = body.conversation_id;
   if (!convId) {
     convId = generateId();
-    db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)')
-      .run(convId, user.sub, body.model, body.system_prompt ?? null);
-  } else {
-    const owned = db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub);
-    if (!owned) return c.json({ error: 'Not found' }, 404);
+    await db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)').run(convId, user.sub, body.model, body.system_prompt ?? null);
+  } else if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub)) {
+    return c.json({ error: 'Not found' }, 404);
   }
 
-  // Rate limit check — placed after ownership validation so rejected requests don't consume tokens
-  const rl = checkRateLimit(user.sub);
-  if (!rl.allowed) {
-    return c.json({ error: rl.reason }, 429);
-  }
-
-  logger.info('chat request', {
-    user_sub: user.sub,
-    model: body.model,
-    conv_id: convId,
-    message_count: body.messages.length,
-  });
-
-  // Persist user message
-  const userMsgId = generateId();
+  const rl = await checkRateLimit(user.sub);
+  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
+  const leaseId = await openStream(user.sub);
   const userContent = JSON.stringify(body.new_user_message.content);
   const userText = contentPartsToText(body.new_user_message.content);
-  db.prepare(
-    'INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(userMsgId, convId, 'user', userContent, userText, 'done');
+  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(generateId(), convId, 'user', userContent, userText, 'done', Date.now());
 
-  // Build OpenAI messages array
-  const allMessages = body.messages;
-  const systemPrompt = body.system_prompt;
-  const modelEntry = allowedModels.find(m => m.id === body.model);
-  const contextMode = modelEntry?.context_mode ?? 'truncate';
-
+  const stored = await db.prepare(`SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id`).all<StoredMessage>(convId);
+  const history = stored.slice(0, -1).map(message => ({ role: message.role, content: safeParseJson<MessageContentPart[]>(message.content, []) }));
   const openaiMessages: unknown[] = [];
-  if (systemPrompt) openaiMessages.push({ role: 'system', content: systemPrompt });
-
-  if (contextMode === 'session_only') {
-    // Agent manages its own context; only send the new message
-  } else if (contextMode === 'passthrough') {
-    for (const msg of allMessages) {
-      openaiMessages.push({
-        role: msg.role,
-        content: await resolveContentParts(msg.content, user.sub),
-      });
-    }
-  } else {
-    // truncate (default): reverse-scan to fit within token budget
-    const windowTokens = (modelEntry?.context_window_tokens ?? cfg.conversation.context_window_tokens)
-      - cfg.conversation.context_window_reserve;
-    let tokenCount = systemPrompt ? estimateTokens(systemPrompt) : 0;
-    tokenCount += estimateTokens(userText);
-    const trimmed: typeof allMessages = [];
-    for (const msg of [...allMessages].reverse()) {
-      const msgTokens = estimateTokens(contentPartsToText(msg.content));
-      if (tokenCount + msgTokens > windowTokens && trimmed.length > 0) break;
-      tokenCount += msgTokens;
-      trimmed.unshift(msg);
-    }
-    for (const msg of trimmed) {
-      openaiMessages.push({
-        role: msg.role,
-        content: await resolveContentParts(msg.content, user.sub),
-      });
-    }
+  if (body.system_prompt) openaiMessages.push({ role: 'system', content: body.system_prompt });
+  if (modelEntry.history_mode !== 'latest_only') {
+    for (const message of history) openaiMessages.push({ role: message.role, content: await resolveContentParts(message.content, user.sub) });
   }
-
   openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content, user.sub) });
 
-  openStream(user.sub);
-
+  const isFirstExchange = stored.filter(message => message.role === 'user').length === 1;
+  const assistantMsgId = generateId();
+  const start = Date.now();
   let fullText = '';
-  let assistantMsgId = generateId();
-  const existingUserMsgCount = (db.prepare(
-    "SELECT COUNT(*) as n FROM messages WHERE conversation_id=? AND role='user'"
-  ).get(convId) as { n: number }).n;
-  // The user message was just inserted above, so count=1 means this is the first exchange
-  let isFirstExchange = existingUserMsgCount === 1;
-
   const stream = new ReadableStream({
     async start(controller) {
-      let upstreamRes: Response | null = null;
       let promptTokens: number | null = null;
       let completionTokens: number | null = null;
       try {
-        upstreamRes = await fetch(`${cfg.openai.base_url}/chat/completions`, {
+        const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
-          headers: {
-            ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: body.model,
-            messages: openaiMessages,
-            stream: true,
-            stream_options: { include_usage: true },
-            ...(contextMode === 'session_only' ? { session_id: convId } : {}),
-          }),
+          headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: body.model, messages: openaiMessages, stream: true, stream_options: { include_usage: true }, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
           signal: c.req.raw.signal,
         });
-
-        if (!upstreamRes.ok) {
-          const errText = await upstreamRes.text();
-          controller.enqueue(sse({ type: 'error', message: `upstream error ${upstreamRes.status}: ${errText}` }));
+        if (!response.ok) {
+          const detail = (await response.text().catch(() => '')).slice(0, 500);
+          controller.enqueue(sse({ type: 'error', message: `upstream error ${response.status}${detail ? `: ${detail}` : ''}` }));
           controller.close();
           return;
         }
-
-        const buf = new TextDecoder();
-        let lineBuf = '';
-
-        for await (const chunk of upstreamRes.body as unknown as AsyncIterable<Uint8Array>) {
-          lineBuf += buf.decode(chunk, { stream: true });
-          const parts = lineBuf.split('\n\n');
-          lineBuf = parts.pop() ?? '';
-
+        if (!response.body) throw new Error('Upstream returned no response body');
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let done = false;
+        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+          buffer += decoder.decode(chunk, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
           for (const part of parts) {
             for (const line of part.split('\n')) {
               if (!line.startsWith('data: ')) continue;
-              const dataStr = line.slice(6).trim();
-              if (dataStr === '[DONE]') {
-                const assistantContent = JSON.stringify([{ type: 'text', text: fullText }]);
-                db.prepare(
-                  'INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                ).run(assistantMsgId, convId, 'assistant', assistantContent, fullText, body.model, promptTokens, completionTokens, 'done');
-
-                controller.enqueue(sse({ type: 'done', tokens_in: promptTokens, tokens_out: completionTokens }));
-
-                // Auto-title
-                if (isFirstExchange && cfg.conversation.auto_title) {
-                  generateTitle(convId!, body.model, cfg, db, userText, fullText).then(title => {
-                    if (title) {
-                      controller.enqueue(sse({ type: 'title', title }));
-                    }
-                  }).catch(() => {});
-                }
-
-                controller.close();
-                return;
-              }
-
+              const data = line.slice(6).trim();
+              if (data === '[DONE]') { done = true; break; }
               try {
-                const parsed = JSON.parse(dataStr) as {
-                  choices?: Array<{
-                    delta?: {
-                      content?: string;
-                    };
-                  }>;
-                  usage?: {
-                    prompt_tokens: number;
-                    completion_tokens: number;
-                  };
-                };
-
-                if (parsed.usage) {
-                  promptTokens = parsed.usage.prompt_tokens;
-                  completionTokens = parsed.usage.completion_tokens;
-                }
-
-                const delta = parsed.choices?.[0]?.delta;
-                if (!delta) continue;
-
-                if (delta.content) {
-                  fullText += delta.content;
-                  controller.enqueue(sse({ type: 'delta', content: delta.content }));
-                }
-              } catch {
-                // malformed chunk — skip
-              }
+                const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+                if (parsed.usage) { promptTokens = parsed.usage.prompt_tokens ?? null; completionTokens = parsed.usage.completion_tokens ?? null; }
+                const delta = parsed.choices?.[0]?.delta?.content;
+                if (delta) { fullText += delta; controller.enqueue(sse({ type: 'delta', content: delta })); }
+              } catch { /* ignore malformed SSE frames */ }
             }
+            if (done) break;
           }
+          if (done) break;
         }
-      } catch (e) {
-        if ((e as Error).name === 'AbortError') {
-          // Save partial response
-          if (fullText) {
-            const partialContent = JSON.stringify([{ type: 'text', text: fullText }]);
-            db.prepare(
-              'INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            ).run(assistantMsgId, convId, 'assistant', partialContent, fullText, body.model, promptTokens, completionTokens, 'aborted');
-          }
+        if (fullText || done) {
+          await db.prepare(`
+            INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp)
+            VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, 'done', ?)
+          `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, promptTokens, completionTokens, Date.now());
+        }
+        controller.enqueue(sse({ type: 'done', tokens_in: promptTokens, tokens_out: completionTokens }));
+        if (isFirstExchange && cfg.conversation.auto_title && fullText) {
+          const title = await generateTitle(convId, body.model, cfg, userText, fullText);
+          if (title) controller.enqueue(sse({ type: 'title', title }));
+        }
+        controller.close();
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+          if (fullText) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, 'aborted', ?)`)
+            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, promptTokens, completionTokens, Date.now());
         } else {
-          controller.enqueue(sse({ type: 'error', message: (e as Error).message }));
+          controller.enqueue(sse({ type: 'error', message: 'Upstream request failed' }));
         }
         controller.close();
       } finally {
-        closeStream(user.sub);
-        logger.info('chat response', {
-          user_sub: user.sub,
-          model: body.model,
-          latency_ms: Date.now() - start,
-          conv_id: convId,
-          aborted: (c.req.raw.signal as AbortSignal).aborted,
-        });
+        await closeStream(leaseId).catch(() => {});
+        logger.info('Chat response complete', { user_sub: user.sub, model: body.model, conv_id: convId, latency_ms: Date.now() - start, aborted: c.req.raw.signal.aborted });
       }
     },
   });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'X-Accel-Buffering': 'no',
-      'Connection': 'keep-alive',
-    },
-  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' } });
 });
 
-async function generateTitle(
-  convId: string,
-  model: string,
-  cfg: ReturnType<typeof getConfig>,
-  db: ReturnType<typeof getDb>,
-  userPrompt: string,
-  assistantResponse: string,
-): Promise<string | null> {
+async function generateTitle(convId: string, model: string, cfg: ReturnType<typeof getConfig>, userPrompt: string, assistantResponse: string): Promise<string | null> {
   try {
-    const context = `${userPrompt}\n\n${assistantResponse}`.slice(0, 2000);
-    const titleModel = cfg.conversation.auto_title_model ?? model;
-
-    const res = await fetch(`${cfg.openai.base_url}/chat/completions`, {
+    const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: titleModel,
-        stream: false,
-        max_tokens: 20,
-        messages: [
-          { role: 'system', content: 'Return a 4-6 word title for this conversation. No punctuation, no quotes.' },
-          { role: 'user', content: context },
-        ],
-      }),
+      body: JSON.stringify({ model: cfg.conversation.auto_title_model || model, stream: false, max_tokens: 20, messages: [{ role: 'system', content: 'Return a 4-6 word title for this conversation. No punctuation, no quotes.' }, { role: 'user', content: `${userPrompt}\n\n${assistantResponse}`.slice(0, 2000) }] }),
+      signal: AbortSignal.timeout(20_000),
     });
-
-    if (!res.ok) return null;
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const title = data.choices[0]?.message?.content?.trim().slice(0, 80);
-    if (title) {
-      db.prepare('UPDATE conversations SET title=?, title_auto=1 WHERE id=? AND title IS NULL').run(title, convId);
-    }
+    if (!response.ok) return null;
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const title = data.choices?.[0]?.message?.content?.trim().slice(0, 80);
+    if (title) await getDb().prepare("UPDATE conversations SET title=?, title_auto=true WHERE id=? AND title_auto=false AND title='New conversation'").run(title, convId);
     return title ?? null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }

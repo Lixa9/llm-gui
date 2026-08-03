@@ -1,71 +1,50 @@
 import { getConfig } from './config';
+import { getDb, generateId } from './db/index';
 
-interface UserBucket {
-  minuteTokens: number;
-  hourTokens: number;
-  concurrentStreams: number;
-  lastMinuteReset: number;
-  lastHourReset: number;
+export interface RateLimitResult { allowed: boolean; reason?: string; }
+
+function bucketStart(now: number, seconds: number): number {
+  return Math.floor(now / (seconds * 1000)) * seconds * 1000;
 }
 
-const buckets = new Map<string, UserBucket>();
-
-function getBucket(sub: string): UserBucket {
-  let b = buckets.get(sub);
-  if (!b) {
-    b = { minuteTokens: 0, hourTokens: 0, concurrentStreams: 0, lastMinuteReset: Date.now(), lastHourReset: Date.now() };
-    buckets.set(sub, b);
-  }
-  return b;
-}
-
-export interface RateLimitResult {
-  allowed: boolean;
-  reason?: string;
-}
-
-export function sweepBuckets() {
-  const now = Date.now();
-  for (const [k, b] of buckets) {
-    if (now - b.lastHourReset > 7_200_000) buckets.delete(k);
-  }
-}
-
-export function checkRateLimit(sub: string): RateLimitResult {
+export async function checkRateLimit(subject: string): Promise<RateLimitResult> {
   const cfg = getConfig().rate_limits;
-  const b = getBucket(sub);
   const now = Date.now();
+  return getDb().transaction(async db => {
+    await db.prepare('DELETE FROM stream_leases WHERE expires_at <= ?').run(now);
+    const active = await db.prepare('SELECT COUNT(*)::int AS count FROM stream_leases WHERE subject=? AND expires_at>?').get<{ count: number }>(subject, now);
+    if (cfg.concurrent_streams > 0 && (active?.count ?? 0) >= cfg.concurrent_streams) return { allowed: false, reason: 'Rate limit: too many concurrent streams' };
 
-  if (now - b.lastMinuteReset >= 60_000) {
-    b.minuteTokens = 0;
-    b.lastMinuteReset = now;
-  }
-  if (now - b.lastHourReset >= 3_600_000) {
-    b.hourTokens = 0;
-    b.lastHourReset = now;
-  }
-
-  if (cfg.requests_per_minute > 0 && b.minuteTokens >= cfg.requests_per_minute) {
-    return { allowed: false, reason: 'Rate limit: too many requests per minute' };
-  }
-  if (cfg.requests_per_hour > 0 && b.hourTokens >= cfg.requests_per_hour) {
-    return { allowed: false, reason: 'Rate limit: too many requests per hour' };
-  }
-  if (cfg.concurrent_streams > 0 && b.concurrentStreams >= cfg.concurrent_streams) {
-    return { allowed: false, reason: 'Rate limit: too many concurrent streams' };
-  }
-
-  b.minuteTokens++;
-  b.hourTokens++;
-  return { allowed: true };
+    for (const [seconds, limit, label] of [
+      [60, cfg.requests_per_minute, 'minute'],
+      [3600, cfg.requests_per_hour, 'hour'],
+    ] as const) {
+      if (limit <= 0) continue;
+      const row = await db.prepare(`
+        INSERT INTO rate_limit_counters (subject, bucket_start, window_seconds, requests)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(subject, bucket_start, window_seconds)
+        DO UPDATE SET requests=rate_limit_counters.requests+1
+        RETURNING requests
+      `).get<{ requests: number }>(subject, bucketStart(now, seconds), seconds);
+      if ((row?.requests ?? 0) > limit) return { allowed: false, reason: `Rate limit: too many requests per ${label}` };
+    }
+    return { allowed: true };
+  });
 }
 
-export function openStream(sub: string): void {
-  const b = getBucket(sub);
-  b.concurrentStreams++;
+export async function openStream(subject: string): Promise<string> {
+  const id = generateId();
+  await getDb().prepare('INSERT INTO stream_leases (id, subject, expires_at) VALUES (?, ?, ?)').run(id, subject, Date.now() + 30 * 60 * 1000);
+  return id;
 }
 
-export function closeStream(sub: string): void {
-  const b = getBucket(sub);
-  if (b.concurrentStreams > 0) b.concurrentStreams--;
+export async function closeStream(leaseId: string): Promise<void> {
+  await getDb().prepare('DELETE FROM stream_leases WHERE id=?').run(leaseId);
+}
+
+export async function sweepBuckets(): Promise<void> {
+  const now = Date.now();
+  await getDb().prepare('DELETE FROM rate_limit_counters WHERE bucket_start < ?').run(now - 2 * 3_600_000);
+  await getDb().prepare('DELETE FROM stream_leases WHERE expires_at <= ?').run(now);
 }
