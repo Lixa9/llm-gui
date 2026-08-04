@@ -27,6 +27,7 @@ RUN apk add --no-cache gosu
 
 COPY --chown=node:node --from=build-server /app/node_modules ./node_modules
 COPY --chown=node:node --from=build-server /app/dist/index.js ./index.js
+COPY --chown=node:node --from=build-server /app/package.json ./package.json
 COPY --chown=node:node --from=build-frontend /app/dist ./static
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
