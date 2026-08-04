@@ -76,91 +76,96 @@
   }
 </script>
 
-<div class="view">
-  <div class="view-header">
-    <h2 class="view-title">Automations</h2>
-    <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New automation</Button>
+<div class="view" class:editor-active={editorOpen}>
+  <div class="view-content">
+    <div class="view-header">
+      <div>
+        <h2 class="view-title">Automations</h2>
+        <p class="view-subtitle">Schedule recurring prompts. Personal automations belong to your account.</p>
+      </div>
+      <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New automation</Button>
+    </div>
+
+    {#if systemAutomations.length > 0}
+      <section class="section">
+        <h3 class="section-title">System automations <Badge variant="muted">read-only</Badge></h3>
+        <div class="auto-list">
+          {#each systemAutomations as auto (auto.id)}
+            <div class="auto-card">
+              <div class="auto-header">
+                <div class="auto-info">
+                  <span class="auto-name">{auto.name}</span>
+                  <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'subscribed' : 'not subscribed'}</Badge>
+                </div>
+                <div class="auto-actions">
+                  <Button variant="ghost" size="sm" onclick={() => automationsStore.toggleSubscription(auto.id, !auto.enabled)}>
+                    {auto.enabled ? 'Unsubscribe' : 'Subscribe'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
+                </div>
+              </div>
+              <div class="auto-toggles">
+                <button class="runs-toggle" onclick={() => toggleDetails(auto.id)}>
+                  {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
+                </button>
+                <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
+                  {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+                </button>
+              </div>
+              {#if expandedDetails.has(auto.id)}
+                <pre class="auto-details">{formatDefinition(auto)}</pre>
+              {/if}
+              {#if expandedRuns.has(auto.id)}
+                <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+      <section class="section">
+        <h3 class="section-title">My automations</h3>
+        {#if personalAutomations.length === 0}
+          <p class="empty-hint">No automations yet.</p>
+        {:else}
+          <div class="auto-list">
+            {#each personalAutomations as auto (auto.id)}
+              <div class="auto-card">
+                <div class="auto-header">
+                  <div class="auto-info">
+                    <span class="auto-name">{auto.name}</span>
+                    <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
+                  </div>
+                  <div class="auto-actions">
+                    <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
+                      {auto.enabled ? 'Disable' : 'Enable'}
+                    </Button>
+                    <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
+                    <Button variant="ghost" size="sm" onclick={() => { editing = auto; editorOpen = true; }}>Edit</Button>
+                    <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
+                  </div>
+                </div>
+                <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
+                  {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+                </button>
+                {#if expandedRuns.has(auto.id)}
+                  <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </section>
   </div>
 
-  {#if systemAutomations.length > 0}
-    <section class="section">
-      <h3 class="section-title">System automations <Badge variant="muted">read-only</Badge></h3>
-      <div class="auto-list">
-        {#each systemAutomations as auto (auto.id)}
-          <div class="auto-card">
-            <div class="auto-header">
-              <div class="auto-info">
-                <span class="auto-name">{auto.name}</span>
-                <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
-              </div>
-              <div class="auto-actions">
-                <Button variant="ghost" size="sm" onclick={() => automationsStore.toggleSubscription(auto.id, !auto.enabled)}>
-                  {auto.enabled ? 'Unsubscribe' : 'Subscribe'}
-                </Button>
-                <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
-              </div>
-            </div>
-            <div class="auto-toggles">
-              <button class="runs-toggle" onclick={() => toggleDetails(auto.id)}>
-                {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
-              </button>
-              <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-                {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
-              </button>
-            </div>
-            {#if expandedDetails.has(auto.id)}
-              <pre class="auto-details">{formatDefinition(auto)}</pre>
-            {/if}
-            {#if expandedRuns.has(auto.id)}
-              <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
-            {/if}
-          </div>
-        {/each}
-      </div>
-    </section>
-  {/if}
-
-  <section class="section">
-    <h3 class="section-title">My automations</h3>
-    {#if personalAutomations.length === 0}
-      <p class="empty-hint">No automations yet.</p>
-    {:else}
-      <div class="auto-list">
-        {#each personalAutomations as auto (auto.id)}
-          <div class="auto-card">
-            <div class="auto-header">
-              <div class="auto-info">
-                <span class="auto-name">{auto.name}</span>
-                <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
-              </div>
-              <div class="auto-actions">
-                <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
-                  {auto.enabled ? 'Disable' : 'Enable'}
-                </Button>
-                <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
-                <Button variant="ghost" size="sm" onclick={() => { editing = auto; editorOpen = true; }}>Edit</Button>
-                <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
-              </div>
-            </div>
-            <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-              {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
-            </button>
-            {#if expandedRuns.has(auto.id)}
-              <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
-            {/if}
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </section>
+  <AutomationEditor
+    open={editorOpen}
+    automation={editing}
+    onclose={() => editorOpen = false}
+    onsave={save}
+  />
 </div>
-
-<AutomationEditor
-  open={editorOpen}
-  automation={editing}
-  onclose={() => editorOpen = false}
-  onsave={save}
-/>
 
 <ConfirmDialog
   open={deleting !== null}
@@ -176,9 +181,12 @@
 />
 
 <style>
-  .view { padding: 24px; max-width: 900px; display: flex; flex-direction: column; gap: 20px; }
+  .view { padding: 24px; width: 100%; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; overflow: auto; }
+  .view.editor-active { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); }
+  .view-content { min-width: 0; max-width: 900px; display: flex; flex-direction: column; gap: 20px; }
   .view-header { display: flex; align-items: center; justify-content: space-between; }
   .view-title { font-size: 20px; font-weight: 600; }
+  .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
   .empty-hint { font-size: 13px; color: var(--text-muted); }
   .section { display: flex; flex-direction: column; gap: 10px; }
   .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
@@ -220,5 +228,10 @@
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  @media (max-width: 820px) {
+    .view, .view.editor-active { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+    .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
   }
 </style>

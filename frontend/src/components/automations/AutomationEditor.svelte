@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Modal from '../ui/Modal.svelte';
   import Button from '../ui/Button.svelte';
   import Select from '../ui/Select.svelte';
   import ModelPicker from '../chat/ModelPicker.svelte';
@@ -62,50 +61,68 @@
   }
 </script>
 
-<Modal {open} {onclose} title={automation ? 'Edit automation' : 'New automation'} width="560px">
-  <div class="field">
-    <label class="label" for="ae-name">Name</label>
-    <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" />
-  </div>
-  <div class="field">
-    <label class="label" for="ae-interval">Run every</label>
-    <div class="interval-row">
-      <input
-        id="ae-interval"
-        class="input interval-input"
-        type="number"
-        min="1"
-        step="1"
-        bind:value={interval}
-        onblur={clampInterval}
-        oninput={() => { interval = Math.floor(interval); }}
-      />
-      <div class="interval-select">
-        <Select bind:value={unit} options={unitOptions} />
+{#if open}
+  <aside class="editor-panel">
+    <div class="editor-header">
+      <div>
+        <h3>{automation ? 'Edit automation' : 'New automation'}</h3>
+        <p>This automation is private to your account.</p>
+      </div>
+      <button class="close-button" type="button" onclick={onclose} aria-label="Close editor">✕</button>
+    </div>
+    <div class="editor-body">
+      <div class="field">
+        <label class="label" for="ae-name">Name</label>
+        <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" />
+      </div>
+      <div class="field">
+        <label class="label" for="ae-interval">Run every</label>
+        <div class="interval-row">
+          <input
+            id="ae-interval"
+            class="input interval-input"
+            type="number"
+            min="1"
+            step="1"
+            bind:value={interval}
+            onblur={clampInterval}
+            oninput={() => { interval = Math.floor(interval); }}
+          />
+          <div class="interval-select">
+            <Select bind:value={unit} options={unitOptions} />
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="ae-model">Model</label>
+        <ModelPicker bind:value={model} />
+      </div>
+      <div class="field">
+        <label class="label" for="ae-sysprompt">System prompt</label>
+        <textarea class="textarea" id="ae-sysprompt" bind:value={systemPrompt} rows={3} placeholder="Optional…"></textarea>
+      </div>
+      <div class="field">
+        <label class="label" for="ae-userprompt">User prompt</label>
+        <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…"></textarea>
       </div>
     </div>
-  </div>
-  <div class="field">
-    <label class="label" for="ae-model">Model</label>
-    <ModelPicker bind:value={model} />
-  </div>
-  <div class="field">
-    <label class="label" for="ae-sysprompt">System prompt</label>
-    <textarea class="textarea" id="ae-sysprompt" bind:value={systemPrompt} rows={2} placeholder="Optional…"></textarea>
-  </div>
-  <div class="field">
-    <label class="label" for="ae-userprompt">User prompt</label>
-    <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={3} placeholder="The prompt to send…"></textarea>
-  </div>
 
-  <div class="actions">
-    <Button variant="ghost" onclick={onclose}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={save}>Save</Button>
-  </div>
-</Modal>
+    <div class="actions">
+      <Button variant="ghost" onclick={onclose}>Cancel</Button>
+      <Button variant="primary" loading={saving} onclick={save}>Save automation</Button>
+    </div>
+  </aside>
+{/if}
 
 <style>
   .field { display: flex; flex-direction: column; gap: 4px; }
+  .editor-panel { position: sticky; top: 0; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .editor-header { display: flex; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
+  .editor-header h3 { font-size: 15px; }
+  .editor-header p { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+  .close-button { align-self: flex-start; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px 4px; }
+  .close-button:hover { color: var(--text-primary); }
+  .editor-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
   .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .input {
     padding: 7px 10px;
@@ -132,5 +149,5 @@
     font-family: var(--font-mono);
     line-height: 1.5;
   }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px 16px; }
 </style>
