@@ -116,7 +116,7 @@
 />
 
 <style>
-  .view { flex: 1 1 0; min-height: 0; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; overflow-y: auto; overflow-x: hidden; }
+  .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
   .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
   .view-content { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
   .view-header { display: flex; align-items: center; justify-content: space-between; }
