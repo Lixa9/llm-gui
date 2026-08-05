@@ -3,14 +3,14 @@ import { requireAuth } from './auth';
 import { getDb } from './db/index';
 import type { UserPrefRow } from './types';
 
-const ALLOWED_PREF_KEYS = new Set(['sound_enabled', 'sound_volume', 'default_model_id', 'default_system_prompt', 'default_preset_id', 'theme']);
+const ALLOWED_PREF_KEYS = new Set(['sound_enabled', 'sound_volume', 'default_model_id', 'default_preset_id', 'theme']);
 const MAX_PREF_VALUE_LEN = 4096;
 export const preferencesRouter = new Hono();
 preferencesRouter.use('*', requireAuth);
 
 preferencesRouter.get('/', async (c) => {
   const rows = await getDb().prepare('SELECT key, value FROM user_preferences WHERE user_sub=?').all<UserPrefRow>(c.get('user').sub);
-  const prefs: Record<string, string> = { sound_enabled: 'true', sound_volume: '0.6', default_model_id: '', default_system_prompt: '', default_preset_id: '', theme: '' };
+  const prefs: Record<string, string> = { sound_enabled: 'true', sound_volume: '0.6', default_model_id: '', default_preset_id: '', theme: '' };
   for (const row of rows) prefs[row.key] = row.value;
   return c.json(prefs);
 });

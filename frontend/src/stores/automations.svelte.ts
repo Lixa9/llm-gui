@@ -1,5 +1,6 @@
 import { api } from '$lib/api';
 import { makeCrud } from '$lib/crud';
+import { loadResource } from '$lib/loadResource';
 import type { Automation, AutomationRun } from '$lib/types';
 
 function createAutomationsStore() {
@@ -9,15 +10,7 @@ function createAutomationsStore() {
   let error = $state<string | null>(null);
 
   async function load() {
-    loading = true;
-    error = null;
-    try {
-      automations = await api.automations.list();
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      loading = false;
-    }
+    await loadResource(api.automations.list, (value) => { automations = value; }, (value) => { loading = value; }, (value) => { error = value; });
   }
 
   const crud = makeCrud(api.automations, () => automations, (v) => { automations = v; });

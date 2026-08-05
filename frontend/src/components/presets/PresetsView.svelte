@@ -2,46 +2,31 @@
   import { modelsStore } from '../../stores/models.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
   import PresetEditor from './PresetEditor.svelte';
+  import ResourcePage from '../ui/ResourcePage.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { ModelPreset } from '$lib/types';
-  import { toast } from '../ui/Toast.svelte';
+  import { withToast } from '../ui/Toast.svelte';
+  import { modelDisplayName, sortByName } from '$lib/utils';
 
   let editing = $state<ModelPreset | null>(null);
   let deleting = $state<ModelPreset | null>(null);
 
-  const systemPresets = $derived(modelsStore.presets.filter(p => p.owner_sub === null).sort((a, b) => a.name.localeCompare(b.name)));
-  const personalPresets = $derived(modelsStore.presets.filter(p => p.owner_sub !== null).sort((a, b) => a.name.localeCompare(b.name)));
+  const systemPresets = $derived(sortByName(modelsStore.presets.filter(p => p.owner_sub === null)));
+  const personalPresets = $derived(sortByName(modelsStore.presets.filter(p => p.owner_sub !== null)));
 
   async function save(data: Pick<ModelPreset, 'name' | 'base_model_id' | 'system_prompt'>) {
-    try {
-      if (editing) {
-        await modelsStore.updatePreset(editing.id, data);
-        toast('Preset updated', 'success');
-      } else {
-        await modelsStore.createPreset(data);
-        toast('Preset created', 'success');
-      }
-    } catch (e) {
-      toast((e as Error).message, 'error');
-      throw e;
-    }
+    await withToast(
+      () => editing ? modelsStore.updatePreset(editing.id, data) : modelsStore.createPreset(data),
+      editing ? 'Preset updated' : 'Preset created',
+    );
   }
 
   async function confirmDelete() {
-    if (!deleting) return;
-    try {
-      await modelsStore.deletePreset(deleting.id);
-      toast('Preset deleted', 'success');
-    } catch (e) {
-      toast((e as Error).message, 'error');
-    } finally {
-      deleting = null;
-    }
-  }
-
-  function modelName(id: string) {
-    return modelsStore.models.find(m => m.id === id)?.display_name ?? id;
+    const id = deleting?.id;
+    if (!id) return;
+    try { await withToast(() => modelsStore.deletePreset(id), 'Preset deleted'); }
+    finally { deleting = null; }
   }
 
   function toggleDefault(preset: ModelPreset) {
@@ -50,14 +35,8 @@
   }
 </script>
 
-<div class="view">
-  <div class="view-content">
-    <div class="view-header">
-      <div>
-        <h2 class="view-title">Model Presets</h2>
-        <p class="view-subtitle">Bundle a model and system prompt for your own account.</p>
-      </div>
-    </div>
+<ResourcePage title="Model Presets" subtitle="Bundle a model and system prompt for your own account.">
+  {#snippet children()}
 
     {#if modelsStore.loading}
       <p class="state-hint">Loading presets…</p>
@@ -78,7 +57,7 @@
                   <Badge variant="accent">Default</Badge>
                 {/if}
               </div>
-              <div class="preset-model">{modelName(preset.base_model_id)}</div>
+              <div class="preset-model">{modelDisplayName(modelsStore.models, preset.base_model_id)}</div>
               {#if preset.system_prompt}
                 <div class="preset-prompt">{preset.system_prompt}</div>
                 <details class="content-details">
@@ -112,7 +91,7 @@
                   <Badge variant="accent">Default</Badge>
                 {/if}
               </div>
-              <div class="preset-model">{modelName(preset.base_model_id)}</div>
+              <div class="preset-model">{modelDisplayName(modelsStore.models, preset.base_model_id)}</div>
               {#if preset.system_prompt}
                 <div class="preset-prompt">{preset.system_prompt}</div>
                 <details class="content-details">
@@ -139,22 +118,17 @@
       {/if}
     </section>
     {/if}
-  </div>
-
-  <PresetEditor
-    preset={editing}
-    onclose={() => editing = null}
-    onsave={save}
-  />
-</div>
+  {/snippet}
+  {#snippet editor()}
+    <PresetEditor
+      preset={editing}
+      onclose={() => editing = null}
+      onsave={save}
+    />
+  {/snippet}
+</ResourcePage>
 
 <style>
-  .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
-  .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
-  .view-content { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
-  .view-header { display: flex; align-items: center; justify-content: space-between; }
-  .view-title { font-size: 20px; font-weight: 600; }
-  .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
   .empty-hint, .state-hint { font-size: 13px; color: var(--text-muted); }
   .error-state { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--danger); font-size: 13px; }
   .section { display: flex; flex-direction: column; gap: 10px; }
@@ -192,8 +166,4 @@
   .preset-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .delete-question { color: var(--danger); font-size: 12px; margin-right: auto; }
 
-  @media (max-width: 760px) {
-    .view { padding: 16px; }
-    .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
-  }
 </style>

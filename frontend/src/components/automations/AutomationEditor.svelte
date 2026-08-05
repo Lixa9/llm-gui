@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from '../ui/Button.svelte';
+  import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import Select from '../ui/Select.svelte';
   import ModelPicker from '../chat/ModelPicker.svelte';
   import { modelsStore } from '../../stores/models.svelte';
@@ -69,7 +70,7 @@
   async function save() {
     saving = true;
     try {
-      const definition = { interval, unit, model, system_prompt: systemPrompt, user_prompt: userPrompt, output: 'new_conversation' as const };
+      const definition = { interval, unit, model, system_prompt: systemPrompt, user_prompt: userPrompt };
       await onsave({ name: name.trim(), definition });
       name = '';
       interval = 1;
@@ -84,15 +85,13 @@
   }
 </script>
 
-<section class="editor-panel" aria-labelledby="automation-editor-title">
-    <div class="editor-header">
-      <div>
-        <h3 id="automation-editor-title">{automation ? 'Edit automation' : 'Create a new automation'}</h3>
-        <p>{automation ? 'Update this personal automation.' : 'Personal automations are visible only to your account.'}</p>
-      </div>
-    </div>
-    <form class="editor-form" onsubmit={(e) => { e.preventDefault(); save(); }}>
-      <div class="editor-body">
+<ResourceEditorShell
+  headingId="automation-editor-title"
+  title={automation ? 'Edit automation' : 'Create a new automation'}
+  description={automation ? 'Update this personal automation.' : 'Personal automations are visible only to your account.'}
+  onsubmit={(e) => { e.preventDefault(); save(); }}
+>
+  {#snippet children()}
       <div class="field">
         <label class="label" for="ae-name">Name</label>
         <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" required maxlength="200" />
@@ -127,24 +126,16 @@
         <label class="label" for="ae-userprompt">User prompt</label>
         <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…" required maxlength="100000"></textarea>
       </div>
-      </div>
-
-      <div class="actions">
+  {/snippet}
+  {#snippet actions()}
         {#if automation}<Button variant="ghost" onclick={close}>Cancel editing</Button>
         {:else if name.trim() || systemPrompt.trim() || userPrompt.trim()}<Button variant="ghost" onclick={close}>Clear</Button>{/if}
         <Button variant="primary" type="submit" loading={saving}>{automation ? 'Save changes' : 'Save automation'}</Button>
-      </div>
-    </form>
-</section>
+  {/snippet}
+</ResourceEditorShell>
 
 <style>
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .editor-panel { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
-  .editor-header { display: flex; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
-  .editor-header h3 { font-size: 15px; }
-  .editor-header p { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .editor-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
-  .editor-form { display: flex; flex-direction: column; }
   .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .input {
     padding: 7px 10px;
@@ -171,5 +162,4 @@
     font-family: var(--font-mono);
     line-height: 1.5;
   }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px 16px; }
 </style>

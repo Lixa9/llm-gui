@@ -1,5 +1,7 @@
 import { api } from '$lib/api';
 import { makeCrud } from '$lib/crud';
+import { loadResource } from '$lib/loadResource';
+import { sortByName } from '$lib/utils';
 import type { SystemPrompt } from '$lib/types';
 
 function createPromptsStore() {
@@ -7,19 +9,11 @@ function createPromptsStore() {
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  const personal = $derived(prompts.filter(p => p.owner_sub !== null && !p.deleted_at).sort((a, b) => a.name.localeCompare(b.name)));
-  const system = $derived(prompts.filter(p => p.owner_sub === null && !p.deleted_at).sort((a, b) => a.name.localeCompare(b.name)));
+  const personal = $derived(sortByName(prompts.filter(p => p.owner_sub !== null && !p.deleted_at)));
+  const system = $derived(sortByName(prompts.filter(p => p.owner_sub === null && !p.deleted_at)));
 
   async function load() {
-    loading = true;
-    error = null;
-    try {
-      prompts = await api.prompts.list();
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      loading = false;
-    }
+    await loadResource(api.prompts.list, (value) => { prompts = value; }, (value) => { loading = value; }, (value) => { error = value; });
   }
 
   const crud = makeCrud(api.prompts, () => prompts, (v) => { prompts = v; });
