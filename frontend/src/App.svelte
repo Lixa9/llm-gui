@@ -88,15 +88,15 @@
           <ChatView conversationId={route.id ?? conversationsStore.activeId} />
         </main>
       {:else if route.view === 'prompts'}
-        <main class="main-area">
+        <main class="main-area resource-area">
           <PromptLibraryView />
         </main>
       {:else if route.view === 'presets'}
-        <main class="main-area">
+        <main class="main-area resource-area">
           <PresetsView />
         </main>
       {:else if route.view === 'automations'}
-        <main class="main-area">
+        <main class="main-area resource-area">
           <AutomationsView />
         </main>
       {:else if route.view === 'admin' && authStore.user.role === 'admin'}
@@ -145,5 +145,11 @@
     overflow: hidden;
     min-width: 0;
     min-height: 0;
+  }
+
+  .resource-area {
+    display: block;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 </style>
