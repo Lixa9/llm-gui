@@ -131,13 +131,15 @@
   }
 
   .app-body {
-    flex: 1;
+    flex: 1 1 0;
     display: flex;
     overflow: hidden;
+    min-height: 0;
+    min-width: 0;
   }
 
   .main-area {
-    flex: 1;
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
