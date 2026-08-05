@@ -142,5 +142,6 @@
     flex-direction: column;
     overflow: hidden;
     min-width: 0;
+    min-height: 0;
   }
 </style>
