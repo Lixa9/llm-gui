@@ -3,7 +3,6 @@
   import { modelsStore } from '../../stores/models.svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import RunHistoryTable from './RunHistoryTable.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { Automation } from '$lib/types';
@@ -90,6 +89,13 @@
   async function toggleEnabled(a: Automation) {
     await withToast(() => automationsStore.update(a.id, { enabled: !a.enabled }));
   }
+
+  async function confirmDelete() {
+    const id = deleting?.id;
+    if (!id) return;
+    await withToast(() => automationsStore.remove(id), 'Automation deleted');
+    deleting = null;
+  }
 </script>
 
 <div class="view">
@@ -154,12 +160,18 @@
                     <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
                   </div>
                 <div class="auto-actions">
-                  <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
-                    {auto.enabled ? 'Disable' : 'Enable'}
-                  </Button>
-                    <Button variant="ghost" size="sm" loading={triggering.has(auto.id)} onclick={() => trigger(auto.id)}>Run now</Button>
-                    <Button variant="ghost" size="sm" onclick={() => editing = auto}>Edit</Button>
-                    <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
+                  {#if deleting?.id === auto.id}
+                    <span class="delete-question">Delete this automation?</span>
+                    <Button variant="ghost" size="sm" onclick={() => deleting = null}>Cancel</Button>
+                    <Button variant="danger" size="sm" onclick={confirmDelete}>Delete</Button>
+                  {:else}
+                    <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
+                      {auto.enabled ? 'Disable' : 'Enable'}
+                    </Button>
+                      <Button variant="ghost" size="sm" loading={triggering.has(auto.id)} onclick={() => trigger(auto.id)}>Run now</Button>
+                      <Button variant="ghost" size="sm" onclick={() => editing = auto}>Edit</Button>
+                      <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
+                  {/if}
                 </div>
               </div>
                 <div class="auto-toggles">
@@ -191,19 +203,6 @@
   />
 </div>
 
-<ConfirmDialog
-  open={deleting !== null}
-  title="Delete automation"
-  message={`Delete "${deleting?.name}"?`}
-  confirmLabel="Delete"
-  onconfirm={async () => {
-    const id = deleting?.id;
-    if (id) await withToast(() => automationsStore.remove(id), 'Automation deleted');
-    deleting = null;
-  }}
-  oncancel={() => deleting = null}
-/>
-
 <style>
   .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
   .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
@@ -229,7 +228,8 @@
   .auto-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   .auto-info { display: flex; align-items: center; gap: 8px; }
   .auto-name { font-weight: 600; font-size: 14px; }
-  .auto-actions { display: flex; gap: 6px; }
+  .auto-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .delete-question { color: var(--danger); font-size: 12px; margin-right: auto; }
 
   .auto-toggles { display: flex; gap: 16px; }
   .runs-toggle {

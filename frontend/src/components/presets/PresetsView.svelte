@@ -2,7 +2,6 @@
   import { modelsStore } from '../../stores/models.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
   import PresetEditor from './PresetEditor.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { ModelPreset } from '$lib/types';
@@ -122,11 +121,17 @@
                 </details>
               {/if}
               <div class="preset-actions">
-                <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
-                  {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
-                </Button>
-                <Button variant="ghost" size="sm" onclick={() => editing = preset}>Edit</Button>
-                <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
+                {#if deleting?.id === preset.id}
+                  <span class="delete-question">Delete this preset?</span>
+                  <Button variant="ghost" size="sm" onclick={() => deleting = null}>Cancel</Button>
+                  <Button variant="danger" size="sm" onclick={confirmDelete}>Delete</Button>
+                {:else}
+                  <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
+                    {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onclick={() => editing = preset}>Edit</Button>
+                  <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
+                {/if}
               </div>
             </div>
           {/each}
@@ -142,15 +147,6 @@
     onsave={save}
   />
 </div>
-
-<ConfirmDialog
-  open={deleting !== null}
-  title="Delete preset"
-  message={`Delete "${deleting?.name}"?`}
-  confirmLabel="Delete"
-  onconfirm={confirmDelete}
-  oncancel={() => deleting = null}
-/>
 
 <style>
   .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
@@ -193,7 +189,8 @@
   .content-details { font-size: 12px; color: var(--text-muted); }
   .content-details summary { cursor: pointer; }
   .content-details pre { margin-top: 8px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
-  .preset-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .preset-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .delete-question { color: var(--danger); font-size: 12px; margin-right: auto; }
 
   @media (max-width: 760px) {
     .view { padding: 16px; }
