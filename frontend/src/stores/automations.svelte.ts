@@ -5,9 +5,19 @@ import type { Automation, AutomationRun } from '$lib/types';
 function createAutomationsStore() {
   let automations = $state<Automation[]>([]);
   let runsByAutomation = $state<Record<string, AutomationRun[]>>({});
+  let loading = $state(true);
+  let error = $state<string | null>(null);
 
   async function load() {
-    automations = await api.automations.list();
+    loading = true;
+    error = null;
+    try {
+      automations = await api.automations.list();
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      loading = false;
+    }
   }
 
   const crud = makeCrud(api.automations, () => automations, (v) => { automations = v; });
@@ -34,6 +44,8 @@ function createAutomationsStore() {
   return {
     get automations() { return automations; },
     get runsByAutomation() { return runsByAutomation; },
+    get loading() { return loading; },
+    get error() { return error; },
     load, ...crud, toggleSubscription, trigger, loadRuns,
   };
 }

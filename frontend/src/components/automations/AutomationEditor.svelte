@@ -6,12 +6,11 @@
   import type { Automation, ScheduleUnit, ScheduledDefinition } from '$lib/types';
 
   interface Props {
-    open: boolean;
     automation?: Automation | null;
     onclose: () => void;
     onsave: (data: Pick<Automation, 'name' | 'definition'>) => Promise<void>;
   }
-  let { open, automation = null, onclose, onsave }: Props = $props();
+  let { automation = null, onclose, onsave }: Props = $props();
 
   let name = $state('');
   let interval = $state(1);
@@ -27,8 +26,11 @@
     { value: 'weeks', label: 'weeks' },
   ];
 
+  let initializedKey = $state<string | null>(null);
+
   $effect(() => {
-    if (open) {
+    const key = automation?.id ?? 'new';
+    if (initializedKey !== key) {
       name = automation?.name ?? '';
       const def = automation?.definition as ScheduledDefinition | undefined;
       if (def) {
@@ -40,8 +42,24 @@
       } else {
         model = modelsStore.models[0]?.id ?? '';
       }
+      initializedKey = key;
+    } else if (!model && modelsStore.models[0]?.id) {
+      model = modelsStore.models[0].id;
     }
   });
+
+  function close() {
+    if ((name.trim() || systemPrompt.trim() || userPrompt.trim()) && !window.confirm('Discard unsaved automation changes?')) return;
+    if (!automation) {
+      name = '';
+      interval = 1;
+      unit = 'days';
+      model = modelsStore.models[0]?.id ?? '';
+      systemPrompt = '';
+      userPrompt = '';
+    }
+    onclose();
+  }
 
   function clampInterval() {
     const v = Math.floor(interval);
@@ -49,11 +67,16 @@
   }
 
   async function save() {
-    if (!name.trim()) return;
     saving = true;
     try {
       const definition = { interval, unit, model, system_prompt: systemPrompt, user_prompt: userPrompt, output: 'new_conversation' as const };
       await onsave({ name: name.trim(), definition });
+      name = '';
+      interval = 1;
+      unit = 'days';
+      model = modelsStore.models[0]?.id ?? '';
+      systemPrompt = '';
+      userPrompt = '';
       onclose();
     } finally {
       saving = false;
@@ -61,19 +84,18 @@
   }
 </script>
 
-{#if open}
-  <aside class="editor-panel">
+<section class="editor-panel" aria-labelledby="automation-editor-title">
     <div class="editor-header">
       <div>
-        <h3>{automation ? 'Edit automation' : 'New automation'}</h3>
-        <p>This automation is private to your account.</p>
+        <h3 id="automation-editor-title">{automation ? 'Edit automation' : 'Create a new automation'}</h3>
+        <p>{automation ? 'Update this personal automation.' : 'Personal automations are visible only to your account.'}</p>
       </div>
-      <button class="close-button" type="button" onclick={onclose} aria-label="Close editor">✕</button>
     </div>
-    <div class="editor-body">
+    <form class="editor-form" onsubmit={(e) => { e.preventDefault(); save(); }}>
+      <div class="editor-body">
       <div class="field">
         <label class="label" for="ae-name">Name</label>
-        <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" />
+        <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" required maxlength="200" />
       </div>
       <div class="field">
         <label class="label" for="ae-interval">Run every</label>
@@ -95,7 +117,7 @@
       </div>
       <div class="field">
         <label class="label" for="ae-model">Model</label>
-        <ModelPicker bind:value={model} />
+        <ModelPicker bind:value={model} required />
       </div>
       <div class="field">
         <label class="label" for="ae-sysprompt">System prompt</label>
@@ -103,26 +125,26 @@
       </div>
       <div class="field">
         <label class="label" for="ae-userprompt">User prompt</label>
-        <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…"></textarea>
+        <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…" required maxlength="100000"></textarea>
       </div>
-    </div>
+      </div>
 
-    <div class="actions">
-      <Button variant="ghost" onclick={onclose}>Cancel</Button>
-      <Button variant="primary" loading={saving} onclick={save}>Save automation</Button>
-    </div>
-  </aside>
-{/if}
+      <div class="actions">
+        {#if automation}<Button variant="ghost" onclick={close}>Cancel editing</Button>
+        {:else if name.trim() || systemPrompt.trim() || userPrompt.trim()}<Button variant="ghost" onclick={close}>Clear</Button>{/if}
+        <Button variant="primary" type="submit" loading={saving}>{automation ? 'Save changes' : 'Save automation'}</Button>
+      </div>
+    </form>
+</section>
 
 <style>
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .editor-panel { position: sticky; top: 0; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .editor-panel { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
   .editor-header { display: flex; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
   .editor-header h3 { font-size: 15px; }
   .editor-header p { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .close-button { align-self: flex-start; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px 4px; }
-  .close-button:hover { color: var(--text-primary); }
   .editor-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+  .editor-form { display: flex; flex-direction: column; }
   .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .input {
     padding: 7px 10px;

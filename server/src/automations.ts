@@ -10,6 +10,17 @@ const automationSchema = z.object({ name: z.string().trim().min(1).max(200), def
 export const automationsRouter = new Hono();
 automationsRouter.use('*', requireAuth);
 
+function nextRunAt(definition: Record<string, unknown>): number {
+  const unit = definition.unit === 'hours' || definition.unit === 'weeks' ? definition.unit : 'days';
+  const interval = typeof definition.interval === 'number' ? definition.interval : Number(definition.interval);
+  return Date.now() + intervalMs({
+    interval: Number.isFinite(interval) ? interval : 1,
+    unit,
+    model: typeof definition.model === 'string' ? definition.model : '',
+    user_prompt: typeof definition.user_prompt === 'string' ? definition.user_prompt : '',
+  });
+}
+
 function serializeAutomation(row: AutomationRow) {
   return { ...row, enabled: Boolean(row.enabled), definition: safeParseJson<Record<string, unknown>>(row.definition, {}) };
 }
@@ -36,8 +47,8 @@ automationsRouter.post('/', async (c) => {
   if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? 'Invalid automation' }, 400);
   const user = c.get('user');
   const id = generateId();
-  await getDb().prepare('INSERT INTO automations (id, owner_sub, name, type, definition) VALUES (?, ?, ?, ?, ?::jsonb)')
-    .run(id, user.sub, parsed.data.name, 'scheduled', JSON.stringify(parsed.data.definition));
+  await getDb().prepare('INSERT INTO automations (id, owner_sub, name, type, definition, next_run_at) VALUES (?, ?, ?, ?, ?::jsonb, ?)')
+    .run(id, user.sub, parsed.data.name, 'scheduled', JSON.stringify(parsed.data.definition), nextRunAt(parsed.data.definition));
   const row = await getDb().prepare('SELECT * FROM automations WHERE id=?').get<AutomationRow>(id);
   if (!row) return c.json({ error: 'Failed to create automation' }, 500);
   return c.json(serializeAutomation(row), 201);
@@ -52,10 +63,12 @@ automationsRouter.patch('/:id', async (c) => {
   if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) return c.json({ error: 'Invalid name' }, 400);
   if (body.definition !== undefined && (!body.definition || typeof body.definition !== 'object' || Array.isArray(body.definition))) return c.json({ error: 'Invalid definition' }, 400);
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') return c.json({ error: 'Invalid enabled value' }, 400);
+  const nextRun = body.definition === undefined ? undefined : nextRunAt(body.definition as Record<string, unknown>);
   await getDb().prepare(`
     UPDATE automations SET name=COALESCE(?, name), definition=COALESCE(?::jsonb, definition), enabled=COALESCE(?, enabled)
+      , next_run_at=COALESCE(?, next_run_at)
     WHERE id=? AND owner_sub=?
-  `).run(typeof body.name === 'string' ? body.name.trim() : undefined, body.definition === undefined ? undefined : JSON.stringify(body.definition), body.enabled, id, user.sub);
+  `).run(typeof body.name === 'string' ? body.name.trim() : undefined, body.definition === undefined ? undefined : JSON.stringify(body.definition), body.enabled, nextRun, id, user.sub);
   const row = await getDb().prepare('SELECT * FROM automations WHERE id=?').get<AutomationRow>(id);
   return row ? c.json(serializeAutomation(row)) : c.json({ error: 'Not found' }, 404);
 });
