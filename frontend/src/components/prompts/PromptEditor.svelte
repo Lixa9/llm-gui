@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from '../ui/Button.svelte';
+  import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import type { SystemPrompt } from '$lib/types';
 
   interface Props {
@@ -46,15 +47,13 @@
   }
 </script>
 
-<section class="editor-panel" aria-labelledby="prompt-editor-title">
-    <div class="editor-header">
-      <div>
-        <h3 id="prompt-editor-title">{prompt ? 'Edit prompt' : 'Create a new prompt'}</h3>
-        <p>{prompt ? 'Update this personal prompt.' : 'Personal prompts are visible only to your account.'}</p>
-      </div>
-    </div>
-    <form class="editor-form" onsubmit={(e) => { e.preventDefault(); save(); }}>
-      <div class="editor-body">
+<ResourceEditorShell
+  headingId="prompt-editor-title"
+  title={prompt ? 'Edit prompt' : 'Create a new prompt'}
+  description={prompt ? 'Update this personal prompt.' : 'Personal prompts are visible only to your account.'}
+  onsubmit={(e) => { e.preventDefault(); save(); }}
+>
+  {#snippet children()}
       <div class="field">
         <label class="label" for="pe-name">Name</label>
         <input class="input" id="pe-name" bind:value={name} placeholder="Prompt name…" required maxlength="200" />
@@ -63,23 +62,16 @@
         <label class="label" for="pe-content">Content</label>
         <textarea class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
       </div>
-      </div>
-      <div class="actions">
+  {/snippet}
+  {#snippet actions()}
         {#if prompt}<Button variant="ghost" onclick={close}>Cancel editing</Button>
         {:else if name.trim() || content.trim()}<Button variant="ghost" onclick={close}>Clear</Button>{/if}
         <Button variant="primary" type="submit" loading={saving}>{prompt ? 'Save changes' : 'Save prompt'}</Button>
-      </div>
-    </form>
-</section>
+  {/snippet}
+</ResourceEditorShell>
 
 <style>
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .editor-panel { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
-  .editor-header { display: flex; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
-  .editor-header h3 { font-size: 15px; }
-  .editor-header p { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .editor-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
-  .editor-form { display: flex; flex-direction: column; }
   .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .input {
     padding: 7px 10px;
@@ -104,5 +96,4 @@
     line-height: 1.5;
   }
   .textarea:focus { border-color: var(--accent); }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px 16px; }
 </style>

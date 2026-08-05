@@ -41,3 +41,11 @@ export function extractTextFromContent(content: import('./types').MessageContent
     .map(p => p.text)
     .join('\n');
 }
+
+export function sortByName<T extends { name: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function modelDisplayName(models: import('./types').ModelInfo[], id: string): string {
+  return models.find(model => model.id === id)?.display_name ?? id;
+}

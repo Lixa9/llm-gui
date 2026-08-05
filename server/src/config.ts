@@ -79,7 +79,6 @@ const DEFAULT_CONFIGS: Record<string, string> = {
   'automations.yaml': [
     'automations:',
     '  - name: "Daily digest"',
-    '    type: scheduled',
     '    interval: 1',
     '    unit: days',
     '    model: "qwen3.5-0.8b"',

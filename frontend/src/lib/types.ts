@@ -113,16 +113,13 @@ export interface ScheduledDefinition {
   model: string;
   system_prompt: string;
   user_prompt: string;
-  output: 'new_conversation';
 }
-
-export type AutomationDefinition = ScheduledDefinition;
 
 export interface Automation {
   id: string;
   owner_sub: string | null;
   name: string;
-  definition: AutomationDefinition;
+  definition: ScheduledDefinition;
   enabled: boolean;
   created_at: number;
   deleted_at: number | null;

@@ -1,6 +1,5 @@
 automations:
   - name: "Daily digest"
-    type: scheduled
     interval: 1
     unit: days
     allowed_roles: [admin]

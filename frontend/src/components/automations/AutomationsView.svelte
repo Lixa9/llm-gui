@@ -1,12 +1,14 @@
 <script lang="ts">
   import { automationsStore } from '../../stores/automations.svelte';
   import { modelsStore } from '../../stores/models.svelte';
+  import ResourcePage from '../ui/ResourcePage.svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import RunHistoryTable from './RunHistoryTable.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { Automation } from '$lib/types';
   import { toast, withToast } from '../ui/Toast.svelte';
+  import { modelDisplayName, sortByName } from '$lib/utils';
   import { onMount } from 'svelte';
 
   onMount(() => automationsStore.load());
@@ -17,22 +19,14 @@
   let expandedDetails = $state<Set<string>>(new Set());
   let triggering = $state<Set<string>>(new Set());
 
-  const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null).sort((a, b) => a.name.localeCompare(b.name)));
-  const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null).sort((a, b) => a.name.localeCompare(b.name)));
+  const systemAutomations = $derived(sortByName(automationsStore.automations.filter(a => a.owner_sub === null)));
+  const personalAutomations = $derived(sortByName(automationsStore.automations.filter(a => a.owner_sub !== null)));
 
   async function save(data: Pick<Automation, 'name' | 'definition'>) {
-    try {
-      if (editing) {
-        await automationsStore.update(editing.id, data);
-        toast('Automation updated', 'success');
-      } else {
-        await automationsStore.create(data);
-        toast('Automation created', 'success');
-      }
-    } catch (e) {
-      toast((e as Error).message, 'error');
-      throw e;
-    }
+    await withToast(
+      () => editing ? automationsStore.update(editing.id, data) : automationsStore.create(data),
+      editing ? 'Automation updated' : 'Automation created',
+    );
   }
 
   async function trigger(id: string) {
@@ -76,14 +70,10 @@
     const def = auto.definition as unknown as Record<string, unknown>;
     const lines: string[] = [];
     lines.push(`Schedule: every ${def.interval} ${def.unit}`);
-    if (def.model) lines.push(`Model: ${modelName(String(def.model))}`);
+    if (def.model) lines.push(`Model: ${modelDisplayName(modelsStore.models, String(def.model))}`);
     if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
     if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
     return lines.join('\n');
-  }
-
-  function modelName(id: string) {
-    return modelsStore.models.find(m => m.id === id)?.display_name ?? id;
   }
 
   async function toggleEnabled(a: Automation) {
@@ -98,14 +88,8 @@
   }
 </script>
 
-<div class="view">
-  <div class="view-content">
-    <div class="view-header">
-      <div>
-        <h2 class="view-title">Automations</h2>
-        <p class="view-subtitle">Schedule recurring prompts. Personal automations belong to your account.</p>
-      </div>
-    </div>
+<ResourcePage title="Automations" subtitle="Schedule recurring prompts. Personal automations belong to your account.">
+  {#snippet children()}
 
     {#if automationsStore.loading}
       <p class="state-hint">Loading automations…</p>
@@ -194,22 +178,17 @@
         {/if}
       </section>
     {/if}
-  </div>
-
-  <AutomationEditor
-    automation={editing}
-    onclose={() => editing = null}
-    onsave={save}
-  />
-</div>
+  {/snippet}
+  {#snippet editor()}
+    <AutomationEditor
+      automation={editing}
+      onclose={() => editing = null}
+      onsave={save}
+    />
+  {/snippet}
+</ResourcePage>
 
 <style>
-  .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
-  .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
-  .view-content { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
-  .view-header { display: flex; align-items: center; justify-content: space-between; }
-  .view-title { font-size: 20px; font-weight: 600; }
-  .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
   .empty-hint, .state-hint { font-size: 13px; color: var(--text-muted); }
   .error-state { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--danger); font-size: 13px; }
   .section { display: flex; flex-direction: column; gap: 10px; }
@@ -255,8 +234,4 @@
     word-break: break-word;
   }
 
-  @media (max-width: 820px) {
-    .view { padding: 16px; }
-    .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
-  }
 </style>

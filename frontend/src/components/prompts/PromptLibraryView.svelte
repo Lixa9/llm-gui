@@ -1,50 +1,34 @@
 <script lang="ts">
   import { promptsStore } from '../../stores/prompts.svelte';
   import PromptEditor from './PromptEditor.svelte';
+  import ResourcePage from '../ui/ResourcePage.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { SystemPrompt } from '$lib/types';
-  import { toast } from '../ui/Toast.svelte';
+  import { withToast } from '../ui/Toast.svelte';
 
   let editingPrompt = $state<SystemPrompt | null>(null);
   let deletingPrompt = $state<SystemPrompt | null>(null);
 
   async function save(name: string, content: string) {
-    try {
-      if (editingPrompt) {
-        await promptsStore.update(editingPrompt.id, { name, content });
-        toast('Prompt updated', 'success');
-      } else {
-        await promptsStore.create({ name, content });
-        toast('Prompt created', 'success');
-      }
-    } catch (e) {
-      toast((e as Error).message, 'error');
-      throw e;
-    }
+    await withToast(
+      () => editingPrompt
+        ? promptsStore.update(editingPrompt.id, { name, content })
+        : promptsStore.create({ name, content }),
+      editingPrompt ? 'Prompt updated' : 'Prompt created',
+    );
   }
 
   async function confirmDelete() {
-    if (!deletingPrompt) return;
-    try {
-      await promptsStore.remove(deletingPrompt.id);
-      toast('Prompt deleted', 'success');
-    } catch (e) {
-      toast((e as Error).message, 'error');
-    } finally {
-      deletingPrompt = null;
-    }
+    const id = deletingPrompt?.id;
+    if (!id) return;
+    try { await withToast(() => promptsStore.remove(id), 'Prompt deleted'); }
+    finally { deletingPrompt = null; }
   }
 </script>
 
-<div class="view">
-  <div class="view-content">
-    <div class="view-header">
-      <div>
-        <h2 class="view-title">Prompt Library</h2>
-        <p class="view-subtitle">Create personal prompts stored securely for your account.</p>
-      </div>
-    </div>
+<ResourcePage title="Prompt Library" subtitle="Create personal prompts stored securely for your account.">
+  {#snippet children()}
 
     {#if promptsStore.loading}
       <p class="state-hint">Loading prompts…</p>
@@ -102,23 +86,17 @@
       {/if}
     </section>
     {/if}
-  </div>
-
-  <PromptEditor
-    prompt={editingPrompt}
-    onclose={() => editingPrompt = null}
-    onsave={save}
-  />
-</div>
+  {/snippet}
+  {#snippet editor()}
+    <PromptEditor
+      prompt={editingPrompt}
+      onclose={() => editingPrompt = null}
+      onsave={save}
+    />
+  {/snippet}
+</ResourcePage>
 
 <style>
-  .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
-  .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
-  .view-content { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
-  .view-header { display: flex; align-items: center; justify-content: space-between; }
-  .view-title { font-size: 20px; font-weight: 600; }
-  .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
-
   .section { display: flex; flex-direction: column; gap: 10px; }
   .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
   .empty-hint, .state-hint { font-size: 13px; color: var(--text-muted); }
@@ -154,8 +132,4 @@
   .prompt-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .delete-question { color: var(--danger); font-size: 12px; margin-right: auto; }
 
-  @media (max-width: 760px) {
-    .view { padding: 16px; }
-    .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
-  }
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from '../ui/Button.svelte';
+  import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import Select from '../ui/Select.svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import type { ModelPreset } from '$lib/types';
@@ -56,15 +57,13 @@
   }
 </script>
 
-<section class="editor-panel" aria-labelledby="preset-editor-title">
-    <div class="editor-header">
-      <div>
-        <h3 id="preset-editor-title">{preset ? 'Edit preset' : 'Create a new preset'}</h3>
-        <p>{preset ? 'Update this personal preset.' : 'Personal presets are visible only to your account.'}</p>
-      </div>
-    </div>
-    <form class="editor-form" onsubmit={(e) => { e.preventDefault(); save(); }}>
-      <div class="editor-body">
+<ResourceEditorShell
+  headingId="preset-editor-title"
+  title={preset ? 'Edit preset' : 'Create a new preset'}
+  description={preset ? 'Update this personal preset.' : 'Personal presets are visible only to your account.'}
+  onsubmit={(e) => { e.preventDefault(); save(); }}
+>
+  {#snippet children()}
       <div class="field">
         <label class="label" for="pr-name">Preset name</label>
         <input class="input" id="pr-name" bind:value={name} placeholder="My preset…" required maxlength="200" />
@@ -77,23 +76,16 @@
         <label class="label" for="pr-sysprompt">System prompt</label>
         <textarea class="textarea" id="pr-sysprompt" bind:value={system_prompt} rows={7} maxlength="100000" placeholder="Optional system prompt…"></textarea>
       </div>
-      </div>
-      <div class="actions">
+  {/snippet}
+  {#snippet actions()}
         {#if preset}<Button variant="ghost" onclick={close}>Cancel editing</Button>
         {:else if name.trim() || system_prompt.trim()}<Button variant="ghost" onclick={close}>Clear</Button>{/if}
         <Button variant="primary" type="submit" loading={saving}>{preset ? 'Save changes' : 'Save preset'}</Button>
-      </div>
-    </form>
-</section>
+  {/snippet}
+</ResourceEditorShell>
 
 <style>
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .editor-panel { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
-  .editor-header { display: flex; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
-  .editor-header h3 { font-size: 15px; }
-  .editor-header p { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .editor-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
-  .editor-form { display: flex; flex-direction: column; }
   .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .input {
     padding: 7px 10px;
@@ -118,5 +110,4 @@
     line-height: 1.5;
   }
   .textarea:focus { border-color: var(--accent); }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px 16px; }
 </style>

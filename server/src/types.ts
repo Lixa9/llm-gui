@@ -191,7 +191,6 @@ export interface ScheduledDefinition {
   model: string;
   system_prompt?: string;
   user_prompt: string;
-  output?: 'new_conversation';
 }
 
 export interface AutomationYamlEntry {
@@ -202,5 +201,4 @@ export interface AutomationYamlEntry {
   model?: string;
   system_prompt?: string;
   user_prompt?: string;
-  output?: string;
 }
