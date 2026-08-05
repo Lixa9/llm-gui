@@ -1,7 +1,6 @@
 <script lang="ts">
   import { promptsStore } from '../../stores/prompts.svelte';
   import PromptEditor from './PromptEditor.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Button from '../ui/Button.svelte';
   import Badge from '../ui/Badge.svelte';
   import type { SystemPrompt } from '$lib/types';
@@ -88,8 +87,14 @@
                 <pre>{prompt.content}</pre>
               </details>
               <div class="prompt-actions">
-                <Button variant="ghost" size="sm" onclick={() => editingPrompt = prompt}>Edit</Button>
-                <Button variant="danger" size="sm" onclick={() => deletingPrompt = prompt}>Delete</Button>
+                {#if deletingPrompt?.id === prompt.id}
+                  <span class="delete-question">Delete this prompt?</span>
+                  <Button variant="ghost" size="sm" onclick={() => deletingPrompt = null}>Cancel</Button>
+                  <Button variant="danger" size="sm" onclick={confirmDelete}>Delete</Button>
+                {:else}
+                  <Button variant="ghost" size="sm" onclick={() => editingPrompt = prompt}>Edit</Button>
+                  <Button variant="danger" size="sm" onclick={() => deletingPrompt = prompt}>Delete</Button>
+                {/if}
               </div>
             </div>
           {/each}
@@ -105,15 +110,6 @@
     onsave={save}
   />
 </div>
-
-<ConfirmDialog
-  open={deletingPrompt !== null}
-  title="Delete prompt"
-  message={`Delete "${deletingPrompt?.name}"? This cannot be undone.`}
-  confirmLabel="Delete"
-  onconfirm={confirmDelete}
-  oncancel={() => deletingPrompt = null}
-/>
 
 <style>
   .view { min-height: 100%; padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; }
@@ -155,7 +151,8 @@
   .content-details { font-size: 12px; color: var(--text-muted); }
   .content-details summary { cursor: pointer; }
   .content-details pre { margin-top: 8px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
-  .prompt-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .prompt-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .delete-question { color: var(--danger); font-size: 12px; margin-right: auto; }
 
   @media (max-width: 760px) {
     .view { padding: 16px; }
