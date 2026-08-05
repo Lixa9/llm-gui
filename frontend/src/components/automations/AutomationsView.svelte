@@ -1,5 +1,6 @@
 <script lang="ts">
   import { automationsStore } from '../../stores/automations.svelte';
+  import { modelsStore } from '../../stores/models.svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import RunHistoryTable from './RunHistoryTable.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
@@ -11,14 +12,14 @@
 
   onMount(() => automationsStore.load());
 
-  let editorOpen = $state(false);
   let editing = $state<Automation | null>(null);
   let deleting = $state<Automation | null>(null);
   let expandedRuns = $state<Set<string>>(new Set());
   let expandedDetails = $state<Set<string>>(new Set());
+  let triggering = $state<Set<string>>(new Set());
 
-  const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null));
-  const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null));
+  const systemAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub === null).sort((a, b) => a.name.localeCompare(b.name)));
+  const personalAutomations = $derived(automationsStore.automations.filter(a => a.owner_sub !== null).sort((a, b) => a.name.localeCompare(b.name)));
 
   async function save(data: Pick<Automation, 'name' | 'definition'>) {
     try {
@@ -36,11 +37,18 @@
   }
 
   async function trigger(id: string) {
+    const next = new Set(triggering);
+    next.add(id);
+    triggering = next;
     try {
       await automationsStore.trigger(id);
       toast('Automation triggered', 'success');
     } catch (e) {
       toast((e as Error).message, 'error');
+    } finally {
+      const done = new Set(triggering);
+      done.delete(id);
+      triggering = done;
     }
   }
 
@@ -49,8 +57,12 @@
     if (next.has(id)) {
       next.delete(id);
     } else {
-      next.add(id);
-      await automationsStore.loadRuns(id);
+      try {
+        await withToast(() => automationsStore.loadRuns(id));
+        next.add(id);
+      } catch {
+        return;
+      }
     }
     expandedRuns = next;
   }
@@ -65,10 +77,14 @@
     const def = auto.definition as unknown as Record<string, unknown>;
     const lines: string[] = [];
     lines.push(`Schedule: every ${def.interval} ${def.unit}`);
-    if (def.model) lines.push(`Model: ${def.model}`);
+    if (def.model) lines.push(`Model: ${modelName(String(def.model))}`);
     if (def.system_prompt) lines.push(`System prompt: ${def.system_prompt}`);
     if (def.user_prompt) lines.push(`User prompt: ${def.user_prompt}`);
     return lines.join('\n');
+  }
+
+  function modelName(id: string) {
+    return modelsStore.models.find(m => m.id === id)?.display_name ?? id;
   }
 
   async function toggleEnabled(a: Automation) {
@@ -76,17 +92,23 @@
   }
 </script>
 
-<div class="view" class:editor-active={editorOpen}>
+<div class="view">
   <div class="view-content">
     <div class="view-header">
       <div>
         <h2 class="view-title">Automations</h2>
         <p class="view-subtitle">Schedule recurring prompts. Personal automations belong to your account.</p>
       </div>
-      <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New automation</Button>
     </div>
 
-    {#if systemAutomations.length > 0}
+    {#if automationsStore.loading}
+      <p class="state-hint">Loading automations…</p>
+    {:else if automationsStore.error}
+      <div class="error-state">
+        <p>{automationsStore.error}</p>
+        <Button size="sm" onclick={() => automationsStore.load()}>Retry</Button>
+      </div>
+    {:else if systemAutomations.length > 0}
       <section class="section">
         <h3 class="section-title">System automations <Badge variant="muted">read-only</Badge></h3>
         <div class="auto-list">
@@ -98,25 +120,18 @@
                   <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'subscribed' : 'not subscribed'}</Badge>
                 </div>
                 <div class="auto-actions">
-                  <Button variant="ghost" size="sm" onclick={() => automationsStore.toggleSubscription(auto.id, !auto.enabled)}>
+                  <Button variant="ghost" size="sm" onclick={() => withToast(() => automationsStore.toggleSubscription(auto.id, !auto.enabled), auto.enabled ? 'Unsubscribed' : 'Subscribed')}>
                     {auto.enabled ? 'Unsubscribe' : 'Subscribe'}
                   </Button>
-                  <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
                 </div>
               </div>
               <div class="auto-toggles">
-                <button class="runs-toggle" onclick={() => toggleDetails(auto.id)}>
+                <button class="runs-toggle" aria-expanded={expandedDetails.has(auto.id)} onclick={() => toggleDetails(auto.id)}>
                   {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
-                </button>
-                <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-                  {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
                 </button>
               </div>
               {#if expandedDetails.has(auto.id)}
                 <pre class="auto-details">{formatDefinition(auto)}</pre>
-              {/if}
-              {#if expandedRuns.has(auto.id)}
-                <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
               {/if}
             </div>
           {/each}
@@ -124,7 +139,8 @@
       </section>
     {/if}
 
-      <section class="section">
+    {#if !automationsStore.loading && !automationsStore.error}
+    <section class="section">
         <h3 class="section-title">My automations</h3>
         {#if personalAutomations.length === 0}
           <p class="empty-hint">No automations yet.</p>
@@ -132,23 +148,31 @@
           <div class="auto-list">
             {#each personalAutomations as auto (auto.id)}
               <div class="auto-card">
-                <div class="auto-header">
+              <div class="auto-header">
                   <div class="auto-info">
                     <span class="auto-name">{auto.name}</span>
                     <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? 'enabled' : 'disabled'}</Badge>
                   </div>
-                  <div class="auto-actions">
-                    <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
-                      {auto.enabled ? 'Disable' : 'Enable'}
-                    </Button>
-                    <Button variant="ghost" size="sm" onclick={() => trigger(auto.id)}>▶ Run</Button>
-                    <Button variant="ghost" size="sm" onclick={() => { editing = auto; editorOpen = true; }}>Edit</Button>
+                <div class="auto-actions">
+                  <Button variant="ghost" size="sm" onclick={() => toggleEnabled(auto)}>
+                    {auto.enabled ? 'Disable' : 'Enable'}
+                  </Button>
+                    <Button variant="ghost" size="sm" loading={triggering.has(auto.id)} onclick={() => trigger(auto.id)}>Run now</Button>
+                    <Button variant="ghost" size="sm" onclick={() => editing = auto}>Edit</Button>
                     <Button variant="danger" size="sm" onclick={() => deleting = auto}>Delete</Button>
-                  </div>
                 </div>
-                <button class="runs-toggle" onclick={() => toggleRuns(auto.id)}>
-                  {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
-                </button>
+              </div>
+                <div class="auto-toggles">
+                  <button class="runs-toggle" aria-expanded={expandedDetails.has(auto.id)} onclick={() => toggleDetails(auto.id)}>
+                    {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
+                  </button>
+                  <button class="runs-toggle" aria-expanded={expandedRuns.has(auto.id)} onclick={() => toggleRuns(auto.id)}>
+                    {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+                  </button>
+                </div>
+                {#if expandedDetails.has(auto.id)}
+                  <pre class="auto-details">{formatDefinition(auto)}</pre>
+                {/if}
                 {#if expandedRuns.has(auto.id)}
                   <RunHistoryTable runs={automationsStore.runsByAutomation[auto.id] ?? []} />
                 {/if}
@@ -157,12 +181,12 @@
           </div>
         {/if}
       </section>
+    {/if}
   </div>
 
   <AutomationEditor
-    open={editorOpen}
     automation={editing}
-    onclose={() => editorOpen = false}
+    onclose={() => editing = null}
     onsave={save}
   />
 </div>
@@ -181,13 +205,14 @@
 />
 
 <style>
-  .view { padding: 24px; width: 100%; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; overflow: auto; }
-  .view.editor-active { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); }
-  .view-content { min-width: 0; max-width: 900px; display: flex; flex-direction: column; gap: 20px; }
+  .view { padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; overflow: auto; }
+  .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
+  .view-content { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
   .view-header { display: flex; align-items: center; justify-content: space-between; }
   .view-title { font-size: 20px; font-weight: 600; }
   .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
-  .empty-hint { font-size: 13px; color: var(--text-muted); }
+  .empty-hint, .state-hint { font-size: 13px; color: var(--text-muted); }
+  .error-state { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--danger); font-size: 13px; }
   .section { display: flex; flex-direction: column; gap: 10px; }
   .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 
@@ -231,7 +256,7 @@
   }
 
   @media (max-width: 820px) {
-    .view, .view.editor-active { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+    .view { padding: 16px; }
     .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
   }
 </style>

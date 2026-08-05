@@ -6,9 +6,10 @@
     disabled?: boolean;
     placeholder?: string;
     id?: string;
+    required?: boolean;
     onchange?: (value: string) => void;
   }
-  let { value = $bindable(''), options, disabled, placeholder, id, onchange }: Props = $props();
+  let { value = $bindable(''), options, disabled, placeholder, id, required = false, onchange }: Props = $props();
 
   function handleChange(e: Event) {
     value = (e.target as HTMLSelectElement).value;
@@ -20,6 +21,7 @@
   {id}
   bind:value
   {disabled}
+  {required}
   onchange={handleChange}
 >
   {#if placeholder}

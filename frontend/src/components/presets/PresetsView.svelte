@@ -8,12 +8,11 @@
   import type { ModelPreset } from '$lib/types';
   import { toast } from '../ui/Toast.svelte';
 
-  let editorOpen = $state(false);
   let editing = $state<ModelPreset | null>(null);
   let deleting = $state<ModelPreset | null>(null);
 
-  const systemPresets = $derived(modelsStore.presets.filter(p => p.owner_sub === null));
-  const personalPresets = $derived(modelsStore.presets.filter(p => p.owner_sub !== null));
+  const systemPresets = $derived(modelsStore.presets.filter(p => p.owner_sub === null).sort((a, b) => a.name.localeCompare(b.name)));
+  const personalPresets = $derived(modelsStore.presets.filter(p => p.owner_sub !== null).sort((a, b) => a.name.localeCompare(b.name)));
 
   async function save(data: Pick<ModelPreset, 'name' | 'base_model_id' | 'system_prompt'>) {
     try {
@@ -52,17 +51,23 @@
   }
 </script>
 
-<div class="view" class:editor-active={editorOpen}>
+<div class="view">
   <div class="view-content">
     <div class="view-header">
       <div>
         <h2 class="view-title">Model Presets</h2>
         <p class="view-subtitle">Bundle a model and system prompt for your own account.</p>
       </div>
-      <Button variant="primary" onclick={() => { editing = null; editorOpen = true; }}>+ New preset</Button>
     </div>
 
-    {#if systemPresets.length > 0}
+    {#if modelsStore.loading}
+      <p class="state-hint">Loading presets…</p>
+    {:else if modelsStore.error}
+      <div class="error-state">
+        <p>{modelsStore.error}</p>
+        <Button size="sm" onclick={() => modelsStore.load()}>Retry</Button>
+      </div>
+    {:else if systemPresets.length > 0}
       <section class="section">
         <h3 class="section-title">System presets <Badge variant="muted">read-only</Badge></h3>
         <div class="preset-grid">
@@ -77,6 +82,10 @@
               <div class="preset-model">{modelName(preset.base_model_id)}</div>
               {#if preset.system_prompt}
                 <div class="preset-prompt">{preset.system_prompt}</div>
+                <details class="content-details">
+                  <summary>View full prompt</summary>
+                  <pre>{preset.system_prompt}</pre>
+                </details>
               {/if}
               <div class="preset-actions">
                 <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
@@ -89,6 +98,7 @@
       </section>
     {/if}
 
+    {#if !modelsStore.loading && !modelsStore.error}
     <section class="section">
       <h3 class="section-title">My presets</h3>
       {#if personalPresets.length === 0}
@@ -106,12 +116,16 @@
               <div class="preset-model">{modelName(preset.base_model_id)}</div>
               {#if preset.system_prompt}
                 <div class="preset-prompt">{preset.system_prompt}</div>
+                <details class="content-details">
+                  <summary>View full prompt</summary>
+                  <pre>{preset.system_prompt}</pre>
+                </details>
               {/if}
               <div class="preset-actions">
                 <Button variant="ghost" size="sm" onclick={() => toggleDefault(preset)}>
                   {preferencesStore.defaultPresetId === preset.id ? 'Unset default' : 'Set as default'}
                 </Button>
-                <Button variant="ghost" size="sm" onclick={() => { editing = preset; editorOpen = true; }}>Edit</Button>
+                <Button variant="ghost" size="sm" onclick={() => editing = preset}>Edit</Button>
                 <Button variant="danger" size="sm" onclick={() => deleting = preset}>Delete</Button>
               </div>
             </div>
@@ -119,12 +133,12 @@
         </div>
       {/if}
     </section>
+    {/if}
   </div>
 
   <PresetEditor
-    open={editorOpen}
     preset={editing}
-    onclose={() => editorOpen = false}
+    onclose={() => editing = null}
     onsave={save}
   />
 </div>
@@ -139,13 +153,14 @@
 />
 
 <style>
-  .view { padding: 24px; width: 100%; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; overflow: auto; }
-  .view.editor-active { grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); }
-  .view-content { min-width: 0; max-width: 900px; display: flex; flex-direction: column; gap: 20px; }
+  .view { padding: 24px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 24px; overflow: auto; }
+  .view-content, :global(.editor-panel) { width: min(100%, 1000px); }
+  .view-content { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
   .view-header { display: flex; align-items: center; justify-content: space-between; }
   .view-title { font-size: 20px; font-weight: 600; }
   .view-subtitle { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
-  .empty-hint { font-size: 13px; color: var(--text-muted); }
+  .empty-hint, .state-hint { font-size: 13px; color: var(--text-muted); }
+  .error-state { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--danger); font-size: 13px; }
   .section { display: flex; flex-direction: column; gap: 10px; }
   .section-title { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 
@@ -175,10 +190,13 @@
     -webkit-box-orient: vertical;
     line-clamp: 2;
   }
+  .content-details { font-size: 12px; color: var(--text-muted); }
+  .content-details summary { cursor: pointer; }
+  .content-details pre { margin-top: 8px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
   .preset-actions { display: flex; gap: 6px; margin-top: 4px; }
 
   @media (max-width: 760px) {
-    .view, .view.editor-active { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+    .view { padding: 16px; }
     .view-header { align-items: flex-start; gap: 12px; flex-direction: column; }
   }
 </style>

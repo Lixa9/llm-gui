@@ -3,9 +3,10 @@
 
   interface Props {
     value?: string;
+    required?: boolean;
     onchange?: (value: string) => void;
   }
-  let { value = $bindable(''), onchange }: Props = $props();
+  let { value = $bindable(''), required = false, onchange }: Props = $props();
 
   let query = $state('');
   let open = $state(false);
@@ -37,6 +38,7 @@
 <div class="picker">
   <input
     class="picker-input"
+    required={required}
     value={open ? query : (selected?.display_name ?? '')}
     placeholder={modelsStore.models.length ? 'Select model…' : 'No models'}
     onfocus={() => { open = true; query = ''; }}
