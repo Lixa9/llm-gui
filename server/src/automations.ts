@@ -3,6 +3,7 @@ import { requireAuth } from './auth';
 import { getDb, generateId, safeParseJson } from './db/index';
 import { automationSchema, nextRunAt, scheduledDefinitionSchema } from './automation-definition';
 import { runAutomation } from './automation-runner';
+import { findAllowedModel } from './models';
 import type { AutomationRow, AutomationRunRow } from './types';
 
 export const automationsRouter = new Hono();
@@ -33,6 +34,7 @@ automationsRouter.post('/', async (c) => {
   const parsed = automationSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? 'Invalid automation' }, 400);
   const user = c.get('user');
+  if (!await findAllowedModel(parsed.data.definition.model, user.role)) return c.json({ error: 'Model not available for this role' }, 400);
   const id = generateId();
   await getDb().prepare('INSERT INTO automations (id, owner_sub, name, type, definition, next_run_at) VALUES (?, ?, ?, ?, ?::jsonb, ?)')
     .run(id, user.sub, parsed.data.name, 'scheduled', JSON.stringify(parsed.data.definition), nextRunAt(parsed.data.definition));
@@ -50,6 +52,7 @@ automationsRouter.patch('/:id', async (c) => {
   if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) return c.json({ error: 'Invalid name' }, 400);
   const definition = body.definition === undefined ? undefined : scheduledDefinitionSchema.safeParse(body.definition);
   if (definition && !definition.success) return c.json({ error: definition.error.issues[0]?.message ?? 'Invalid definition' }, 400);
+  if (definition?.success && !await findAllowedModel(definition.data.model, user.role)) return c.json({ error: 'Model not available for this role' }, 400);
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') return c.json({ error: 'Invalid enabled value' }, 400);
   const nextRun = definition?.success ? nextRunAt(definition.data) : undefined;
   await getDb().prepare(`
@@ -81,7 +84,9 @@ automationsRouter.post('/:id/trigger', async (c) => {
   const user = c.get('user');
   const row = await getDb().prepare('SELECT * FROM automations WHERE id=? AND deleted_at IS NULL AND (owner_sub=? OR owner_sub IS NULL)').get<AutomationRow>(c.req.param('id'), user.sub);
   if (!row || !visibleTo(row, user.role)) return c.json({ error: 'Not found' }, 404);
-  return c.json(await runAutomation(row, 'manual'), 201);
+  const definition = scheduledDefinitionSchema.safeParse(safeParseJson<unknown>(row.definition, {}));
+  if (!definition.success || !await findAllowedModel(definition.data.model, user.role)) return c.json({ error: 'Model not available for this role' }, 403);
+  return c.json(await runAutomation(row, 'manual', user.role), 201);
 });
 
 automationsRouter.get('/:id/runs', async (c) => {

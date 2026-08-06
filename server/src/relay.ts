@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from './auth';
 import { getDb, generateId, safeParseJson } from './db/index';
 import { getConfig } from './config';
-import { checkRateLimit, closeStream, openStream } from './ratelimit';
+import { acquireStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
 import type { MessageContentPart } from './types';
@@ -134,9 +134,9 @@ relayRouter.post('/', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
 
-  const rl = await checkRateLimit(user.sub);
+  const rl = await acquireStream(user.sub);
   if (!rl.allowed) return c.json({ error: rl.reason }, 429);
-  const leaseId = await openStream(user.sub);
+  const leaseId = rl.leaseId!;
   const userContent = JSON.stringify(body.new_user_message.content);
   const userText = contentPartsToText(body.new_user_message.content);
   await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)')

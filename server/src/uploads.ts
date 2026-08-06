@@ -1,7 +1,9 @@
 import { requireAuth } from './auth';
 import { Hono } from 'hono';
 import { getDb, generateId, safeParseJson } from './db/index';
+import type { TxDb } from './db/index';
 import { checkRateLimit } from './ratelimit';
+import { getConfig } from './config';
 import { logger } from './logger';
 import { extractText, renderPdfPages, extractDocImages } from './extract';
 
@@ -24,6 +26,19 @@ export const MIME_TO_EXT: Record<string, string> = {
 const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
 const TEXT_MAX_SIZE = 50 * 1024 * 1024;
 
+async function storageUsage(ownerSub: string, db: ReturnType<typeof getDb> | TxDb): Promise<number> {
+  const row = await db.prepare(`
+    SELECT COALESCE(SUM(
+      octet_length(data) +
+      COALESCE(octet_length(extracted_text), 0) +
+      COALESCE(octet_length(derived_images::text), 0) +
+      COALESCE(octet_length(file_meta::text), 0)
+    ), 0)::bigint AS bytes
+    FROM uploads WHERE owner_sub=?
+  `).get<{ bytes: number }>(ownerSub);
+  return row?.bytes ?? 0;
+}
+
 export function classifyMime(mime: string) {
   return { isPdf: mime === 'application/pdf', isDocx: mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', isOdt: mime === 'application/vnd.oasis.opendocument.text', isEpub: mime === 'application/epub+zip' };
 }
@@ -43,6 +58,11 @@ uploadsRouter.post('/', async (c) => {
   if (!isImage && !isTextFile) return c.json({ error: 'Unsupported file type.' }, 415);
   const maxSize = isImage ? IMAGE_MAX_SIZE : TEXT_MAX_SIZE;
   if (file.size > maxSize) return c.json({ error: `File too large (max ${isImage ? '20' : '50'} MB)` }, 413);
+
+  const quota = getConfig().storage.quota;
+  if (quota > 0 && await storageUsage(user.sub, getDb()) + file.size > quota) {
+    return c.json({ error: 'Storage quota exceeded' }, 507);
+  }
 
   const bytes = await file.arrayBuffer();
   const buf = Buffer.from(bytes);
@@ -80,11 +100,20 @@ uploadsRouter.post('/', async (c) => {
     }
   }
 
-  const id = generateId();
-  await getDb().prepare(`
-    INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size, extracted_text, file_meta, data, derived_images)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)
-  `).run(id, user.sub, sha256, file.name.slice(0, 255), file.type, file.size, extractedText, JSON.stringify(fileMeta), buf, JSON.stringify(derivedImages));
+  const storedBytes = buf.byteLength +
+    Buffer.byteLength(extractedText ?? '', 'utf8') +
+    Buffer.byteLength(JSON.stringify(derivedImages), 'utf8') +
+    Buffer.byteLength(JSON.stringify(fileMeta), 'utf8');
+  const id = await getDb().withAdvisoryLock(`storage-quota:${user.sub}`, async db => {
+    if (quota > 0 && await storageUsage(user.sub, db) + storedBytes > quota) return null;
+    const uploadId = generateId();
+    await db.prepare(`
+      INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size, extracted_text, file_meta, data, derived_images)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)
+    `).run(uploadId, user.sub, sha256, file.name.slice(0, 255), file.type, file.size, extractedText, JSON.stringify(fileMeta), buf, JSON.stringify(derivedImages));
+    return uploadId;
+  });
+  if (!id) return c.json({ error: 'Storage quota exceeded' }, 507);
   logger.info('Upload stored', { user_sub: user.sub, id, mime_type: file.type, size: file.size });
   return c.json({ id, filename: file.name, mime_type: file.type, size: file.size, url: `/api/uploads/${id}`, ...(warning ? { warning } : {}) }, 201);
 });

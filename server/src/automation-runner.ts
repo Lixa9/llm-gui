@@ -2,22 +2,52 @@ import { getConfig } from './config';
 import { getDb, generateId, safeParseJson } from './db/index';
 import { logger } from './logger';
 import { parseScheduledDefinition } from './automation-definition';
-import type { AutomationRow, AutomationRunRow, ScheduledDefinition } from './types';
+import { findAllowedModel } from './models';
+import type { AutomationRow, AutomationRunRow, Role, ScheduledDefinition } from './types';
 
 function makeConversationTitle(name: string): string {
   return `${name} — ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;
 }
 
-export async function runAutomation(row: AutomationRow, source: 'scheduled' | 'manual'): Promise<AutomationRunRow> {
+async function resolveOwnerRole(ownerSub: string): Promise<Role | null> {
+  const sessions = await getDb().prepare('SELECT role FROM sessions WHERE sub=? AND expires_at>?').all<{ role: Role }>(ownerSub, Date.now());
+  if (sessions.some(session => session.role === 'admin')) return 'admin';
+  if (sessions.some(session => session.role === 'user')) return 'user';
+  return null;
+}
+
+function visibleRoles(row: AutomationRow): Role[] {
+  const roles = safeParseJson<Role[] | null>(row.visible_to, null);
+  return roles?.length ? roles : ['admin', 'user'];
+}
+
+async function assertModelAccess(row: AutomationRow, definition: ScheduledDefinition, ownerRole?: Role): Promise<void> {
+  if (row.owner_sub !== null) {
+    const role = ownerRole ?? await resolveOwnerRole(row.owner_sub);
+    if (!role || !await findAllowedModel(definition.model, role)) {
+      throw new Error('Automation model is not available for the owner role');
+    }
+    return;
+  }
+
+  for (const role of visibleRoles(row)) {
+    if ((role !== 'admin' && role !== 'user') || !await findAllowedModel(definition.model, role)) {
+      throw new Error(`Automation model is not available for role: ${role}`);
+    }
+  }
+}
+
+export async function runAutomation(row: AutomationRow, source: 'scheduled' | 'manual', ownerRole?: Role): Promise<AutomationRunRow> {
   const db = getDb();
   const runId = generateId();
+  const definition = parseScheduledDefinition(row.definition);
+  await assertModelAccess(row, definition, ownerRole);
   if (row.owner_sub === null) {
     await db.prepare('INSERT INTO automation_runs (id, automation_id, status) VALUES (?, ?, ?)').run(runId, row.id, 'running');
     void executeSystemAutomationRun(row, runId).catch(error => logger.error('System automation failed', { error: String(error) }));
   } else {
-    const def = parseScheduledDefinition(row.definition);
     const convId = generateId();
-    await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, row.owner_sub, makeConversationTitle(row.name), def.model || null);
+    await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, row.owner_sub, makeConversationTitle(row.name), definition.model || null);
     await db.prepare('INSERT INTO automation_runs (id, automation_id, conversation_id, status) VALUES (?, ?, ?, ?)').run(runId, row.id, convId, 'running');
     void executePersonalAutomationRun(row, convId, runId).catch(error => logger.error('Personal automation failed', { error: String(error) }));
   }

@@ -11,6 +11,35 @@ export const CONFIG_FILES = ['config.yaml', 'models.yaml', 'prompts.yaml', 'pres
 
 const roleSchema = z.enum(['admin', 'user']);
 
+const STORAGE_UNIT_FACTORS: Record<string, number> = {
+  B: 1,
+  K: 1024,
+  KB: 1024,
+  KIB: 1024,
+  M: 1024 ** 2,
+  MB: 1024 ** 2,
+  MIB: 1024 ** 2,
+  G: 1024 ** 3,
+  GB: 1024 ** 3,
+  GIB: 1024 ** 3,
+  T: 1024 ** 4,
+  TB: 1024 ** 4,
+  TIB: 1024 ** 4,
+};
+
+export function parseStorageSize(value: string): number {
+  const match = /^(\d+(?:\.\d+)?)\s*(B|K|KB|KIB|M|MB|MIB|G|GB|GIB|T|TB|TIB)?$/i.exec(value.trim());
+  if (!match) throw new Error('Storage quota must look like 10G, 512M, or 0');
+  const bytes = Number(match[1]) * (STORAGE_UNIT_FACTORS[(match[2] ?? 'B').toUpperCase()] ?? 1);
+  if (!Number.isSafeInteger(bytes)) throw new Error('Storage quota is too large');
+  return bytes;
+}
+
+const storageSizeSchema = z.string()
+  .trim()
+  .regex(/^\d+(?:\.\d+)?\s*(?:B|K|KB|KIB|M|MB|MIB|G|GB|GIB|T|TB|TIB)?$/i, 'Storage quota must look like "10G", "512M", or "0"')
+  .transform(parseStorageSize);
+
 const configSchema = z.object({
   app: z.object({
     name: z.string().default('Chat'),
@@ -39,6 +68,9 @@ const configSchema = z.object({
     requests_per_hour: z.number().default(300),
     concurrent_streams: z.number().default(2),
   }).default({}),
+  storage: z.object({
+    quota: storageSizeSchema,
+  }).strict().default({ quota: '0' }),
   conversation: z.object({
     auto_title: z.boolean().default(true),
     auto_title_model: z.string().default('qwen3.5-0.8b'),
@@ -54,6 +86,10 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     'openai:',
     '  base_url: "${OPENAI_BASE_URL}"',
     '  api_key: "${OPENAI_API_KEY}"',
+    '',
+    'storage:',
+    '  # Per-user upload quota; use values such as "10G". 0 means unlimited.',
+    '  quota: "0"',
     '',
   ].join('\n'),
   'models.yaml': 'models: []\n',

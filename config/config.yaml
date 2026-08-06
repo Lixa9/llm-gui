@@ -6,6 +6,10 @@ openai:
   base_url: "http://127.0.0.1:1234/v1"
   api_key: "${OPENAI_API_KEY}"
 
+storage:
+  # Per-user upload quota; use values such as "10G". 0 means unlimited.
+  quota: "500M"
+
 # OIDC is only needed if you want SSO login.
 # If you only use the local admin account, these values are never contacted.
 oidc:
