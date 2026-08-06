@@ -56,9 +56,9 @@ async function copyMessages(db: TxDb, srcId: string, destId: string, stopAtMsgId
   const messages = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<MessageRow>(srcId);
   for (const message of messages) {
     await db.prepare(`
-      INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(generateId(), destId, message.role, message.content, message.content_text, message.model, message.tokens_in, message.tokens_out, message.status, message.timestamp);
+      INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(generateId(), destId, message.role, message.content, message.content_text, message.model, message.status, message.timestamp);
     if (stopAtMsgId && message.id === stopAtMsgId) break;
   }
 }

@@ -218,8 +218,6 @@ async function applySchema(db: Db): Promise<void> {
       content TEXT NOT NULL DEFAULT '[]',
       content_text TEXT NOT NULL DEFAULT '',
       model TEXT,
-      tokens_in INTEGER,
-      tokens_out INTEGER,
       status TEXT,
       timestamp BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
       edited_at BIGINT
@@ -307,5 +305,14 @@ async function applySchema(db: Db): Promise<void> {
 
     INSERT INTO schema_migrations(version) VALUES ('001_initial_postgres')
       ON CONFLICT(version) DO NOTHING;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '002_remove_token_usage') THEN
+        ALTER TABLE messages DROP COLUMN IF EXISTS tokens_in;
+        ALTER TABLE messages DROP COLUMN IF EXISTS tokens_out;
+        INSERT INTO schema_migrations(version) VALUES ('002_remove_token_usage');
+      END IF;
+    END $$;
   `);
 }

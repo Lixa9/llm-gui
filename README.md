@@ -20,7 +20,7 @@ Uploaded bytes and extracted derivatives are stored in PostgreSQL, so the applic
 
 Sessions use random opaque bearer tokens. Only a SHA-256 token hash is stored in PostgreSQL, with expiry and revocation checked on every request. No signing secret is placed in configuration or generated per instance.
 
-The relay builds history from the canonical conversation in PostgreSQL. It does not estimate tokens or trim context. Normal models receive full history; an optional `history_mode: latest_only` sends only the new message and `session_id` for an upstream agent that owns its own session context.
+The relay builds history from the canonical conversation in PostgreSQL. It does not estimate or retain token usage, and it does not trim context. Normal models receive full history; an optional `history_mode: latest_only` sends only the new message and `session_id` for an upstream agent that owns its own session context.
 
 ## Quick start
 

@@ -157,13 +157,11 @@ relayRouter.post('/', async (c) => {
   let fullText = '';
   const stream = new ReadableStream({
     async start(controller) {
-      let promptTokens: number | null = null;
-      let completionTokens: number | null = null;
       try {
         const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
           headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: body.model, messages: openaiMessages, stream: true, stream_options: { include_usage: true }, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
+          body: JSON.stringify({ model: body.model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
           signal: c.req.raw.signal,
         });
         if (!response.ok) {
@@ -186,8 +184,7 @@ relayRouter.post('/', async (c) => {
               const data = line.slice(6).trim();
               if (data === '[DONE]') { done = true; break; }
               try {
-                const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-                if (parsed.usage) { promptTokens = parsed.usage.prompt_tokens ?? null; completionTokens = parsed.usage.completion_tokens ?? null; }
+                const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
                 const delta = parsed.choices?.[0]?.delta?.content;
                 if (delta) { fullText += delta; controller.enqueue(sse({ type: 'delta', content: delta })); }
               } catch { /* ignore malformed SSE frames */ }
@@ -198,11 +195,11 @@ relayRouter.post('/', async (c) => {
         }
         if (fullText || done) {
           await db.prepare(`
-            INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp)
-            VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, 'done', ?)
-          `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, promptTokens, completionTokens, Date.now());
+            INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
+            VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
+          `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
         }
-        controller.enqueue(sse({ type: 'done', tokens_in: promptTokens, tokens_out: completionTokens }));
+        controller.enqueue(sse({ type: 'done' }));
         if (isFirstExchange && cfg.conversation.auto_title && fullText) {
           const title = await generateTitle(convId, body.model, cfg, userText, fullText);
           if (title) controller.enqueue(sse({ type: 'title', title }));
@@ -210,8 +207,8 @@ relayRouter.post('/', async (c) => {
         controller.close();
       } catch (error) {
         if ((error as Error).name === 'AbortError') {
-          if (fullText) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, 'aborted', ?)`)
-            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, promptTokens, completionTokens, Date.now());
+          if (fullText) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
+            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
         } else {
           controller.enqueue(sse({ type: 'error', message: 'Upstream request failed' }));
         }
