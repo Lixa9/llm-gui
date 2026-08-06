@@ -45,8 +45,6 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: MessageContentPart[];
   model: string | null;
-  tokens_in: number | null;
-  tokens_out: number | null;
   status: MessageStatus | null;
   timestamp: number;
   edited_at: number | null;
@@ -146,7 +144,7 @@ export interface UserPreferences {
 
 export type SSEEvent =
   | { type: 'delta'; content: string }
-  | { type: 'done'; tokens_in?: number; tokens_out?: number }
+  | { type: 'done' }
   | { type: 'title'; title: string }
   | { type: 'error'; message: string };
 

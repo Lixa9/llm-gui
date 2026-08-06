@@ -67,8 +67,6 @@ export interface MessageRow {
   content: string;
   content_text: string;
   model: string | null;
-  tokens_in: number | null;
-  tokens_out: number | null;
   status: MessageStatus | null;
   timestamp: number;
   edited_at: number | null;

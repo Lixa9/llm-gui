@@ -36,7 +36,7 @@ async function executeSystemAutomationRun(row: AutomationRow, runId: string): Pr
       for (const subscriber of subscribers) {
         const convId = generateId();
         await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, subscriber.user_sub, makeConversationTitle(row.name), def.model || null);
-        await storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);
+        await storeConversationResult(convId, def.user_prompt, result.assistantText, def.model);
       }
     }
     await db.prepare('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
@@ -50,7 +50,7 @@ async function executePersonalAutomationRun(row: AutomationRow, convId: string, 
   try {
     const def = parseScheduledDefinition(row.definition);
     const result = await fetchCompletion(def);
-    await storeConversationResult(convId, def.user_prompt, result.assistantText, def.model, result.usage);
+    await storeConversationResult(convId, def.user_prompt, result.assistantText, def.model);
     await db.prepare('UPDATE automation_runs SET status=? WHERE id=?').run('done', runId);
   } catch (error) {
     await db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(error), runId);
@@ -62,14 +62,13 @@ async function storeConversationResult(
   userPrompt: string,
   assistantText: string,
   model: string,
-  usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
 ): Promise<void> {
   const db = getDb();
   await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'user', JSON.stringify([{ type: 'text', text: userPrompt }]), userPrompt, 'done');
-  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, model, tokens_in, tokens_out, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'assistant', JSON.stringify([{ type: 'text', text: assistantText }]), assistantText, model, usage?.prompt_tokens ?? null, usage?.completion_tokens ?? null, 'done');
+  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, model, status) VALUES (?, ?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'assistant', JSON.stringify([{ type: 'text', text: assistantText }]), assistantText, model, 'done');
 }
 
-async function fetchCompletion(def: ScheduledDefinition): Promise<{ assistantText: string; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
+async function fetchCompletion(def: ScheduledDefinition): Promise<{ assistantText: string }> {
   const cfg = getConfig();
   const messages: unknown[] = [];
   if (def.system_prompt) messages.push({ role: 'system', content: def.system_prompt });
@@ -81,6 +80,6 @@ async function fetchCompletion(def: ScheduledDefinition): Promise<{ assistantTex
     signal: AbortSignal.timeout(120_000),
   });
   if (!response.ok) throw new Error(`upstream error: ${response.status}`);
-  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-  return { assistantText: data.choices?.[0]?.message?.content ?? '', usage: data.usage };
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return { assistantText: data.choices?.[0]?.message?.content ?? '' };
 }
