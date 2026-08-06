@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { intervalMs, nextRunAt, parseScheduledDefinition, scheduledDefinitionSchema } from '../src/automation-definition';
+import { parseStorageSize } from '../src/config';
+
+test('human-readable storage quotas use binary units', () => {
+  assert.equal(parseStorageSize('10G'), 10 * 1024 ** 3);
+  assert.equal(parseStorageSize('512 MiB'), 512 * 1024 ** 2);
+  assert.throws(() => parseStorageSize('ten gigabytes'));
+});
 
 test('scheduled definitions are validated and normalized', () => {
   const parsed = scheduledDefinitionSchema.parse({

@@ -151,6 +151,9 @@ export interface AppConfig {
     requests_per_hour: number;
     concurrent_streams: number;
   };
+  storage: {
+    quota: number;
+  };
   conversation: {
     auto_title: boolean;
     auto_title_model: string;

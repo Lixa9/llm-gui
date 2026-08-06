@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
+import { bodyLimit } from 'hono/body-limit';
 import { readFile } from 'fs/promises';
 import { loadConfig, reloadConfig, getConfig } from './config';
 import { openDatabase, closeDatabase } from './db/index';
@@ -59,10 +60,19 @@ app.use('*', async (c, next) => {
 });
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const DEFAULT_API_BODY_LIMIT = 2 * 1024 * 1024;
+const LARGE_API_BODY_LIMIT = 60 * 1024 * 1024;
+const defaultBodyLimit = bodyLimit({ maxSize: DEFAULT_API_BODY_LIMIT, onError: c => c.json({ error: 'Request body too large' }, 413) });
+const largeBodyLimit = bodyLimit({ maxSize: LARGE_API_BODY_LIMIT, onError: c => c.json({ error: 'Request body too large' }, 413) });
 
 app.use('/api/*', async (c, next) => {
-  const contentLength = Number(c.req.header('content-length') ?? 0);
-  if (contentLength > 60 * 1024 * 1024) return c.json({ error: 'Request body too large' }, 413);
+  // Hono's bodyLimit checks Content-Length when reliable and otherwise reads
+  // the body stream with a hard cap before replaying the bounded body.
+  const isLargeBodyRoute = c.req.path === '/api/chat' || c.req.path === '/api/uploads';
+  return (isLargeBodyRoute ? largeBodyLimit : defaultBodyLimit)(c, next);
+});
+
+app.use('/api/*', async (c, next) => {
   const origin = c.req.header('origin');
   if (origin) {
     const cfg = getConfig();

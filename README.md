@@ -80,10 +80,16 @@ rate_limits:
   requests_per_hour: 1000
   concurrent_streams: 4
 
+storage:
+  # Per-user upload quota; use values such as "10G". 0 means unlimited.
+  quota: "10G"
+
 conversation:
   auto_title: true
   auto_title_model: "qwen3.5-0.8b"
 ```
+
+`storage.quota` is a per-user quota for uploaded file data plus extracted text, derived images, and file metadata. Values use binary units, so `10G` means 10 GiB. `"0"` disables the quota. Uploads exceeding the quota are rejected with HTTP 507.
 
 Remove or leave `oidc` unconfigured only when using the explicitly enabled test account. Normal deployments should configure OIDC and keep `LOCAL_AUTH` unset.
 

@@ -77,6 +77,10 @@ export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
   return cache.models.filter(m => m.allowed_roles.includes(userRole as 'admin' | 'user'));
 }
 
+export async function findAllowedModel(modelId: string, userRole: string): Promise<ModelYamlEntry | undefined> {
+  return (await fetchModels(userRole)).find(model => model.id === modelId);
+}
+
 modelsRouter.get('/', async (c) => {
   const user = c.get('user');
   const models = await fetchModels(user.role);
