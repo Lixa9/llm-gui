@@ -22,6 +22,7 @@
   let { message, conversationId, isStreaming = false, isPending = false, onEdit, onRegenerate, onDelete, onFork }: Props = $props();
 
   const isFullMessage = $derived('id' in message && !isPending);
+  const isActionable = $derived(isFullMessage && !(message as Message).delivery_status);
 
 
 
@@ -71,6 +72,13 @@
         {#if (message as Message).status === 'aborted'}
           <Badge variant="warning">stopped</Badge>
         {/if}
+        {#if (message as Message).delivery_status === 'sending'}
+          <Badge variant="muted">sending</Badge>
+        {:else if (message as Message).delivery_status === 'failed'}
+          <Badge variant="warning">not sent</Badge>
+        {:else if (message as Message).delivery_status === 'uncertain'}
+          <Badge variant="warning">unverified</Badge>
+        {/if}
         <span class="msg-time">{formatRelativeDate((message as Message).timestamp)}</span>
       {/if}
     </div>
@@ -88,7 +96,7 @@
       <StreamingCursor />
     {/if}
 
-    {#if isFullMessage}
+    {#if isActionable}
       <MessageActions
         message={message as Message}
         {isStreaming}

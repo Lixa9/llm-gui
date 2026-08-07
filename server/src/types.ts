@@ -33,6 +33,8 @@ export interface UserRow {
   sub: string;
   email: string;
   name: string;
+  last_known_role: Role;
+  role_updated_at: number | null;
   created_at: number;
 }
 
@@ -103,6 +105,7 @@ export interface AutomationRow {
   created_at: number;
   deleted_at: number | null;
   visible_to: string[] | null;
+  next_run_at: number | null;
 }
 
 export interface AutomationRunRow {

@@ -115,6 +115,7 @@ Models not listed in this file default to admin-only. `history_mode` is either `
 
 - OIDC ID tokens are verified against the issuer, audience, and provider JWKS.
 - Roles are resolved from OIDC group claims; there are no local users or role overrides.
+- The most recently resolved role is stored with the user so scheduled automations do not depend on an active session. IdP role changes take effect for background jobs after the user's next successful login.
 - The local test account is disabled unless `LOCAL_AUTH` is explicitly enabled.
 - Mutating API requests require same-origin checks and the application request header.
 - Sessions are `HttpOnly`, `SameSite=Lax`, and `Secure` when served over HTTPS.

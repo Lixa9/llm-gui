@@ -6,7 +6,7 @@ import { getConfig } from './config';
 import { acquireStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
-import type { MessageContentPart } from './types';
+import type { MessageContentPart, MessageRow } from './types';
 
 interface UploadRow {
   sha256: string;
@@ -103,8 +103,16 @@ const chatRequestSchema = z.object({
   conversation_id: z.string().uuid().nullable().optional(),
   model: z.string().trim().min(1).max(300),
   system_prompt: z.string().max(100_000).optional(),
-  new_user_message: z.object({ content: z.array(contentPartSchema).min(1).max(200) }),
+  assistant_message_id: z.string().uuid().optional(),
+  new_user_message: z.object({
+    id: z.string().uuid().optional(),
+    content: z.array(contentPartSchema).min(1).max(200),
+  }),
 });
+
+function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { content: MessageContentPart[] } {
+  return { ...row, content: safeParseJson<MessageContentPart[]>(row.content, []) };
+}
 
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
@@ -119,7 +127,8 @@ relayRouter.post('/', async (c) => {
     conversation_id?: string | null;
     model: string;
     system_prompt?: string;
-    new_user_message: { content: MessageContentPart[] };
+    assistant_message_id?: string;
+    new_user_message: { id?: string; content: MessageContentPart[] };
   };
   const allowedModels = await fetchModels(user.role);
   const modelEntry = allowedModels.find(model => model.id === body.model);
@@ -137,10 +146,13 @@ relayRouter.post('/', async (c) => {
   const rl = await acquireStream(user.sub);
   if (!rl.allowed) return c.json({ error: rl.reason }, 429);
   const leaseId = rl.leaseId!;
+  const userMsgId = body.new_user_message.id ?? generateId();
+  const assistantMsgId = body.assistant_message_id ?? generateId();
+  const userTimestamp = Date.now();
   const userContent = JSON.stringify(body.new_user_message.content);
   const userText = contentPartsToText(body.new_user_message.content);
   await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(generateId(), convId, 'user', userContent, userText, 'done', Date.now());
+    .run(userMsgId, convId, 'user', userContent, userText, 'done', userTimestamp);
 
   const stored = await db.prepare(`SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id`).all<StoredMessage>(convId);
   const history = stored.slice(0, -1).map(message => ({ role: message.role, content: safeParseJson<MessageContentPart[]>(message.content, []) }));
@@ -152,11 +164,26 @@ relayRouter.post('/', async (c) => {
   openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content, user.sub) });
 
   const isFirstExchange = stored.filter(message => message.role === 'user').length === 1;
-  const assistantMsgId = generateId();
   const start = Date.now();
   let fullText = '';
+  let assistantStored = false;
   const stream = new ReadableStream({
     async start(controller) {
+      controller.enqueue(sse({
+        type: 'accepted',
+        conversation_id: convId,
+        assistant_message_id: assistantMsgId,
+        user_message: {
+          id: userMsgId,
+          conversation_id: convId,
+          role: 'user',
+          content: body.new_user_message.content,
+          model: null,
+          status: 'done',
+          timestamp: userTimestamp,
+          edited_at: null,
+        },
+      }));
       try {
         const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
@@ -193,13 +220,25 @@ relayRouter.post('/', async (c) => {
           }
           if (done) break;
         }
-        if (fullText || done) {
-          await db.prepare(`
-            INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
-            VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
-          `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
+        const assistantTimestamp = Date.now();
+        if (!done) {
+          if (fullText) {
+            await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
+              .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, assistantTimestamp);
+            assistantStored = true;
+          }
+          controller.enqueue(sse({ type: 'error', message: 'Upstream stream ended before completion' }));
+          controller.close();
+          return;
         }
-        controller.enqueue(sse({ type: 'done' }));
+
+        await db.prepare(`
+          INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
+          VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
+        `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, assistantTimestamp);
+        assistantStored = true;
+        const assistant = await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(assistantMsgId);
+        controller.enqueue(sse({ type: 'done', message: assistant ? serializeMessage(assistant) : null }));
         if (isFirstExchange && cfg.conversation.auto_title && fullText) {
           const title = await generateTitle(convId, body.model, cfg, userText, fullText);
           if (title) controller.enqueue(sse({ type: 'title', title }));
@@ -207,9 +246,11 @@ relayRouter.post('/', async (c) => {
         controller.close();
       } catch (error) {
         if ((error as Error).name === 'AbortError') {
-          if (fullText) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
+          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
             .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
         } else {
+          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
+            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
           controller.enqueue(sse({ type: 'error', message: 'Upstream request failed' }));
         }
         controller.close();

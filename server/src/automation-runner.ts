@@ -10,10 +10,8 @@ function makeConversationTitle(name: string): string {
 }
 
 async function resolveOwnerRole(ownerSub: string): Promise<Role | null> {
-  const sessions = await getDb().prepare('SELECT role FROM sessions WHERE sub=? AND expires_at>?').all<{ role: Role }>(ownerSub, Date.now());
-  if (sessions.some(session => session.role === 'admin')) return 'admin';
-  if (sessions.some(session => session.role === 'user')) return 'user';
-  return null;
+  const owner = await getDb().prepare('SELECT last_known_role FROM users WHERE sub=?').get<{ last_known_role: Role }>(ownerSub);
+  return owner?.last_known_role ?? null;
 }
 
 function visibleRoles(row: AutomationRow): Role[] {
@@ -37,19 +35,32 @@ async function assertModelAccess(row: AutomationRow, definition: ScheduledDefini
   }
 }
 
-export async function runAutomation(row: AutomationRow, source: 'scheduled' | 'manual', ownerRole?: Role): Promise<AutomationRunRow> {
+export async function runAutomation(
+  row: AutomationRow,
+  source: 'scheduled' | 'manual',
+  ownerRole?: Role,
+  claimedRunId?: string,
+): Promise<AutomationRunRow> {
   const db = getDb();
-  const runId = generateId();
-  const definition = parseScheduledDefinition(row.definition);
-  await assertModelAccess(row, definition, ownerRole);
-  if (row.owner_sub === null) {
+  const runId = claimedRunId ?? generateId();
+  if (!claimedRunId) {
     await db.prepare('INSERT INTO automation_runs (id, automation_id, status) VALUES (?, ?, ?)').run(runId, row.id, 'running');
-    void executeSystemAutomationRun(row, runId).catch(error => logger.error('System automation failed', { error: String(error) }));
-  } else {
-    const convId = generateId();
-    await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, row.owner_sub, makeConversationTitle(row.name), definition.model || null);
-    await db.prepare('INSERT INTO automation_runs (id, automation_id, conversation_id, status) VALUES (?, ?, ?, ?)').run(runId, row.id, convId, 'running');
-    void executePersonalAutomationRun(row, convId, runId).catch(error => logger.error('Personal automation failed', { error: String(error) }));
+  }
+
+  try {
+    const definition = parseScheduledDefinition(row.definition);
+    await assertModelAccess(row, definition, ownerRole);
+    if (row.owner_sub === null) {
+      void executeSystemAutomationRun(row, runId).catch(error => logger.error('System automation failed', { error: String(error) }));
+    } else {
+      const convId = generateId();
+      await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, row.owner_sub, makeConversationTitle(row.name), definition.model || null);
+      await db.prepare('UPDATE automation_runs SET conversation_id=? WHERE id=?').run(convId, runId);
+      void executePersonalAutomationRun(row, convId, runId).catch(error => logger.error('Personal automation failed', { error: String(error) }));
+    }
+  } catch (error) {
+    await db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(error), runId);
+    throw error;
   }
   const run = await db.prepare('SELECT * FROM automation_runs WHERE id=?').get<AutomationRunRow>(runId);
   if (!run) throw new Error(`Could not create ${source} automation run`);

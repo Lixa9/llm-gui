@@ -15,22 +15,15 @@
   import { modelsStore } from './stores/models.svelte';
   import { promptsStore } from './stores/prompts.svelte';
   import { preferencesStore } from './stores/preferences.svelte';
+  import { navigateTo, parseHashRoute } from './lib/router';
 
   // Parse hash route
   let hash = $state(window.location.hash || '#/chat');
 
-  function parseRoute(h: string): { view: string; id: string | null } {
-    const path = h.replace(/^#/, '') || '/chat';
-    const parts = path.split('/').filter(Boolean);
-    const view = parts[0] ?? 'chat';
-    const id = parts[1] ?? null;
-    return { view, id };
-  }
-
-  const route = $derived(parseRoute(hash));
+  const route = $derived(parseHashRoute(hash));
 
   function navigate(view: string) {
-    window.location.hash = `#/${view}`;
+    navigateTo(view);
   }
 
   onMount(() => {
@@ -42,7 +35,7 @@
 
     // Sync active conversation from URL
     const syncActive = () => {
-      const { view, id } = parseRoute(window.location.hash);
+      const { view, id } = parseHashRoute(window.location.hash);
       if (view === 'chat' && id) {
         conversationsStore.setActive(id);
       }

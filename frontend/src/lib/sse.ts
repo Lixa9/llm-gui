@@ -19,18 +19,17 @@ export async function streamChat(
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json() as { error: string }).error ?? msg; } catch { /* ignore */ }
-    onEvent({ type: 'error', message: msg });
-    return;
+    throw new Error(msg);
   }
 
   if (!res.body) {
-    onEvent({ type: 'error', message: 'No response body' });
-    return;
+    throw new Error('No response body');
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let terminalEvent = false;
 
   try {
     while (true) {
@@ -48,6 +47,7 @@ export async function streamChat(
           if (!data) continue;
           try {
             const event = JSON.parse(data) as SSEEvent;
+            if (event.type === 'done' || event.type === 'error') terminalEvent = true;
             onEvent(event);
           } catch {
             // malformed chunk, skip
@@ -55,11 +55,9 @@ export async function streamChat(
         }
       }
     }
-  } catch (err) {
-    if ((err as Error).name !== 'AbortError') {
-      onEvent({ type: 'error', message: (err as Error).message });
-    }
   } finally {
     reader.releaseLock();
   }
+
+  if (!terminalEvent) throw new Error('Connection closed before the response completed');
 }

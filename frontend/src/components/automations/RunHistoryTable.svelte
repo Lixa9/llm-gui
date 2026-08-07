@@ -2,6 +2,7 @@
   import type { AutomationRun } from '$lib/types';
   import { formatDate } from '$lib/utils';
   import Badge from '../ui/Badge.svelte';
+  import { chatHref } from '$lib/router';
 
   interface Props { runs: AutomationRun[]; }
   let { runs }: Props = $props();
@@ -29,7 +30,7 @@
           <td><Badge variant={statusVariant(run.status)}>{run.status}</Badge></td>
           <td>
             {#if run.conversation_id}
-              <a href={`#/chat/${run.conversation_id}`} class="conv-link">View</a>
+              <a href={chatHref(run.conversation_id)} class="conv-link">View</a>
             {/if}
           </td>
           <td class="error-cell">{run.error ?? ''}</td>
