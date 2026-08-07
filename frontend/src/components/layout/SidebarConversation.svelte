@@ -4,6 +4,7 @@
   import type { Conversation } from '$lib/types';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import { truncateTitle } from '$lib/utils';
+  import { navigateTo } from '$lib/router';
 
   interface Props { conversation: Conversation; }
   let { conversation }: Props = $props();
@@ -27,7 +28,7 @@
   function navigate() {
     conversationsStore.setActive(conversation.id);
     conversationsStore.setActiveFolder(conversation.folder_id);
-    window.location.hash = `#/chat/${conversation.id}`;
+    navigateTo('chat', conversation.id);
   }
 
   function ondragstart(e: DragEvent) {

@@ -273,9 +273,13 @@ authRouter.get('/callback', async (c) => {
 
   const db = getDb();
   await db.prepare(`
-    INSERT INTO users (sub, email, name) VALUES (?, ?, ?)
-    ON CONFLICT(sub) DO UPDATE SET email=excluded.email, name=excluded.name
-  `).run(sub, email, name);
+    INSERT INTO users (sub, email, name, last_known_role, role_updated_at) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(sub) DO UPDATE SET
+      email=excluded.email,
+      name=excluded.name,
+      last_known_role=excluded.last_known_role,
+      role_updated_at=excluded.role_updated_at
+  `).run(sub, email, name, role, Date.now());
   const session = await createSession({ sub, email, name, role, method: 'oidc' });
   setSessionCookie(c, session);
   logger.info('OIDC login success', { sub, role });
@@ -316,9 +320,12 @@ authRouter.post('/local', async (c) => {
   const db = getDb();
   const sub = 'local:test-admin';
   await db.prepare(`
-    INSERT INTO users (sub, email, name) VALUES (?, '', 'admin')
-    ON CONFLICT(sub) DO UPDATE SET name=excluded.name
-  `).run(sub);
+    INSERT INTO users (sub, email, name, last_known_role, role_updated_at) VALUES (?, '', 'admin', 'admin', ?)
+    ON CONFLICT(sub) DO UPDATE SET
+      name=excluded.name,
+      last_known_role=excluded.last_known_role,
+      role_updated_at=excluded.role_updated_at
+  `).run(sub, Date.now());
   const session = await createSession({ sub, email: '', name: 'admin', role: 'admin', method: 'local' });
   setSessionCookie(c, session);
   return c.json({ ok: true });

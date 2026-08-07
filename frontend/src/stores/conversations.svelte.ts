@@ -1,5 +1,6 @@
 import { api } from '$lib/api';
 import type { Conversation, ConversationFolder } from '$lib/types';
+import { navigateTo } from '$lib/router';
 
 function createConversationsStore() {
   let list = $state<Conversation[]>([]);
@@ -27,7 +28,7 @@ function createConversationsStore() {
 
   async function create(opts: Parameters<typeof api.conversations.create>[0] = {}): Promise<Conversation> {
     const conv = await api.conversations.create(opts);
-    list = [conv, ...list];
+    list = [conv, ...list.filter(existing => existing.id !== conv.id)];
     return conv;
   }
 
@@ -54,7 +55,7 @@ function createConversationsStore() {
     list = list.filter(c => c.id !== id);
     if (activeId === id) {
       activeId = null;
-      window.location.hash = '#/chat';
+      navigateTo('chat');
     }
   }
 
@@ -62,18 +63,18 @@ function createConversationsStore() {
     await api.conversations.deleteAll();
     list = [];
     activeId = null;
-    window.location.hash = '#/chat';
+    navigateTo('chat');
   }
 
   async function duplicate(id: string) {
     const copy = await api.conversations.duplicate(id);
-    list = [copy, ...list];
+    list = [copy, ...list.filter(existing => existing.id !== copy.id)];
     return copy;
   }
 
   async function fork(id: string, messageId: string) {
     const forked = await api.conversations.fork(id, messageId);
-    list = [forked, ...list];
+    list = [forked, ...list.filter(existing => existing.id !== forked.id)];
     return forked;
   }
 

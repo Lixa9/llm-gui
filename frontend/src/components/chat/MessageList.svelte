@@ -5,6 +5,7 @@
   import { chatStore } from '../../stores/chat.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import Spinner from '../ui/Spinner.svelte';
+  import { navigateTo } from '$lib/router';
 
   interface Props {
     conversationId: string;
@@ -38,7 +39,7 @@
   async function handleFork(msg: Message) {
     const forked = await conversationsStore.fork(conversationId, msg.id);
     conversationsStore.setActive(forked.id);
-    window.location.hash = `#/chat/${forked.id}`;
+    navigateTo('chat', forked.id);
   }
 </script>
 

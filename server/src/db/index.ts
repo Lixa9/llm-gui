@@ -153,6 +153,8 @@ async function applySchema(db: Db): Promise<void> {
       sub TEXT PRIMARY KEY,
       email TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
+      last_known_role TEXT NOT NULL DEFAULT 'user' CHECK (last_known_role IN ('admin', 'user')),
+      role_updated_at BIGINT,
       created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
     );
 
@@ -312,6 +314,26 @@ async function applySchema(db: Db): Promise<void> {
         ALTER TABLE messages DROP COLUMN IF EXISTS tokens_in;
         ALTER TABLE messages DROP COLUMN IF EXISTS tokens_out;
         INSERT INTO schema_migrations(version) VALUES ('002_remove_token_usage');
+      END IF;
+    END $$;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '003_persist_user_role') THEN
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS last_known_role TEXT NOT NULL DEFAULT 'user';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS role_updated_at BIGINT;
+        UPDATE users u
+        SET last_known_role = COALESCE(
+          (SELECT s.role FROM sessions s WHERE s.sub=u.sub ORDER BY s.created_at DESC LIMIT 1),
+          CASE WHEN u.sub='local:test-admin' THEN 'admin' ELSE 'user' END
+        ),
+        role_updated_at = COALESCE(
+          (SELECT s.created_at FROM sessions s WHERE s.sub=u.sub ORDER BY s.created_at DESC LIMIT 1),
+          role_updated_at
+        );
+        ALTER TABLE users DROP CONSTRAINT IF EXISTS users_last_known_role_check;
+        ALTER TABLE users ADD CONSTRAINT users_last_known_role_check CHECK (last_known_role IN ('admin', 'user'));
+        INSERT INTO schema_migrations(version) VALUES ('003_persist_user_role');
       END IF;
     END $$;
   `);

@@ -12,6 +12,7 @@
   import { preferencesStore } from '../../stores/preferences.svelte';
   import type { Message, ChatPayload } from '$lib/types';
   import { toast } from '../ui/Toast.svelte';
+  import { navigateTo } from '$lib/router';
 
   interface Props { conversationId: string | null; }
   let { conversationId }: Props = $props();
@@ -80,9 +81,10 @@
     _modelId = null;
     _promptId = null;
     if (!cid) {
-      chatStore.clear();
+      chatStore.setActiveConversation(null);
       return;
     }
+    chatStore.setActiveConversation(cid);
     if (!skipNextLoad) {
       chatStore.loadMessages(cid);
     }
@@ -141,8 +143,9 @@
       });
       convId = conv.id;
       conversationsStore.setActive(convId);
+      chatStore.setActiveConversation(convId);
       skipNextLoad = true;
-      window.location.hash = `#/chat/${convId}`;
+      navigateTo('chat', convId);
     }
     await chatStore.send({ ...payload, conversation_id: convId });
   }

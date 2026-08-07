@@ -4,6 +4,7 @@
   import SidebarFolder from './SidebarFolder.svelte';
   import { debounce } from '$lib/utils';
   import { toast } from '../ui/Toast.svelte';
+  import { navigateTo } from '$lib/router';
 
   let searchQuery = $state('');
   let noFolderDragOver = $state(false);
@@ -22,7 +23,7 @@
 
   function newChat() {
     conversationsStore.setActive(null);
-    window.location.hash = '#/chat';
+    navigateTo('chat');
   }
 
   function newFolder() {

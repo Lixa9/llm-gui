@@ -48,6 +48,7 @@ export interface Message {
   status: MessageStatus | null;
   timestamp: number;
   edited_at: number | null;
+  delivery_status?: 'sending' | 'failed' | 'uncertain';
 }
 
 export interface ConversationFolder {
@@ -143,8 +144,9 @@ export interface UserPreferences {
 }
 
 export type SSEEvent =
+  | { type: 'accepted'; conversation_id: string; assistant_message_id: string; user_message: Message }
   | { type: 'delta'; content: string }
-  | { type: 'done' }
+  | { type: 'done'; message: Message | null }
   | { type: 'title'; title: string }
   | { type: 'error'; message: string };
 
@@ -154,7 +156,9 @@ export interface ChatPayload {
   model: string;
   system_prompt?: string;
   system_prompt_id?: string;
+  assistant_message_id?: string;
   new_user_message: {
+    id?: string;
     content: MessageContentPart[];
   };
 }
