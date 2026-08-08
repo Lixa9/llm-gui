@@ -162,3 +162,10 @@ export interface ChatPayload {
     content: MessageContentPart[];
   };
 }
+
+export interface RegenerateChatPayload {
+  conversation_id: string;
+  model: string;
+  system_prompt?: string;
+  assistant_message_id: string;
+}

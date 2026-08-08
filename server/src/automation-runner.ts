@@ -4,6 +4,7 @@ import { logger } from './logger';
 import { parseScheduledDefinition } from './automation-definition';
 import { findAllowedModel } from './models';
 import type { AutomationRow, AutomationRunRow, Role, ScheduledDefinition } from './types';
+import { trackBackgroundTask } from './lifecycle';
 
 function makeConversationTitle(name: string): string {
   return `${name} — ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;
@@ -51,12 +52,12 @@ export async function runAutomation(
     const definition = parseScheduledDefinition(row.definition);
     await assertModelAccess(row, definition, ownerRole);
     if (row.owner_sub === null) {
-      void executeSystemAutomationRun(row, runId).catch(error => logger.error('System automation failed', { error: String(error) }));
+      trackBackgroundTask(executeSystemAutomationRun(row, runId).catch(error => logger.error('System automation failed', { error: String(error) })));
     } else {
       const convId = generateId();
       await db.prepare('INSERT INTO conversations (id, owner_sub, title, title_auto, model_id) VALUES (?, ?, ?, false, ?)').run(convId, row.owner_sub, makeConversationTitle(row.name), definition.model || null);
       await db.prepare('UPDATE automation_runs SET conversation_id=? WHERE id=?').run(convId, runId);
-      void executePersonalAutomationRun(row, convId, runId).catch(error => logger.error('Personal automation failed', { error: String(error) }));
+      trackBackgroundTask(executePersonalAutomationRun(row, convId, runId).catch(error => logger.error('Personal automation failed', { error: String(error) })));
     }
   } catch (error) {
     await db.prepare('UPDATE automation_runs SET status=?, error=? WHERE id=?').run('error', String(error), runId);
@@ -105,8 +106,9 @@ async function storeConversationResult(
   model: string,
 ): Promise<void> {
   const db = getDb();
-  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status) VALUES (?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'user', JSON.stringify([{ type: 'text', text: userPrompt }]), userPrompt, 'done');
-  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, model, status) VALUES (?, ?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'assistant', JSON.stringify([{ type: 'text', text: assistantText }]), assistantText, model, 'done');
+  const userTimestamp = Date.now();
+  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'user', JSON.stringify([{ type: 'text', text: userPrompt }]), userPrompt, 'done', userTimestamp);
+  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(generateId(), convId, 'assistant', JSON.stringify([{ type: 'text', text: assistantText }]), assistantText, model, 'done', userTimestamp + 1);
 }
 
 async function fetchCompletion(def: ScheduledDefinition): Promise<{ assistantText: string }> {

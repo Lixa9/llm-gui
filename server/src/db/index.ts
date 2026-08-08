@@ -143,6 +143,12 @@ export async function runTransaction<T>(fn: (db: TxDb) => Promise<T>): Promise<T
 }
 
 async function applySchema(db: Db): Promise<void> {
+  let messageUploadMigration = false;
+  try {
+    messageUploadMigration = !!await db.prepare('SELECT 1 FROM schema_migrations WHERE version=?').get('004_message_upload_references');
+  } catch {
+    // The schema_migrations table is created by the schema batch below.
+  }
   await db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version TEXT PRIMARY KEY,
@@ -271,6 +277,13 @@ async function applySchema(db: Db): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_uploads_owner ON uploads(owner_sub, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS message_uploads (
+      message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      upload_id UUID NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+      PRIMARY KEY (message_id, upload_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_uploads_upload ON message_uploads(upload_id);
+
     CREATE TABLE IF NOT EXISTS sessions (
       id UUID PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE,
@@ -336,5 +349,32 @@ async function applySchema(db: Db): Promise<void> {
         INSERT INTO schema_migrations(version) VALUES ('003_persist_user_role');
       END IF;
     END $$;
+
   `);
+
+  if (messageUploadMigration) return;
+
+  // Populate the reference table for messages created before migration 004.
+  // Message content is stored as JSON text, so malformed legacy rows are
+  // ignored rather than preventing the database from opening.
+  const messages = await db.prepare('SELECT id, content FROM messages').all<{ id: string; content: string }>();
+  for (const message of messages) {
+    let parts: unknown;
+    try { parts = JSON.parse(message.content); } catch { continue; }
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      const value = part as { type?: unknown; image_url?: { url?: unknown }; file?: { url?: unknown } };
+      const url = value.type === 'image_url' ? value.image_url?.url : value.type === 'file' ? value.file?.url : undefined;
+      if (typeof url !== 'string' || !url.startsWith('/api/uploads/')) continue;
+      const uploadId = url.slice('/api/uploads/'.length).split('/')[0];
+      if (!/^[0-9a-f-]{36}$/i.test(uploadId)) continue;
+      if (!await db.prepare('SELECT 1 FROM uploads WHERE id=?').get(uploadId)) continue;
+      await db.prepare('INSERT INTO message_uploads (message_id, upload_id) VALUES (?, ?) ON CONFLICT DO NOTHING').run(message.id, uploadId);
+    }
+  }
+
+  // Mark the migration only after the legacy rows have been backfilled. If
+  // startup fails partway through, the next startup safely retries the scan.
+  await db.prepare('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING').run('004_message_upload_references');
 }

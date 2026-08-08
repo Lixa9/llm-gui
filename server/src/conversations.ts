@@ -4,7 +4,7 @@ import { requireAuth } from './auth';
 import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
 import type { TxDb } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
-import { deleteUploadsForConversation, deleteAllUploadsForUser } from './uploads';
+import { attachUploadsToMessage, cleanupUnreferencedUploads, deleteAllUploadsForUser, uploadIdsForConversation } from './uploads';
 
 export const conversationsRouter = new Hono();
 conversationsRouter.use('*', requireAuth);
@@ -55,10 +55,15 @@ async function checkFolderAccess(db: TxDb | ReturnType<typeof getDb>, folderId: 
 async function copyMessages(db: TxDb, srcId: string, destId: string, stopAtMsgId?: string): Promise<void> {
   const messages = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<MessageRow>(srcId);
   for (const message of messages) {
+    const copiedId = generateId();
     await db.prepare(`
       INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(generateId(), destId, message.role, message.content, message.content_text, message.model, message.status, message.timestamp);
+    `).run(copiedId, destId, message.role, message.content, message.content_text, message.model, message.status, message.timestamp);
+    const uploads = await db.prepare('SELECT upload_id FROM message_uploads WHERE message_id=?').all<{ upload_id: string }>(message.id);
+    for (const upload of uploads) {
+      await db.prepare('INSERT INTO message_uploads (message_id, upload_id) VALUES (?, ?) ON CONFLICT DO NOTHING').run(copiedId, upload.upload_id);
+    }
     if (stopAtMsgId && message.id === stopAtMsgId) break;
   }
 }
@@ -148,8 +153,11 @@ conversationsRouter.delete('/', async (c) => {
 conversationsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
-  await deleteUploadsForConversation(id, user.sub);
-  await getDb().prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
+  await runTransaction(async db => {
+    const uploadIds = await uploadIdsForConversation(db, id);
+    await db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
+    await cleanupUnreferencedUploads(db, user.sub, uploadIds);
+  });
   return c.body(null, 204);
 });
 
@@ -176,6 +184,9 @@ conversationsRouter.post('/:id/fork', async (c) => {
   const body = parsedBody.data;
   const src = await getDb().prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=?').get<ConversationRow>(c.req.param('id'), user.sub);
   if (!src) return c.json({ error: 'Not found' }, 404);
+  if (!await getDb().prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(body.message_id, src.id)) {
+    return c.json({ error: 'Message not found' }, 404);
+  }
   const fork = await runTransaction(async db => {
     const id = generateId();
     await db.prepare(`
@@ -201,9 +212,16 @@ conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
   const body = await c.req.json() as { content?: unknown };
   if (typeof body.content !== 'string' || body.content.length > 1_000_000) return c.json({ error: 'Invalid message content' }, 400);
   if (!await getDb().prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(id, user.sub)) return c.json({ error: 'Not found' }, 404);
-  await getDb().prepare('UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?')
-    .run(JSON.stringify([{ type: 'text', text: body.content }]), body.content, Date.now(), c.req.param('msgId'), id);
-  const row = await getDb().prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(c.req.param('msgId'));
+  const msgId = c.req.param('msgId');
+  const row = await runTransaction(async db => {
+    if (!await db.prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(msgId, id)) return undefined;
+    const oldUploads = await db.prepare('SELECT upload_id FROM message_uploads WHERE message_id=?').all<{ upload_id: string }>(msgId);
+    await db.prepare('DELETE FROM message_uploads WHERE message_id=?').run(msgId);
+    await db.prepare('UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?')
+      .run(JSON.stringify([{ type: 'text', text: body.content }]), body.content, Date.now(), msgId, id);
+    await cleanupUnreferencedUploads(db, user.sub, oldUploads.map(upload => upload.upload_id));
+    return db.prepare('SELECT * FROM messages WHERE id=? AND conversation_id=?').get<MessageRow>(msgId, id);
+  });
   return row ? c.json(serializeMessage(row)) : c.json({ error: 'Not found' }, 404);
 });
 
@@ -211,8 +229,16 @@ conversationsRouter.delete('/:id/messages/:msgId', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   if (!await getDb().prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(id, user.sub)) return c.json({ error: 'Not found' }, 404);
-  const message = await getDb().prepare('SELECT timestamp FROM messages WHERE id=? AND conversation_id=?').get<{ timestamp: number }>(c.req.param('msgId'), id);
+  const message = await getDb().prepare('SELECT id, timestamp FROM messages WHERE id=? AND conversation_id=?').get<{ id: string; timestamp: number }>(c.req.param('msgId'), id);
   if (!message) return c.body(null, 204);
-  await getDb().prepare('DELETE FROM messages WHERE conversation_id=? AND timestamp>=?').run(id, message.timestamp);
+  await runTransaction(async db => {
+    const uploadIds = await db.prepare(`
+      SELECT DISTINCT mu.upload_id
+      FROM message_uploads mu JOIN messages m ON m.id=mu.message_id
+      WHERE m.conversation_id=? AND (m.timestamp, m.id) >= (?, ?)
+    `).all<{ upload_id: string }>(id, message.timestamp, message.id);
+    await db.prepare('DELETE FROM messages WHERE conversation_id=? AND (timestamp, id) >= (?, ?)').run(id, message.timestamp, message.id);
+    await cleanupUnreferencedUploads(db, user.sub, uploadIds.map(upload => upload.upload_id));
+  });
   return c.body(null, 204);
 });

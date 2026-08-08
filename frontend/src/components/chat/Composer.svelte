@@ -22,6 +22,7 @@
   const TEXT_MAX_BYTES = 50 * 1024 * 1024;
 
   interface PendingAttachment {
+    id: string;
     localUrl: string;
     filename: string;
     mimeType: string;
@@ -37,7 +38,7 @@
   let fileInputEl: HTMLInputElement;
 
   function rejectFile(file: File, kind: 'image' | 'file', errorMsg: string) {
-    pendingAttachments = [...pendingAttachments, { localUrl: '', filename: file.name, mimeType: file.type, kind, status: 'error', errorMsg }];
+    pendingAttachments = [...pendingAttachments, { id: crypto.randomUUID(), localUrl: '', filename: file.name, mimeType: file.type, kind, status: 'error', errorMsg }];
   }
 
   async function onFileSelected(e: Event) {
@@ -63,17 +64,16 @@
       }
 
       const localUrl = kind === 'image' ? URL.createObjectURL(file) : '';
-      const attachment: PendingAttachment = { localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
+      const attachment: PendingAttachment = { id: crypto.randomUUID(), localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
       pendingAttachments = [...pendingAttachments, attachment];
-      const idx = pendingAttachments.length - 1;
       try {
         const result = await api.uploads.upload(file);
-        pendingAttachments = pendingAttachments.map((a, i) =>
-          i === idx ? { ...a, status: 'ready', result, warning: result.warning } : a
+        pendingAttachments = pendingAttachments.map(a =>
+          a.id === attachment.id ? { ...a, status: 'ready', result, warning: result.warning } : a
         );
       } catch (err) {
-        pendingAttachments = pendingAttachments.map((a, i) =>
-          i === idx ? { ...a, status: 'error', errorMsg: (err as Error).message } : a
+        pendingAttachments = pendingAttachments.map(a =>
+          a.id === attachment.id ? { ...a, status: 'error', errorMsg: (err as Error).message } : a
         );
       }
     }
@@ -82,6 +82,7 @@
   function removeAttachment(idx: number) {
     const a = pendingAttachments[idx];
     if (a.localUrl) URL.revokeObjectURL(a.localUrl);
+    if (a.result?.id) void api.uploads.delete(a.result.id).catch(() => {});
     pendingAttachments = pendingAttachments.filter((_, i) => i !== idx);
   }
 

@@ -82,8 +82,10 @@ automationsRouter.patch('/:id/subscription', async (c) => {
 
 automationsRouter.post('/:id/trigger', async (c) => {
   const user = c.get('user');
-  const row = await getDb().prepare('SELECT * FROM automations WHERE id=? AND deleted_at IS NULL AND (owner_sub=? OR owner_sub IS NULL)').get<AutomationRow>(c.req.param('id'), user.sub);
-  if (!row || !visibleTo(row, user.role)) return c.json({ error: 'Not found' }, 404);
+  // Deployment-owned system automations are scheduler-controlled. Allowing a
+  // user to trigger one would create conversations for every subscriber.
+  const row = await getDb().prepare('SELECT * FROM automations WHERE id=? AND owner_sub=? AND deleted_at IS NULL').get<AutomationRow>(c.req.param('id'), user.sub);
+  if (!row) return c.json({ error: 'Not found' }, 404);
   const definition = scheduledDefinitionSchema.safeParse(safeParseJson<unknown>(row.definition, {}));
   if (!definition.success || !await findAllowedModel(definition.data.model, user.role)) return c.json({ error: 'Model not available for this role' }, 403);
   return c.json(await runAutomation(row, 'manual', user.role), 201);
