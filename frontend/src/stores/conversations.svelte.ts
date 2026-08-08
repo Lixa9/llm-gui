@@ -132,8 +132,30 @@ function createConversationsStore() {
 
   async function deleteFolder(id: string) {
     await api.folders.delete(id);
-    folders = folders.filter(f => f.id !== id);
-    list = list.map(c => c.folder_id === id ? { ...c, folder_id: null } : c);
+
+    const deletedFolderIds = new Set([id]);
+    let foundChild = true;
+    while (foundChild) {
+      foundChild = false;
+      for (const folder of folders) {
+        if (folder.parent_id && deletedFolderIds.has(folder.parent_id) && !deletedFolderIds.has(folder.id)) {
+          deletedFolderIds.add(folder.id);
+          foundChild = true;
+        }
+      }
+    }
+
+    folders = folders.filter(folder => !deletedFolderIds.has(folder.id));
+    const deletedConversationIds = new Set(
+      list.filter(conversation => conversation.folder_id && deletedFolderIds.has(conversation.folder_id)).map(conversation => conversation.id),
+    );
+    list = list.filter(conversation => !deletedConversationIds.has(conversation.id));
+    searchResults = searchResults.filter(conversation => !deletedConversationIds.has(conversation.id));
+    if (activeFolderId && deletedFolderIds.has(activeFolderId)) activeFolderId = null;
+    if (activeId && deletedConversationIds.has(activeId)) {
+      activeId = null;
+      navigateTo('chat');
+    }
   }
 
   return {

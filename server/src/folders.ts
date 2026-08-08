@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
+import { getDb, generateId, runTransaction } from './db/index';
+import { cleanupUnreferencedUploads } from './uploads';
 
 const folderName = z.string().trim().min(1).max(200);
 export const foldersRouter = new Hono();
@@ -73,6 +74,35 @@ foldersRouter.patch('/:id', async (c) => {
 
 foldersRouter.delete('/:id', async (c) => {
   const user = c.get('user');
-  await getDb().prepare('DELETE FROM conversation_folders WHERE id=? AND owner_sub=?').run(c.req.param('id'), user.sub);
+  const folderId = c.req.param('id');
+  await runTransaction(async db => {
+    const folders = await db.prepare(`
+      WITH RECURSIVE descendants AS (
+        SELECT id
+        FROM conversation_folders
+        WHERE id=? AND owner_sub=?
+        UNION ALL
+        SELECT child.id
+        FROM conversation_folders child
+        JOIN descendants parent ON child.parent_id=parent.id
+        WHERE child.owner_sub=?
+      )
+      SELECT id FROM descendants
+    `).all<{ id: string }>(folderId, user.sub, user.sub);
+    const folderIds = folders.map(folder => folder.id);
+    if (folderIds.length === 0) return;
+
+    const uploads = await db.prepare(`
+      SELECT DISTINCT mu.upload_id
+      FROM message_uploads mu
+      JOIN messages m ON m.id=mu.message_id
+      JOIN conversations c ON c.id=m.conversation_id
+      WHERE c.owner_sub=? AND c.folder_id = ANY(?::uuid[])
+    `).all<{ upload_id: string }>(user.sub, folderIds);
+
+    await db.prepare('DELETE FROM conversations WHERE owner_sub=? AND folder_id = ANY(?::uuid[])').run(user.sub, folderIds);
+    await cleanupUnreferencedUploads(db, user.sub, uploads.map(upload => upload.upload_id));
+    await db.prepare('DELETE FROM conversation_folders WHERE owner_sub=? AND id = ANY(?::uuid[])').run(user.sub, folderIds);
+  });
   return c.body(null, 204);
 });
