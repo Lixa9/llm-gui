@@ -109,6 +109,18 @@
     {#if conversation.forked_from_id}
       <span class="conv-fork-icon" title="Forked conversation">⎇</span>
     {/if}
+    <button
+      class="conv-action-btn"
+      onclick={(e) => { e.stopPropagation(); startRename(); }}
+      aria-label="Rename conversation"
+      title="Rename conversation"
+    >✏</button>
+    <button
+      class="conv-action-btn danger"
+      onclick={(e) => { e.stopPropagation(); void conversationsStore.remove(conversation.id); }}
+      aria-label="Delete conversation"
+      title="Delete conversation"
+    >🗑</button>
     <button class="conv-menu-btn" onclick={(e) => { e.stopPropagation(); openMenu(e); }} aria-label="More options">⋯</button>
   </div>
 {/if}
@@ -141,6 +153,20 @@
   .conv-pin.visible { opacity: 1; }
   .conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conv-fork-icon { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+  .conv-action-btn {
+    padding: 2px 3px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .conv-action-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+  .conv-action-btn.danger { color: var(--danger); }
+  .conv-action-btn.danger:hover { color: var(--danger); }
   .conv-menu-btn {
     opacity: 0;
     padding: 2px 4px;

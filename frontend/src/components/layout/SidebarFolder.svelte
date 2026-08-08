@@ -2,8 +2,6 @@
   import type { ConversationFolder } from '$lib/types';
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
-  import ContextMenu from '../ui/ContextMenu.svelte';
-  import type { MenuItem } from '../ui/ContextMenu.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
 
   interface Props {
@@ -12,9 +10,6 @@
   let { folder }: Props = $props();
 
   let open = $state(true);
-  let menuOpen = $state(false);
-  let menuX = $state(0);
-  let menuY = $state(0);
   let renaming = $state(false);
   let renameValue = $state('');
   let dragCounter = $state(0);
@@ -23,14 +18,6 @@
   const folderConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === folder.id));
   const isDragOver = $derived(dragCounter > 0);
   const isActiveFolder = $derived(conversationsStore.activeFolderId === folder.id);
-
-  function openMenu(e: MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    menuX = e.clientX;
-    menuY = e.clientY;
-    menuOpen = true;
-  }
 
   function toggleOpen() {
     open = !open;
@@ -74,10 +61,14 @@
     }
   }
 
-  const menuItems: MenuItem[] = [
-    { label: 'Rename', icon: '✏', action: () => { renameValue = folder.name; renaming = true; menuOpen = false; } },
-    { label: 'Delete folder', icon: '🗑', danger: true, action: () => conversationsStore.deleteFolder(folder.id) },
-  ];
+  function startRename() {
+    renameValue = folder.name;
+    renaming = true;
+  }
+
+  function deleteFolder() {
+    void conversationsStore.deleteFolder(folder.id);
+  }
 </script>
 
 <div class="folder">
@@ -93,7 +84,6 @@
       class:drag-over={isDragOver}
       class:active-folder={isActiveFolder}
       onclick={toggleOpen}
-      oncontextmenu={openMenu}
       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleOpen(); }}
       {ondragover}
       {ondragenter}
@@ -105,7 +95,18 @@
       <span class="folder-arrow">{open ? '▾' : '▸'}</span>
       <span class="folder-icon">📁</span>
       <span class="folder-name">{folder.name}</span>
-      <button class="folder-menu-btn" onclick={(e) => { e.stopPropagation(); openMenu(e); }}>⋯</button>
+      <button
+        class="folder-action-btn"
+        onclick={(e) => { e.stopPropagation(); startRename(); }}
+        aria-label="Rename folder"
+        title="Rename folder"
+      >✏</button>
+      <button
+        class="folder-action-btn danger"
+        onclick={(e) => { e.stopPropagation(); deleteFolder(); }}
+        aria-label="Delete folder"
+        title="Delete folder"
+      >🗑</button>
     </div>
   {/if}
 
@@ -120,10 +121,6 @@
     </div>
   {/if}
 </div>
-
-{#if menuOpen}
-  <ContextMenu items={menuItems} x={menuX} y={menuY} onclose={() => menuOpen = false} />
-{/if}
 
 <style>
   .folder { margin: 1px 0; }
@@ -153,8 +150,7 @@
   .folder-arrow { font-size: 9px; width: 10px; }
   .folder-icon { font-size: 12px; }
   .folder-name { flex: 1; font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; font-size: 11px; }
-  .folder-menu-btn {
-    opacity: 0;
+  .folder-action-btn {
     font-size: 14px;
     background: transparent;
     border: none;
@@ -162,8 +158,12 @@
     color: var(--text-muted);
     padding: 1px 3px;
     border-radius: var(--radius-sm);
+    flex-shrink: 0;
+    line-height: 1;
   }
-  .folder-header:hover .folder-menu-btn { opacity: 1; }
+  .folder-action-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+  .folder-action-btn.danger { color: var(--danger); }
+  .folder-action-btn.danger:hover { color: var(--danger); }
 
   .folder-body { padding-left: 12px; }
 
