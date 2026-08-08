@@ -1,11 +1,12 @@
-import type { ChatPayload, SSEEvent } from './types';
+import type { ChatPayload, RegenerateChatPayload, SSEEvent } from './types';
 
 export async function streamChat(
-  payload: ChatPayload,
+  payload: ChatPayload | RegenerateChatPayload,
   signal: AbortSignal,
   onEvent: (event: SSEEvent) => void,
+  path = '/api/chat',
 ): Promise<void> {
-  const res = await fetch('/api/chat', {
+  const res = await fetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -37,11 +38,11 @@ export async function streamChat(
       if (done) break;
 
       buf += decoder.decode(value, { stream: true });
-      const parts = buf.split('\n\n');
+      const parts = buf.split(/\r?\n\r?\n/);
       buf = parts.pop() ?? '';
 
       for (const part of parts) {
-        for (const line of part.split('\n')) {
+        for (const line of part.split(/\r?\n/)) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6).trim();
           if (!data) continue;

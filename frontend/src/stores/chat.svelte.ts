@@ -1,7 +1,7 @@
 import { streamChat } from '$lib/sse';
 import { api } from '$lib/api';
 import { playCompletionSound } from '$lib/audio';
-import type { Message, ChatPayload } from '$lib/types';
+import type { Message, ChatPayload, RegenerateChatPayload } from '$lib/types';
 import { conversationsStore } from './conversations.svelte';
 import { preferencesStore } from './preferences.svelte';
 
@@ -175,6 +175,78 @@ function createChatStore() {
         streaming = false;
         pending = null;
       }
+      void conversationsStore.refreshUntilTitle(convId).catch(() => {});
+    }
+  }
+
+  async function regenerate(payload: RegenerateChatPayload) {
+    if (activeStream) return;
+    if (activeConversationId !== payload.conversation_id) setActiveConversation(payload.conversation_id);
+    const assistantIndex = messages.findIndex(message => message.id === payload.assistant_message_id);
+    const retainedUser = assistantIndex > 0 ? messages[assistantIndex - 1] : undefined;
+    if (!retainedUser || retainedUser.role !== 'user') {
+      error = 'The response cannot be regenerated because its user message is missing.';
+      return;
+    }
+    // Regeneration replaces this response and everything after it. Remove the
+    // stale tail optimistically; reconciliation restores it if the request is
+    // rejected before the server applies the replacement.
+    messages = messages.slice(0, assistantIndex);
+
+    streaming = true;
+    error = null;
+    const operationId = crypto.randomUUID();
+    const controller = new AbortController();
+    activeStream = {
+      id: operationId,
+      conversationId: payload.conversation_id,
+      controller,
+      userMessage: retainedUser,
+      accepted: false,
+      stopRequested: false,
+    };
+    pending = { role: 'assistant', content: '', model: payload.model };
+    let terminalEvent = false;
+
+    try {
+      await streamChat(payload, controller.signal, (event) => {
+        if (activeStream?.id !== operationId) return;
+        if (event.type === 'accepted') {
+          activeStream.accepted = true;
+          messages = messages.map(message => message.id === event.user_message.id ? event.user_message : message);
+        } else if (event.type === 'delta') {
+          if (pending) pending.content += event.content;
+        } else if (event.type === 'done') {
+          terminalEvent = true;
+          if (event.message) messages = [...messages, event.message];
+          pending = null;
+          playCompletionSound(preferencesStore.soundEnabled, preferencesStore.soundVolume);
+        } else if (event.type === 'error') {
+          terminalEvent = true;
+          error = event.message;
+          pending = null;
+        }
+      }, '/api/chat/regenerate');
+    } catch (e) {
+      if (activeConversationId === payload.conversation_id && activeStream?.id === operationId) {
+        if ((e as Error).name === 'AbortError') {
+          if (!activeStream.stopRequested) error = 'Response interrupted while leaving the conversation.';
+        } else {
+          error = (e as Error).message;
+        }
+        pending = null;
+      }
+    } finally {
+      const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
+      const operationIsCurrent = activeStream?.id === operationId;
+      await reconcileMessages(payload.conversation_id, retainedUser, accepted);
+      if (operationIsCurrent && activeStream?.id === operationId) {
+        if (!terminalEvent && !controller.signal.aborted) error ??= 'The connection closed before completion; saved messages were reloaded.';
+        activeStream = null;
+        streaming = false;
+        pending = null;
+      }
+      void conversationsStore.refreshUntilTitle(payload.conversation_id).catch(() => {});
     }
   }
 
@@ -213,7 +285,7 @@ function createChatStore() {
     get error() { return error; },
     get allMessages() { return allMessages; },
     get activeConversationId() { return activeConversationId; },
-    loadMessages, send, stop, editUserMessage, editAssistantMessage, deleteMessage, clear, setActiveConversation,
+    loadMessages, send, regenerate, stop, editUserMessage, editAssistantMessage, deleteMessage, clear, setActiveConversation,
   };
 }
 

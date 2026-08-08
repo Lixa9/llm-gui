@@ -179,18 +179,14 @@
     const idx = chatStore.messages.findIndex(m => m.id === msg.id);
     if (idx < 0) return;
     const history = chatStore.messages.slice(0, idx);
-    await chatStore.deleteMessage(conversationId, msg.id);
     const lastUser = [...history].reverse().find(m => m.role === 'user');
     if (!lastUser) return;
-
-    const payload: ChatPayload = {
+    await chatStore.regenerate({
       conversation_id: conversationId,
       model: msg.model ?? history.find(m => m.model)?.model ?? selectedModel,
       system_prompt: systemPromptText || undefined,
-      system_prompt_id: systemPromptId,
-      new_user_message: { content: lastUser.content },
-    };
-    await chatStore.send(payload);
+      assistant_message_id: msg.id,
+    });
   }
 </script>
 

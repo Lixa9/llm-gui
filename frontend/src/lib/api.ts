@@ -107,7 +107,7 @@ export const api = {
       patch<{ enabled: boolean }>(`/api/automations/${id}/subscription`, { enabled }),
   },
 
-uploads: {
+  uploads: {
     upload: async (file: File): Promise<UploadResult> => {
       const form = new FormData();
       form.append('file', file);
@@ -124,6 +124,7 @@ uploads: {
       }
       return res.json() as Promise<UploadResult>;
     },
+    delete: (id: string) => del<void>(`/api/uploads/${id}`),
   },
 
   preferences: {

@@ -12,7 +12,7 @@ uploadsRouter.use('*', requireAuth);
 
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 export const ALLOWED_TEXT_TYPES = new Set([
-  'text/plain', 'text/markdown', 'text/csv', 'text/tab-separated-values', 'text/xml', 'application/json', 'application/yaml', 'text/yaml', 'application/xml',
+  'text/plain', 'text/markdown', 'text/csv', 'text/tab-separated-values', 'text/html', 'text/xml', 'application/json', 'application/yaml', 'text/yaml', 'application/xml',
   'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.oasis.opendocument.text',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'application/vnd.oasis.opendocument.spreadsheet', 'application/epub+zip',
 ]);
@@ -134,21 +134,61 @@ uploadsRouter.get('/:id', async (c) => {
 
 function extractUploadIds(content: string): string[] {
   const parts = safeParseJson<Array<{ type: string; image_url?: { url: string }; file?: { url: string } }>>(content, []);
-  return parts.flatMap(part => {
+  return [...new Set(parts.flatMap(part => {
     const url = part.type === 'image_url' ? part.image_url?.url : part.type === 'file' ? part.file?.url : undefined;
-    return url?.startsWith('/api/uploads/') ? [url.split('/').pop()!] : [];
-  });
+    const id = url?.startsWith('/api/uploads/') ? url.slice('/api/uploads/'.length).split('/')[0] : undefined;
+    return id && /^[0-9a-f-]{36}$/i.test(id) ? [id] : [];
+  }))];
 }
 
-export async function deleteUploadsForConversation(conversationId: string, ownerSub: string): Promise<void> {
-  const db = getDb();
-  const messages = await db.prepare('SELECT content FROM messages WHERE conversation_id=?').all<{ content: string }>(conversationId);
-  const ids = messages.flatMap(message => extractUploadIds(message.content));
-  await db.transaction(async tx => {
-    for (const id of ids) await tx.prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, ownerSub);
-  });
+type UploadDb = ReturnType<typeof getDb> | TxDb;
+
+export async function attachUploadsToMessage(db: UploadDb, messageId: string, ownerSub: string, content: string): Promise<void> {
+  const ids = extractUploadIds(content);
+  if (ids.length === 0) return;
+  const rows = await db.prepare('SELECT id FROM uploads WHERE owner_sub=? AND id = ANY(?::uuid[])').all<{ id: string }>(ownerSub, ids);
+  if (rows.length !== ids.length) throw new Error('Message references an unavailable upload');
+  for (const id of ids) {
+    await db.prepare('INSERT INTO message_uploads (message_id, upload_id) VALUES (?, ?) ON CONFLICT DO NOTHING').run(messageId, id);
+  }
+}
+
+export async function uploadIdsForConversation(db: UploadDb, conversationId: string): Promise<string[]> {
+  const rows = await db.prepare(`
+    SELECT DISTINCT mu.upload_id
+    FROM message_uploads mu JOIN messages m ON m.id=mu.message_id
+    WHERE m.conversation_id=?
+  `).all<{ upload_id: string }>(conversationId);
+  return rows.map(row => row.upload_id);
+}
+
+export async function cleanupUnreferencedUploads(db: UploadDb, ownerSub: string, ids: string[]): Promise<void> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return;
+  await db.prepare(`
+    DELETE FROM uploads u
+    WHERE u.owner_sub=? AND u.id = ANY(?::uuid[])
+      AND NOT EXISTS (SELECT 1 FROM message_uploads mu WHERE mu.upload_id=u.id)
+  `).run(ownerSub, uniqueIds);
 }
 
 export async function deleteAllUploadsForUser(ownerSub: string): Promise<void> {
   await getDb().prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
 }
+
+export async function purgeOrphanUploads(olderThan = Date.now() - 24 * 60 * 60 * 1000): Promise<void> {
+  await getDb().prepare(`
+    DELETE FROM uploads u
+    WHERE u.created_at < ?
+      AND NOT EXISTS (SELECT 1 FROM message_uploads mu WHERE mu.upload_id=u.id)
+  `).run(olderThan);
+}
+
+uploadsRouter.delete('/:id', async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const attached = await getDb().prepare('SELECT 1 FROM message_uploads WHERE upload_id=? LIMIT 1').get(id);
+  if (attached) return c.json({ error: 'Upload is attached to a message' }, 409);
+  await getDb().prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, user.sub);
+  return c.body(null, 204);
+});

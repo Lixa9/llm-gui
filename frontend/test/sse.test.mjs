@@ -18,6 +18,16 @@ function responseWithEvents(events) {
   }), { status: 200 });
 }
 
+function responseWithCrlfEvents(events) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\r\n\r\n`));
+      controller.close();
+    },
+  }), { status: 200 });
+}
+
 test('streamChat delivers authoritative terminal events', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => responseWithEvents([
     { type: 'accepted', conversation_id: payload.conversation_id, assistant_message_id: 'a', user_message: { id: 'u' } },
@@ -27,6 +37,15 @@ test('streamChat delivers authoritative terminal events', async (t) => {
   const events = [];
   await streamChat(payload, new AbortController().signal, event => events.push(event));
   assert.deepEqual(events.map(event => event.type), ['accepted', 'delta', 'done']);
+});
+
+test('streamChat accepts CRLF-delimited SSE frames', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => responseWithCrlfEvents([
+    { type: 'done', message: { id: 'a' } },
+  ]));
+  const events = [];
+  await streamChat(payload, new AbortController().signal, event => events.push(event));
+  assert.deepEqual(events.map(event => event.type), ['done']);
 });
 
 test('streamChat rejects a response that closes without a terminal event', async (t) => {

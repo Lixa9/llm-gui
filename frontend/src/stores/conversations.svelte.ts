@@ -38,6 +38,21 @@ function createConversationsStore() {
     return updated;
   }
 
+  async function refresh(id: string): Promise<Conversation> {
+    const refreshed = await api.conversations.get(id);
+    list = list.map(c => c.id === id ? refreshed : c);
+    return refreshed;
+  }
+
+  async function refreshUntilTitle(id: string): Promise<void> {
+    if (list.find(c => c.id === id)?.title !== 'New conversation') return;
+    for (const delay of [250, 750, 1500, 3000, 6000, 10000]) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      const refreshed = await refresh(id);
+      if (refreshed.title_auto || refreshed.title !== 'New conversation') return;
+    }
+  }
+
   async function rename(id: string, title: string) {
     return update(id, { title });
   }
@@ -130,7 +145,7 @@ function createConversationsStore() {
     get draggingConvId() { return draggingConvId; },
     get searchResults() { return searchResults; },
     get searching() { return searching; },
-    load, create, update, rename, pin, move,
+    load, create, update, refresh, refreshUntilTitle, rename, pin, move,
     remove, removeAll, duplicate, fork, search, updateTitle, setActive, setActiveFolder, setDragging,
     createFolder, renameFolder, deleteFolder,
   };

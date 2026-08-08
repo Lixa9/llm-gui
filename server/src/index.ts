@@ -18,9 +18,10 @@ import { preferencesRouter } from './preferences';
 import { automationsRouter } from './automations';
 import { initScheduler, stopScheduler } from './automation-scheduler';
 import { adminRouter } from './admin';
-import { uploadsRouter } from './uploads';
+import { purgeOrphanUploads, uploadsRouter } from './uploads';
 import { logger } from './logger';
 import { sweepBuckets } from './ratelimit';
+import { waitForBackgroundTasks } from './lifecycle';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
@@ -177,6 +178,12 @@ const purgeInterval = setInterval(() => { purgeExpiredSessions().catch(error => 
 void sweepBuckets();
 const sweepInterval = setInterval(() => { void sweepBuckets(); }, 5 * 60 * 1000);
 
+// Remove uploads abandoned before they were attached to a message.
+void purgeOrphanUploads().catch(error => logger.warn('Upload orphan purge failed', { error: String(error) }));
+const orphanUploadInterval = setInterval(() => {
+  void purgeOrphanUploads().catch(error => logger.warn('Upload orphan purge failed', { error: String(error) }));
+}, 60 * 60 * 1000);
+
 // Hot-reload config on SIGHUP
 process.on('SIGHUP', reloadConfig);
 
@@ -203,30 +210,41 @@ async function handleShutdown(signal: string) {
   isShuttingDown = true;
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
-  // Stop accepting new connections
-  server.close((err) => {
-    if (err) {
-      logger.error('Error closing HTTP server', { error: String(err) });
-    } else {
-      logger.info('HTTP server closed');
-    }
+  // Stop accepting new connections, but keep the database open until active
+  // HTTP streams and tracked background jobs have finished.
+  let httpClosed = false;
+  const httpClosedPromise = new Promise<void>(resolve => {
+    server.close((err) => {
+      httpClosed = true;
+      if (err) logger.error('Error closing HTTP server', { error: String(err) });
+      else logger.info('HTTP server closed');
+      resolve();
+    });
   });
-
-  // Force close remaining active connections after timeout
-  const forceCloseTimeout = setTimeout(() => {
-    logger.warn('Graceful shutdown timeout reached. Force closing connections...');
-    const s = server as any;
-    if (typeof s.closeAllConnections === 'function') {
-      s.closeAllConnections();
-    }
-  }, 10000);
-  forceCloseTimeout.unref();
+  let forceCloseTimer: NodeJS.Timeout;
+  const forceClosePromise = new Promise<void>(resolve => {
+    forceCloseTimer = setTimeout(() => {
+      logger.warn('Graceful shutdown timeout reached. Force closing connections...');
+      const s = server as any;
+      if (typeof s.closeAllConnections === 'function') s.closeAllConnections();
+      resolve();
+    }, 10000);
+  });
+  await Promise.race([
+    httpClosedPromise,
+    forceClosePromise,
+  ]);
+  clearTimeout(forceCloseTimer!);
+  if (!httpClosed) await Promise.race([httpClosedPromise, new Promise(resolve => setTimeout(resolve, 2000))]);
 
   // Clean up intervals and schedulers
   if (backendCheckInterval) clearInterval(backendCheckInterval);
   clearInterval(purgeInterval);
   clearInterval(sweepInterval);
+  clearInterval(orphanUploadInterval);
   stopScheduler();
+
+  await waitForBackgroundTasks(10_000);
 
   try {
     await closeDatabase();

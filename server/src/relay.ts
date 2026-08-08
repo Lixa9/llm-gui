@@ -1,12 +1,15 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth';
-import { getDb, generateId, safeParseJson } from './db/index';
+import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
 import { getConfig } from './config';
 import { acquireStream, closeStream } from './ratelimit';
 import { fetchModels } from './models';
 import { logger } from './logger';
-import type { MessageContentPart, MessageRow } from './types';
+import type { MessageContentPart, MessageRow, SessionPayload } from './types';
+import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads';
+import { trackBackgroundTask } from './lifecycle';
 
 interface UploadRow {
   sha256: string;
@@ -20,8 +23,10 @@ interface UploadRow {
 }
 
 interface StoredMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
+  timestamp?: number;
 }
 
 function sse(data: unknown): Uint8Array {
@@ -109,6 +114,12 @@ const chatRequestSchema = z.object({
     content: z.array(contentPartSchema).min(1).max(200),
   }),
 });
+const regenerateRequestSchema = z.object({
+  conversation_id: z.string().uuid(),
+  assistant_message_id: z.string().uuid(),
+  model: z.string().trim().min(1).max(300),
+  system_prompt: z.string().max(100_000).optional(),
+});
 
 function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { content: MessageContentPart[] } {
   return { ...row, content: safeParseJson<MessageContentPart[]>(row.content, []) };
@@ -117,53 +128,46 @@ function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { cont
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
 
-relayRouter.post('/', async (c) => {
-  const user = c.get('user');
-  const cfg = getConfig();
-  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
-  const parsedBody = chatRequestSchema.safeParse(await c.req.json());
-  if (!parsedBody.success) return c.json({ error: 'Invalid chat request' }, 400);
-  const body = parsedBody.data as {
-    conversation_id?: string | null;
-    model: string;
-    system_prompt?: string;
-    assistant_message_id?: string;
-    new_user_message: { id?: string; content: MessageContentPart[] };
-  };
-  const allowedModels = await fetchModels(user.role);
-  const modelEntry = allowedModels.find(model => model.id === body.model);
-  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
+async function buildOpenaiMessages(
+  stored: StoredMessage[],
+  latestContent: MessageContentPart[],
+  systemPrompt: string | undefined,
+  historyMode: 'full' | 'latest_only' | undefined,
+  ownerSub: string,
+): Promise<unknown[]> {
+  const messages: unknown[] = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  if (historyMode !== 'latest_only') {
+    for (const message of stored.slice(0, -1)) {
+      messages.push({ role: message.role, content: await resolveContentParts(safeParseJson<MessageContentPart[]>(message.content, []), ownerSub) });
+    }
+  }
+  messages.push({ role: 'user', content: await resolveContentParts(latestContent, ownerSub) });
+  return messages;
+}
 
+interface StreamContext {
+  c: Context;
+  user: SessionPayload;
+  cfg: ReturnType<typeof getConfig>;
+  convId: string;
+  model: string;
+  modelEntry: { history_mode?: 'full' | 'latest_only' };
+  openaiMessages: unknown[];
+  assistantMsgId: string;
+  acceptedUser: MessageRow;
+  acceptedContent: MessageContentPart[];
+  isFirstExchange: boolean;
+  leaseId: string;
+  titlePrompt: string;
+}
+
+// Hono's Context type is intentionally kept local to avoid exposing it in the
+// route contract; this helper only needs the request signal and authenticated
+// identity already established by the middleware.
+async function createChatResponse(context: StreamContext): Promise<Response> {
+  const { c, user, cfg, convId, model, modelEntry, openaiMessages, assistantMsgId, acceptedUser, acceptedContent, isFirstExchange, leaseId, titlePrompt } = context;
   const db = getDb();
-  let convId = body.conversation_id;
-  if (!convId) {
-    convId = generateId();
-    await db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)').run(convId, user.sub, body.model, body.system_prompt ?? null);
-  } else if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub)) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  const rl = await acquireStream(user.sub);
-  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
-  const leaseId = rl.leaseId!;
-  const userMsgId = body.new_user_message.id ?? generateId();
-  const assistantMsgId = body.assistant_message_id ?? generateId();
-  const userTimestamp = Date.now();
-  const userContent = JSON.stringify(body.new_user_message.content);
-  const userText = contentPartsToText(body.new_user_message.content);
-  await db.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(userMsgId, convId, 'user', userContent, userText, 'done', userTimestamp);
-
-  const stored = await db.prepare(`SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id`).all<StoredMessage>(convId);
-  const history = stored.slice(0, -1).map(message => ({ role: message.role, content: safeParseJson<MessageContentPart[]>(message.content, []) }));
-  const openaiMessages: unknown[] = [];
-  if (body.system_prompt) openaiMessages.push({ role: 'system', content: body.system_prompt });
-  if (modelEntry.history_mode !== 'latest_only') {
-    for (const message of history) openaiMessages.push({ role: message.role, content: await resolveContentParts(message.content, user.sub) });
-  }
-  openaiMessages.push({ role: 'user', content: await resolveContentParts(body.new_user_message.content, user.sub) });
-
-  const isFirstExchange = stored.filter(message => message.role === 'user').length === 1;
   const start = Date.now();
   let fullText = '';
   let assistantStored = false;
@@ -173,22 +177,13 @@ relayRouter.post('/', async (c) => {
         type: 'accepted',
         conversation_id: convId,
         assistant_message_id: assistantMsgId,
-        user_message: {
-          id: userMsgId,
-          conversation_id: convId,
-          role: 'user',
-          content: body.new_user_message.content,
-          model: null,
-          status: 'done',
-          timestamp: userTimestamp,
-          edited_at: null,
-        },
+        user_message: { ...acceptedUser, content: safeParseJson<MessageContentPart[]>(acceptedUser.content, acceptedContent) },
       }));
       try {
         const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
           headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: body.model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
+          body: JSON.stringify({ model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
           signal: c.req.raw.signal,
         });
         if (!response.ok) {
@@ -203,10 +198,10 @@ relayRouter.post('/', async (c) => {
         let done = false;
         for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
           buffer += decoder.decode(chunk, { stream: true });
-          const parts = buffer.split('\n\n');
+          const parts = buffer.split(/\r?\n\r?\n/);
           buffer = parts.pop() ?? '';
           for (const part of parts) {
-            for (const line of part.split('\n')) {
+            for (const line of part.split(/\r?\n/)) {
               if (!line.startsWith('data: ')) continue;
               const data = line.slice(6).trim();
               if (data === '[DONE]') { done = true; break; }
@@ -220,11 +215,13 @@ relayRouter.post('/', async (c) => {
           }
           if (done) break;
         }
-        const assistantTimestamp = Date.now();
+        // Keep the assistant after the accepted user message even when a very
+        // fast upstream responds within the same millisecond.
+        const assistantTimestamp = Math.max(Date.now(), acceptedUser.timestamp + 1);
         if (!done) {
           if (fullText) {
             await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
-              .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, assistantTimestamp);
+              .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
             assistantStored = true;
           }
           controller.enqueue(sse({ type: 'error', message: 'Upstream stream ended before completion' }));
@@ -235,32 +232,107 @@ relayRouter.post('/', async (c) => {
         await db.prepare(`
           INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
           VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
-        `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, assistantTimestamp);
+        `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
         assistantStored = true;
         const assistant = await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(assistantMsgId);
         controller.enqueue(sse({ type: 'done', message: assistant ? serializeMessage(assistant) : null }));
         if (isFirstExchange && cfg.conversation.auto_title && fullText) {
-          const title = await generateTitle(convId, body.model, cfg, userText, fullText);
-          if (title) controller.enqueue(sse({ type: 'title', title }));
+          trackBackgroundTask(generateTitle(convId, model, cfg, titlePrompt, fullText).catch(error => logger.warn('Automatic title generation failed', { error: String(error) })));
         }
+        // The answer is complete at this point. Title generation is eventual
+        // work and must not keep the composer locked or hold the SSE open.
         controller.close();
       } catch (error) {
         if ((error as Error).name === 'AbortError') {
-          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
-            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
+          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
         } else {
-          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
-            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, body.model, Date.now());
+          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
           controller.enqueue(sse({ type: 'error', message: 'Upstream request failed' }));
         }
         controller.close();
       } finally {
         await closeStream(leaseId).catch(() => {});
-        logger.info('Chat response complete', { user_sub: user.sub, model: body.model, conv_id: convId, latency_ms: Date.now() - start, aborted: c.req.raw.signal.aborted });
+        logger.info('Chat response complete', { user_sub: user.sub, model, conv_id: convId, latency_ms: Date.now() - start, aborted: c.req.raw.signal.aborted });
       }
     },
   });
   return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' } });
+}
+
+async function findModel(userRole: string, model: string) {
+  const allowedModels = await fetchModels(userRole);
+  const modelEntry = allowedModels.find(entry => entry.id === model);
+  return modelEntry;
+}
+
+relayRouter.post('/', async (c) => {
+  const user = c.get('user');
+  const cfg = getConfig();
+  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
+  const parsedBody = chatRequestSchema.safeParse(await c.req.json());
+  if (!parsedBody.success) return c.json({ error: 'Invalid chat request' }, 400);
+  const body = parsedBody.data;
+  const modelEntry = await findModel(user.role, body.model);
+  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
+  const db = getDb();
+  let convId = body.conversation_id;
+  if (!convId) {
+    convId = generateId();
+    await db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)').run(convId, user.sub, body.model, body.system_prompt ?? null);
+  } else if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub)) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  const existing = await db.prepare('SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<StoredMessage>(convId);
+  const userContent = JSON.stringify(body.new_user_message.content);
+  const pendingUser: MessageRow = { id: body.new_user_message.id ?? generateId(), conversation_id: convId, role: 'user', content: userContent, content_text: contentPartsToText(body.new_user_message.content), model: null, status: 'done', timestamp: Date.now(), edited_at: null };
+  const stored: StoredMessage[] = [...existing, { role: 'user', content: userContent }];
+  const openaiMessages = await buildOpenaiMessages(stored, body.new_user_message.content, body.system_prompt, modelEntry.history_mode, user.sub);
+  const rl = await acquireStream(user.sub);
+  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
+  try {
+    await runTransaction(async tx => {
+      await tx.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)').run(pendingUser.id, convId, 'user', pendingUser.content, pendingUser.content_text, 'done', pendingUser.timestamp);
+      await attachUploadsToMessage(tx, pendingUser.id, user.sub, userContent);
+    });
+  } catch (error) {
+    await closeStream(rl.leaseId!).catch(() => {});
+    throw error;
+  }
+  return createChatResponse({ c, user, cfg, convId, model: body.model, modelEntry, openaiMessages, assistantMsgId: body.assistant_message_id ?? generateId(), acceptedUser: pendingUser, acceptedContent: body.new_user_message.content, isFirstExchange: existing.filter(message => message.role === 'user').length === 0, leaseId: rl.leaseId!, titlePrompt: pendingUser.content_text });
+});
+
+relayRouter.post('/regenerate', async (c) => {
+  const user = c.get('user');
+  const cfg = getConfig();
+  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
+  const parsedBody = regenerateRequestSchema.safeParse(await c.req.json());
+  if (!parsedBody.success) return c.json({ error: 'Invalid regeneration request' }, 400);
+  const body = parsedBody.data;
+  const modelEntry = await findModel(user.role, body.model);
+  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
+  const db = getDb();
+  if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(body.conversation_id, user.sub)) return c.json({ error: 'Not found' }, 404);
+  const stored = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<MessageRow>(body.conversation_id);
+  const targetIndex = stored.findIndex(message => message.id === body.assistant_message_id && message.role === 'assistant');
+  if (targetIndex < 1 || stored[targetIndex - 1].role !== 'user') return c.json({ error: 'Assistant message cannot be regenerated' }, 400);
+  const retained = stored.slice(0, targetIndex);
+  const userMessage = retained[retained.length - 1];
+  const userContent = safeParseJson<MessageContentPart[]>(userMessage.content, []);
+  const openaiMessages = await buildOpenaiMessages(retained.map(message => ({ role: message.role as 'user' | 'assistant', content: message.content })), userContent, body.system_prompt, modelEntry.history_mode, user.sub);
+  const rl = await acquireStream(user.sub);
+  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
+  try {
+    await runTransaction(async tx => {
+      const uploadIds = await tx.prepare(`SELECT DISTINCT mu.upload_id FROM message_uploads mu JOIN messages m ON m.id=mu.message_id WHERE m.conversation_id=? AND (m.timestamp, m.id) >= (?, ?)`).all<{ upload_id: string }>(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
+      await tx.prepare('DELETE FROM messages WHERE conversation_id=? AND (timestamp, id) >= (?, ?)').run(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
+      await cleanupUnreferencedUploads(tx, user.sub, uploadIds.map(upload => upload.upload_id));
+    });
+  } catch (error) {
+    await closeStream(rl.leaseId!).catch(() => {});
+    throw error;
+  }
+  return createChatResponse({ c, user, cfg, convId: body.conversation_id, model: body.model, modelEntry, openaiMessages, assistantMsgId: generateId(), acceptedUser: userMessage, acceptedContent: userContent, isFirstExchange: false, leaseId: rl.leaseId!, titlePrompt: contentPartsToText(userContent) });
 });
 
 async function generateTitle(convId: string, model: string, cfg: ReturnType<typeof getConfig>, userPrompt: string, assistantResponse: string): Promise<string | null> {
