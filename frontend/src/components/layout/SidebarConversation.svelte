@@ -178,6 +178,13 @@
   .conv-action-btn.danger:hover { color: var(--danger); }
   .conv-action-btn.danger.confirming-delete,
   .conv-action-btn.danger.confirming-delete:hover {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: var(--danger);
     color: var(--bg-surface);
   }
