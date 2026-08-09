@@ -158,13 +158,18 @@
   .folder-icon { font-size: 12px; }
   .folder-name { flex: 1; font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; font-size: 11px; }
   .folder-action-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 14px;
     background: transparent;
     border: none;
     cursor: pointer;
     color: var(--text-muted);
-    padding: 1px 3px;
-    border-radius: var(--radius-sm);
     flex-shrink: 0;
     line-height: 1;
   }

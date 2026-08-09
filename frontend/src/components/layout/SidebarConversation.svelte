@@ -163,8 +163,13 @@
   .conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conv-fork-icon { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
   .conv-action-btn {
-    padding: 2px 3px;
-    border-radius: var(--radius-sm);
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 13px;
     line-height: 1;
     color: var(--text-muted);
