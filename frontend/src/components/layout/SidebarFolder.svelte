@@ -13,6 +13,7 @@
   let renaming = $state(false);
   let renameValue = $state('');
   let dragCounter = $state(0);
+  let confirmingDelete = $state(false);
 
   const children = $derived(conversationsStore.folders.filter(f => f.parent_id === folder.id));
   const folderConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === folder.id));
@@ -63,10 +64,15 @@
 
   function startRename() {
     renameValue = folder.name;
+    confirmingDelete = false;
     renaming = true;
   }
 
   function deleteFolder() {
+    if (!confirmingDelete) {
+      confirmingDelete = true;
+      return;
+    }
     void conversationsStore.deleteFolder(folder.id);
   }
 </script>
@@ -103,9 +109,10 @@
       >✏</button>
       <button
         class="folder-action-btn danger"
+        class:confirming-delete={confirmingDelete}
         onclick={(e) => { e.stopPropagation(); deleteFolder(); }}
-        aria-label="Delete folder"
-        title="Delete folder"
+        aria-label={confirmingDelete ? 'Confirm delete folder' : 'Delete folder'}
+        title={confirmingDelete ? 'Click again to delete folder' : 'Delete folder'}
       >🗑</button>
     </div>
   {/if}
@@ -164,6 +171,11 @@
   .folder-action-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
   .folder-action-btn.danger { color: var(--danger); }
   .folder-action-btn.danger:hover { color: var(--danger); }
+  .folder-action-btn.danger.confirming-delete,
+  .folder-action-btn.danger.confirming-delete:hover {
+    background: var(--danger);
+    color: var(--bg-surface);
+  }
 
   .folder-body { padding-left: 12px; }
 
