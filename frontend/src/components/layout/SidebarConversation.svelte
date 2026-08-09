@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import type { MenuItem } from '../ui/ContextMenu.svelte';
   import type { Conversation } from '$lib/types';
@@ -15,6 +16,17 @@
   let renaming = $state(false);
   let renameValue = $state('');
   let confirmingDelete = $state(false);
+  let deleteButton: HTMLButtonElement | undefined = $state();
+
+  onMount(() => {
+    const cancelConfirmation = (e: PointerEvent) => {
+      if (confirmingDelete && deleteButton && !deleteButton.contains(e.target as Node)) {
+        confirmingDelete = false;
+      }
+    };
+    document.addEventListener('pointerdown', cancelConfirmation);
+    return () => document.removeEventListener('pointerdown', cancelConfirmation);
+  });
 
   function openMenu(e: MouseEvent) {
     e.preventDefault();
@@ -126,6 +138,7 @@
     <button
       class="conv-action-btn danger"
       class:confirming-delete={confirmingDelete}
+      bind:this={deleteButton}
       onclick={(e) => { e.stopPropagation(); deleteConversation(); }}
       aria-label={confirmingDelete ? 'Confirm delete conversation' : 'Delete conversation'}
       title={confirmingDelete ? 'Click again to delete conversation' : 'Delete conversation'}
@@ -194,9 +207,14 @@
     color: var(--bg-surface);
   }
   .conv-menu-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     opacity: 0;
-    padding: 2px 4px;
-    border-radius: var(--radius-sm);
     font-size: 14px;
     color: var(--text-muted);
     transition: opacity 0.1s, background 0.1s;

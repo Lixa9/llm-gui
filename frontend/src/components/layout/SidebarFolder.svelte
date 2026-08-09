@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { ConversationFolder } from '$lib/types';
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
@@ -14,11 +15,22 @@
   let renameValue = $state('');
   let dragCounter = $state(0);
   let confirmingDelete = $state(false);
+  let deleteButton: HTMLButtonElement | undefined = $state();
 
   const children = $derived(conversationsStore.folders.filter(f => f.parent_id === folder.id));
   const folderConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === folder.id));
   const isDragOver = $derived(dragCounter > 0);
   const isActiveFolder = $derived(conversationsStore.activeFolderId === folder.id);
+
+  onMount(() => {
+    const cancelConfirmation = (e: PointerEvent) => {
+      if (confirmingDelete && deleteButton && !deleteButton.contains(e.target as Node)) {
+        confirmingDelete = false;
+      }
+    };
+    document.addEventListener('pointerdown', cancelConfirmation);
+    return () => document.removeEventListener('pointerdown', cancelConfirmation);
+  });
 
   function toggleOpen() {
     open = !open;
@@ -110,6 +122,7 @@
       <button
         class="folder-action-btn danger"
         class:confirming-delete={confirmingDelete}
+        bind:this={deleteButton}
         onclick={(e) => { e.stopPropagation(); deleteFolder(); }}
         aria-label={confirmingDelete ? 'Confirm delete folder' : 'Delete folder'}
         title={confirmingDelete ? 'Click again to delete folder' : 'Delete folder'}
