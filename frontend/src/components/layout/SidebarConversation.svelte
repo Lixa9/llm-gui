@@ -14,6 +14,7 @@
   let menuY = $state(0);
   let renaming = $state(false);
   let renameValue = $state('');
+  let confirmingDelete = $state(false);
 
   function openMenu(e: MouseEvent) {
     e.preventDefault();
@@ -43,8 +44,17 @@
 
   function startRename() {
     renameValue = conversation.title;
+    confirmingDelete = false;
     renaming = true;
     menuOpen = false;
+  }
+
+  function deleteConversation() {
+    if (!confirmingDelete) {
+      confirmingDelete = true;
+      return;
+    }
+    void conversationsStore.remove(conversation.id);
   }
 
   async function finishRename() {
@@ -66,7 +76,6 @@
 
   const menuItems = $derived<MenuItem[]>([
     { label: conversation.pinned ? 'Unpin' : 'Pin', icon: '📌', action: () => conversationsStore.pin(conversation.id, !conversation.pinned) },
-    { label: 'Rename', icon: '✏', action: startRename },
     { label: 'Move to: No folder', icon: '⊘', disabled: conversation.folder_id === null, action: () => conversationsStore.move(conversation.id, null) },
     ...conversationsStore.folders.map(folder => ({
       label: `Move to: ${folderLabel(folder.id)}`,
@@ -75,7 +84,6 @@
       action: () => conversationsStore.move(conversation.id, folder.id),
     })),
     { label: 'Duplicate', icon: '⎘', action: () => conversationsStore.duplicate(conversation.id) },
-    { label: 'Delete', icon: '🗑', danger: true, action: () => conversationsStore.remove(conversation.id) },
   ]);
 </script>
 
@@ -117,9 +125,10 @@
     >✏</button>
     <button
       class="conv-action-btn danger"
-      onclick={(e) => { e.stopPropagation(); void conversationsStore.remove(conversation.id); }}
-      aria-label="Delete conversation"
-      title="Delete conversation"
+      class:confirming-delete={confirmingDelete}
+      onclick={(e) => { e.stopPropagation(); deleteConversation(); }}
+      aria-label={confirmingDelete ? 'Confirm delete conversation' : 'Delete conversation'}
+      title={confirmingDelete ? 'Click again to delete conversation' : 'Delete conversation'}
     >🗑</button>
     <button class="conv-menu-btn" onclick={(e) => { e.stopPropagation(); openMenu(e); }} aria-label="More options">⋯</button>
   </div>
@@ -167,6 +176,11 @@
   .conv-action-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
   .conv-action-btn.danger { color: var(--danger); }
   .conv-action-btn.danger:hover { color: var(--danger); }
+  .conv-action-btn.danger.confirming-delete,
+  .conv-action-btn.danger.confirming-delete:hover {
+    background: var(--danger);
+    color: var(--bg-surface);
+  }
   .conv-menu-btn {
     opacity: 0;
     padding: 2px 4px;
