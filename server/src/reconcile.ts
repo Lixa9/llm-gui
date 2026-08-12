@@ -15,8 +15,8 @@ function rolesJson(roles: string[] | undefined): string {
   return JSON.stringify(roles ?? ['admin', 'user']);
 }
 
-async function reconcilePrompts(db: TxDb): Promise<number> {
-  const prompts = getConfig().prompts ?? [];
+async function reconcilePrompts(db: TxDb, config: ReturnType<typeof getConfig>): Promise<number> {
+  const prompts = config.prompts ?? [];
   const existing = await db.prepare('SELECT id, name, content, visible_to, deleted_at FROM system_prompts WHERE owner_sub IS NULL').all<ExistingResource & { content: string }>();
   const byName = new Map(existing.map(row => [row.name, row]));
   const names = new Set(prompts.map(prompt => prompt.name));
@@ -39,8 +39,8 @@ async function reconcilePrompts(db: TxDb): Promise<number> {
   return prompts.length;
 }
 
-async function reconcilePresets(db: TxDb): Promise<number> {
-  const presets = getConfig().presets ?? [];
+async function reconcilePresets(db: TxDb, config: ReturnType<typeof getConfig>): Promise<number> {
+  const presets = config.presets ?? [];
   const existing = await db.prepare('SELECT id, name, base_model_id, system_prompt, visible_to, deleted_at FROM model_presets WHERE owner_sub IS NULL').all<ExistingResource & { base_model_id: string; system_prompt: string }>();
   const byName = new Map(existing.map(row => [row.name, row]));
   const names = new Set(presets.map(preset => preset.name));
@@ -65,8 +65,8 @@ async function reconcilePresets(db: TxDb): Promise<number> {
   return presets.length;
 }
 
-async function reconcileAutomations(db: TxDb): Promise<number> {
-  const automations = getConfig().automations ?? [];
+async function reconcileAutomations(db: TxDb, config: ReturnType<typeof getConfig>): Promise<number> {
+  const automations = config.automations ?? [];
   const existing = await db.prepare('SELECT id, name, definition, visible_to, deleted_at FROM automations WHERE owner_sub IS NULL').all<ExistingResource & { definition: unknown }>();
   const byName = new Map(existing.map(row => [row.name, row]));
   const names = new Set(automations.map(automation => automation.name));
@@ -92,11 +92,11 @@ async function reconcileAutomations(db: TxDb): Promise<number> {
 }
 
 /** Reconcile deployment-owned YAML definitions. The lock makes startup safe across replicas. */
-export async function reconcileYaml(): Promise<void> {
+export async function reconcileYaml(config = getConfig()): Promise<void> {
   await getDb().withAdvisoryLock('llm-gui-config-reconcile', async db => {
-    const prompts = await reconcilePrompts(db);
-    const presets = await reconcilePresets(db);
-    const automations = await reconcileAutomations(db);
+    const prompts = await reconcilePrompts(db, config);
+    const presets = await reconcilePresets(db, config);
+    const automations = await reconcileAutomations(db, config);
     logger.info('YAML reconciliation complete', { prompts, presets, automations });
   });
 }

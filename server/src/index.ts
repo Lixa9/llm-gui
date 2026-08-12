@@ -184,8 +184,9 @@ const orphanUploadInterval = setInterval(() => {
   void purgeOrphanUploads().catch(error => logger.warn('Upload orphan purge failed', { error: String(error) }));
 }, 60 * 60 * 1000);
 
-// Hot-reload config on SIGHUP
-process.on('SIGHUP', reloadConfig);
+// Hot-reload config on SIGHUP. reloadConfig contains its own error boundary so
+// malformed deployment files cannot turn a reload into a process crash.
+process.on('SIGHUP', () => { void reloadConfig(); });
 
 // Start server
 const server = serve({

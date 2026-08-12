@@ -169,3 +169,7 @@ export interface RegenerateChatPayload {
   system_prompt?: string;
   assistant_message_id: string;
 }
+
+export interface ChatSendResult {
+  accepted: boolean;
+}

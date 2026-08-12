@@ -184,8 +184,9 @@ function loadYaml(name: string): unknown {
 }
 
 let _config: AppConfig | null = null;
+let reloadQueue: Promise<void> = Promise.resolve();
 
-export function loadConfig(): AppConfig {
+function readConfig(): AppConfig {
   scaffoldConfigIfNeeded();
   const mainRaw = loadYaml('config.yaml') as Record<string, unknown>;
   const modelsRaw = loadYaml('models.yaml') as { models?: unknown[] };
@@ -195,14 +196,17 @@ export function loadConfig(): AppConfig {
 
   const parsed = configSchema.parse(mainRaw);
 
-  const config: AppConfig = {
+  return {
     ...parsed,
     models: (modelsRaw.models ?? []) as AppConfig['models'],
     prompts: (promptsRaw.prompts ?? []) as AppConfig['prompts'],
     presets: (presetsRaw.presets ?? []) as AppConfig['presets'],
     automations: (automationsRaw.automations ?? []) as AppConfig['automations'],
   };
+}
 
+export function loadConfig(): AppConfig {
+  const config = readConfig();
   _config = config;
   return config;
 }
@@ -212,9 +216,42 @@ export function getConfig(): AppConfig {
   return _config;
 }
 
-export function reloadConfig(): void {
+export interface ReloadConfigDependencies {
+  reconcile?: (config: AppConfig) => Promise<void>;
+  invalidateCaches?: () => Promise<void>;
+}
+
+async function invalidateConfigCaches(): Promise<void> {
+  const [models, auth] = await Promise.all([import('./models'), import('./auth')]);
+  models.invalidateModelCache();
+  auth.invalidateAuthDiscoveryCache();
+}
+
+async function performReload(dependencies: ReloadConfigDependencies): Promise<boolean> {
   logger.info('Reloading config (SIGHUP)');
-  loadConfig();
-  // Imported lazily to avoid circular dependency
-  import('./models').then(m => m.invalidateModelCache());
+  try {
+    const candidate = readConfig();
+    const reconcile = dependencies.reconcile ?? (async (config: AppConfig) => {
+      const module = await import('./reconcile');
+      await module.reconcileYaml(config);
+    });
+    await reconcile(candidate);
+    _config = candidate;
+    try {
+      await (dependencies.invalidateCaches ?? invalidateConfigCaches)();
+    } catch (error) {
+      logger.warn('Configuration reloaded but cache invalidation failed', { error: String(error) });
+    }
+    logger.info('Config reload complete');
+    return true;
+  } catch (error) {
+    logger.error('Config reload failed; keeping previous configuration', { error: String(error) });
+    return false;
+  }
+}
+
+export function reloadConfig(dependencies: ReloadConfigDependencies = {}): Promise<boolean> {
+  const result = reloadQueue.then(() => performReload(dependencies));
+  reloadQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
