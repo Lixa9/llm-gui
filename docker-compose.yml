@@ -21,13 +21,12 @@ services:
     volumes:
       - ./config:/app/config:ro
     environment:
-      # Only needed if config.yaml references ${OIDC_CLIENT_SECRET}
-      # OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DATABASE_URL: postgres://llm_gui:${POSTGRES_PASSWORD}@postgres:5432/llm_gui
       # Optional test-only fallback. Keep disabled in normal use.
-      # LOCAL_AUTH: "true"
+      LOCAL_AUTH: ${LOCAL_AUTH:-false}
     depends_on:
       postgres:
         condition: service_healthy

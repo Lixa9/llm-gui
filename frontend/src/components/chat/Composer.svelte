@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { chatStore } from '../../stores/chat.svelte';
+  import { onDestroy } from 'svelte';
   import { api } from '$lib/api';
-  import type { ChatPayload, UploadResult } from '$lib/types';
+  import type { ChatPayload, ChatSendResult, UploadResult } from '$lib/types';
   import { fileIcon } from '$lib/fileUtils';
+  import { canSubmitComposerDraft, deleteUploadBestEffort, submitComposerDraft } from '$lib/composerSubmission';
+  import { toast } from '../ui/Toast.svelte';
 
   interface Props {
     conversationId: string | null;
     selectedModel: string;
     systemPromptText: string;
     systemPromptId: string | undefined;
-    onSend: (payload: ChatPayload) => void;
+    onSend: (payload: ChatPayload) => Promise<ChatSendResult>;
     onStop: () => void;
     streaming: boolean;
     expanded?: boolean;
@@ -35,7 +37,23 @@
 
   let text = $state('');
   let pendingAttachments = $state<PendingAttachment[]>([]);
+  let submitting = $state(false);
   let fileInputEl: HTMLInputElement;
+  let destroyed = false;
+  const discardedAttachmentIds = new Set<string>();
+
+  function discardStoredUpload(uploadId: string): void {
+    void deleteUploadBestEffort(uploadId, api.uploads.delete);
+  }
+
+  onDestroy(() => {
+    destroyed = true;
+    for (const attachment of pendingAttachments) {
+      if (attachment.localUrl) URL.revokeObjectURL(attachment.localUrl);
+      if (attachment.result?.id) discardStoredUpload(attachment.result.id);
+      discardedAttachmentIds.add(attachment.id);
+    }
+  });
 
   function rejectFile(file: File, kind: 'image' | 'file', errorMsg: string) {
     pendingAttachments = [...pendingAttachments, { id: crypto.randomUUID(), localUrl: '', filename: file.name, mimeType: file.type, kind, status: 'error', errorMsg }];
@@ -68,10 +86,15 @@
       pendingAttachments = [...pendingAttachments, attachment];
       try {
         const result = await api.uploads.upload(file);
+        if (destroyed || discardedAttachmentIds.has(attachment.id)) {
+          discardStoredUpload(result.id);
+          continue;
+        }
         pendingAttachments = pendingAttachments.map(a =>
           a.id === attachment.id ? { ...a, status: 'ready', result, warning: result.warning } : a
         );
       } catch (err) {
+        if (destroyed || discardedAttachmentIds.has(attachment.id)) continue;
         pendingAttachments = pendingAttachments.map(a =>
           a.id === attachment.id ? { ...a, status: 'error', errorMsg: (err as Error).message } : a
         );
@@ -81,15 +104,16 @@
 
   function removeAttachment(idx: number) {
     const a = pendingAttachments[idx];
+    discardedAttachmentIds.add(a.id);
     if (a.localUrl) URL.revokeObjectURL(a.localUrl);
-    if (a.result?.id) void api.uploads.delete(a.result.id).catch(() => {});
+    if (a.result?.id) discardStoredUpload(a.result.id);
     pendingAttachments = pendingAttachments.filter((_, i) => i !== idx);
   }
 
-  function send() {
+  async function send() {
     const trimmed = text.trim();
     const readyAttachments = pendingAttachments.filter(a => a.status === 'ready' && a.result);
-    if ((!trimmed && readyAttachments.length === 0) || !selectedModel) return;
+    if (!canSend) return;
 
     const imageParts = readyAttachments
       .filter(a => a.kind === 'image')
@@ -119,23 +143,41 @@
       new_user_message: { content: contentParts },
     };
 
-    for (const a of pendingAttachments) URL.revokeObjectURL(a.localUrl);
-    text = '';
-    pendingAttachments = [];
-    expanded = false;
-    onSend(payload);
+    submitting = true;
+    try {
+      await submitComposerDraft(
+        () => onSend(payload),
+        () => {
+          for (const attachment of pendingAttachments) {
+            if (attachment.localUrl) URL.revokeObjectURL(attachment.localUrl);
+          }
+          text = '';
+          pendingAttachments = [];
+          expanded = false;
+        },
+      );
+    } catch (error) {
+      toast((error as Error).message, 'error');
+    } finally {
+      submitting = false;
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!streaming) send();
+      if (canSend) void send();
     }
   }
 
-  const canSend = $derived(
-    !streaming && (!!text.trim() || pendingAttachments.some(a => a.status === 'ready'))
-  );
+  const canSend = $derived(canSubmitComposerDraft({
+    streaming,
+    submitting,
+    hasContent: !!text.trim(),
+    hasReadyAttachment: pendingAttachments.some(a => a.status === 'ready'),
+    hasUploadingAttachment: pendingAttachments.some(a => a.status === 'uploading'),
+    hasModel: !!selectedModel,
+  }));
 </script>
 
 <div class="composer" class:expanded>
@@ -158,7 +200,7 @@
           <span class="chip-name" title={att.status === 'error' ? att.errorMsg : att.filename}>
             {att.filename}
           </span>
-          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove">✕</button>
+          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" disabled={streaming || submitting}>✕</button>
         </div>
       {/each}
     </div>
@@ -170,14 +212,14 @@
       placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
       rows={3}
       onkeydown={handleKeydown}
-      disabled={streaming}
+      disabled={streaming || submitting}
     ></textarea>
     <div class="composer-controls">
       <button
         class="icon-btn"
         onclick={() => fileInputEl.click()}
         title="Attach image"
-        disabled={streaming}
+        disabled={streaming || submitting}
       >📎</button>
       <button
         class="expand-btn"
@@ -187,7 +229,7 @@
       {#if streaming}
         <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
       {:else}
-        <button class="send-btn" onclick={send} disabled={!canSend} title="Send">
+        <button class="send-btn" onclick={() => void send()} disabled={!canSend} title="Send">
           ↑ Send
         </button>
       {/if}

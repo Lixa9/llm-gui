@@ -32,6 +32,12 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 
+export function invalidateAuthDiscoveryCache(): void {
+  _jwks = null;
+  _discoveredEndpoints = null;
+  _discoveredAt = 0;
+}
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }

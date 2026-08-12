@@ -30,7 +30,7 @@ Prerequisites:
 - An OpenAI-compatible API endpoint
 - An OIDC provider for normal use
 
-Create a directory with `config/`, copy the example configuration files from this repository, and create a `.env` file:
+Create a directory with `config/`, copy the example configuration files from this repository, and copy `.env.example` to `.env`. At minimum, set:
 
 ```dotenv
 POSTGRES_PASSWORD=use-a-long-random-password
@@ -47,7 +47,7 @@ docker compose logs -f chat
 
 Open <http://localhost:3000>. Configure OIDC in `config/config.yaml` before normal use.
 
-The checked-in Compose file does not enable local authentication. For a temporary test-only login, add `LOCAL_AUTH: "true"` to the chat service environment and restart it. The credentials are fixed at `admin` / `admin`; do not enable this on an exposed deployment.
+The checked-in Compose file does not enable local authentication by default. For a temporary test-only login, set `LOCAL_AUTH=true` in `.env` and restart the stack. The credentials are fixed at `admin` / `admin`; do not enable this on an exposed deployment.
 
 ## Configuration
 

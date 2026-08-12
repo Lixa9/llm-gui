@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
@@ -10,12 +11,24 @@
   let noFolderDragOver = $state(false);
   let creatingFolder = $state(false);
   let newFolderName = $state('');
+  let confirmingDeleteAll = $state(false);
+  let deleteAllButton: HTMLButtonElement | undefined = $state();
 
   const rootFolders = $derived(conversationsStore.folders.filter(f => f.parent_id === null));
   const unfolderedConvs = $derived(conversationsStore.sorted.filter(c => c.folder_id === null));
   const isSearching = $derived(!!searchQuery.trim());
 
   const doSearch = debounce((q: string) => conversationsStore.search(q), 250);
+
+  onMount(() => {
+    const cancelDeleteAllConfirmation = (event: PointerEvent) => {
+      if (confirmingDeleteAll && deleteAllButton && !deleteAllButton.contains(event.target as Node)) {
+        confirmingDeleteAll = false;
+      }
+    };
+    document.addEventListener('pointerdown', cancelDeleteAllConfirmation);
+    return () => document.removeEventListener('pointerdown', cancelDeleteAllConfirmation);
+  });
 
   function handleSearchInput() {
     doSearch(searchQuery);
@@ -70,10 +83,13 @@
   async function deleteAllChats() {
     const count = conversationsStore.list.length;
     if (!count) return;
-    const ok = confirm(`Delete all ${count} conversation${count === 1 ? '' : 's'}? This cannot be undone.`);
-    if (!ok) return;
+    if (!confirmingDeleteAll) {
+      confirmingDeleteAll = true;
+      return;
+    }
     try {
       await conversationsStore.removeAll();
+      confirmingDeleteAll = false;
     } catch (e) {
       toast((e as Error).message, 'error');
     }
@@ -141,7 +157,14 @@
     {:else}
       <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
     {/if}
-    <button class="sidebar-footer-btn danger" onclick={deleteAllChats} title="Delete all chats">🗑 Delete all chats</button>
+    <button
+      class="sidebar-footer-btn danger"
+      class:confirming-delete={confirmingDeleteAll}
+      bind:this={deleteAllButton}
+      onclick={deleteAllChats}
+      aria-label={confirmingDeleteAll ? 'Confirm delete all chats' : 'Delete all chats'}
+      title={confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}
+    >🗑 {confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}</button>
   </div>
 </aside>
 
@@ -241,6 +264,11 @@
   .sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
   .sidebar-footer-btn.danger { color: #f07070; }
   .sidebar-footer-btn.danger:hover { background: var(--bg-hover); color: #f07070; }
+  .sidebar-footer-btn.danger.confirming-delete,
+  .sidebar-footer-btn.danger.confirming-delete:hover {
+    background: var(--danger);
+    color: var(--bg-surface);
+  }
   .new-folder-form { padding: 0 0 4px; }
   .new-folder-input {
     width: 100%;

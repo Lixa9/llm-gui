@@ -1,7 +1,7 @@
 import { streamChat } from '$lib/sse';
 import { api } from '$lib/api';
 import { playCompletionSound } from '$lib/audio';
-import type { Message, ChatPayload, RegenerateChatPayload } from '$lib/types';
+import type { Message, ChatPayload, RegenerateChatPayload, ChatSendResult } from '$lib/types';
 import { conversationsStore } from './conversations.svelte';
 import { preferencesStore } from './preferences.svelte';
 
@@ -87,12 +87,12 @@ function createChatStore() {
     }
   }
 
-  async function send(payload: ChatPayload) {
-    if (activeStream) return;
+  async function send(payload: ChatPayload): Promise<ChatSendResult> {
+    if (activeStream) return { accepted: false };
     const convId = payload.conversation_id;
     if (!convId) {
       error = 'A conversation must be created before sending a message.';
-      return;
+      return { accepted: false };
     }
     if (activeConversationId !== convId) setActiveConversation(convId);
 
@@ -125,6 +125,7 @@ function createChatStore() {
     };
     pending = { role: 'assistant', content: '', model: payload.model };
     let terminalEvent = false;
+    let acceptedByServer = false;
 
     try {
       await streamChat({
@@ -134,6 +135,7 @@ function createChatStore() {
       }, controller.signal, (event) => {
         if (activeStream?.id !== operationId) return;
         if (event.type === 'accepted') {
+          acceptedByServer = true;
           activeStream.accepted = true;
           messages = messages.map(message => message.id === userMessageId ? event.user_message : message);
         } else if (event.type === 'delta') {
@@ -177,6 +179,7 @@ function createChatStore() {
       }
       void conversationsStore.refreshUntilTitle(convId).catch(() => {});
     }
+    return { accepted: acceptedByServer };
   }
 
   async function regenerate(payload: RegenerateChatPayload) {

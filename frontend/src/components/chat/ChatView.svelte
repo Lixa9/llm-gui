@@ -10,7 +10,7 @@
   import { modelsStore } from '../../stores/models.svelte';
   import { promptsStore } from '../../stores/prompts.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
-  import type { Message, ChatPayload } from '$lib/types';
+  import type { Message, ChatPayload, ChatSendResult } from '$lib/types';
   import { toast } from '../ui/Toast.svelte';
   import { navigateTo } from '$lib/router';
 
@@ -130,7 +130,7 @@
     saveConvSettings();
   }
 
-  async function handleSend(payload: ChatPayload) {
+  async function handleSend(payload: ChatPayload): Promise<ChatSendResult> {
     let convId = conversationId;
     if (!convId) {
       const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
@@ -147,7 +147,7 @@
       skipNextLoad = true;
       navigateTo('chat', convId);
     }
-    await chatStore.send({ ...payload, conversation_id: convId });
+    return chatStore.send({ ...payload, conversation_id: convId });
   }
 
   async function handleEdit(msg: Message, newContent: string) {
