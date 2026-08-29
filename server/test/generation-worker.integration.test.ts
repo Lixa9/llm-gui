@@ -236,7 +236,32 @@ conversation:
     });
     await conversationLockHeld;
 
-    const admission = runTransaction(async tx => {
+    const duplicateRequest = conversationApp.request(`/api/conversations/${sourceConversationId}/duplicate`, {
+      method: 'POST',
+      headers: { cookie: `session=${sessionToken}` },
+    });
+    const lockWaitDeadline = Date.now() + 2_000;
+    while (true) {
+      const waitingLock = await db.prepare(`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+        ) AS waiting
+      `).get<{ waiting: boolean }>();
+      if (waitingLock?.waiting) break;
+      assert(Date.now() < lockWaitDeadline, 'duplicate request did not wait for the conversation lock');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    releaseConversationLock();
+    await blocker;
+    const duplicateResponse = await duplicateRequest;
+    assert.equal(duplicateResponse.status, 201, await duplicateResponse.clone().text());
+    const duplicate = await duplicateResponse.json() as { id: string };
+    assert.equal(
+      (await db.prepare("SELECT COUNT(*)::int AS count FROM messages WHERE conversation_id=? AND status='streaming'").get<{ count: number }>(duplicate.id))?.count,
+      0,
+    );
+
+    await runTransaction(async tx => {
       await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(sourceConversationId);
       const promptId = generateId();
       const assistantId = generateId();
@@ -255,30 +280,19 @@ conversation:
         VALUES (?, ?, ?, ?, ?, '{}'::jsonb, 'queued', ?)
       `).run(assistantId, sourceConversationId, promptId, assistantId, owner, Date.now());
     });
-    await new Promise(resolve => setTimeout(resolve, 25));
-    const duplicateRequest = conversationApp.request(`/api/conversations/${sourceConversationId}/duplicate`, {
+
+    const blockedDuplicateResponse = await conversationApp.request(`/api/conversations/${sourceConversationId}/duplicate`, {
       method: 'POST',
       headers: { cookie: `session=${sessionToken}` },
     });
-    releaseConversationLock();
-    await blocker;
-    await admission;
-    const duplicateResponse = await duplicateRequest;
-    assert([201, 409].includes(duplicateResponse.status));
-    if (duplicateResponse.status === 201) {
-      const duplicate = await duplicateResponse.json() as { id: string };
-      assert.equal(
-        (await db.prepare("SELECT COUNT(*)::int AS count FROM messages WHERE conversation_id=? AND status='streaming'").get<{ count: number }>(duplicate.id))?.count,
-        0,
-      );
-    }
+    assert.equal(blockedDuplicateResponse.status, 409, await blockedDuplicateResponse.clone().text());
 
     const forkResponse = await conversationApp.request(`/api/conversations/${sourceConversationId}/fork`, {
       method: 'POST',
       headers: { cookie: `session=${sessionToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ message_id: sourceMessageId }),
     });
-    assert.equal(forkResponse.status, 409);
+    assert.equal(forkResponse.status, 409, await forkResponse.clone().text());
   } finally {
     upstream.closeAllConnections();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
