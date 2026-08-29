@@ -17,8 +17,6 @@ jobs:
           POSTGRES_DB: llm_gui_test
           POSTGRES_USER: llm_gui
           POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U llm_gui -d llm_gui_test"
           --health-interval 5s
@@ -40,7 +38,7 @@ jobs:
       - name: Test server
         working-directory: server
         env:
-          GENERATION_TEST_DATABASE_URL: postgres://llm_gui:test@127.0.0.1:5432/llm_gui_test
+          GENERATION_TEST_DATABASE_URL: postgres://llm_gui:test@postgres:5432/llm_gui_test
         run: |
           npm ci
           npm run typecheck
