@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import MessageList from './MessageList.svelte';
   import Composer from './Composer.svelte';
   import EditMessageModal from './EditMessageModal.svelte';
@@ -25,6 +26,10 @@
   let _modelId = $state<string | null>(null);
   let _promptId = $state<string | null>(null);
   let skipNextLoad = false;
+
+  onDestroy(() => {
+    if (chatStore.activeConversationId === conversationId) chatStore.setActiveConversation(null);
+  });
 
   // Derived picker values — always correct regardless of async load order
   const selectedPresetId = $derived.by((): string => {

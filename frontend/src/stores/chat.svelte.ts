@@ -1,7 +1,7 @@
 import { streamChat } from '$lib/sse';
 import { api } from '$lib/api';
 import { playCompletionSound } from '$lib/audio';
-import type { Message, ChatPayload, RegenerateChatPayload, ChatSendResult } from '$lib/types';
+import type { Message, ChatPayload, RegenerateChatPayload, ChatSendResult, ChatGeneration } from '$lib/types';
 import { conversationsStore } from './conversations.svelte';
 import { preferencesStore } from './preferences.svelte';
 
@@ -18,7 +18,10 @@ function createChatStore() {
   let loadingMessages = $state(false);
   let error = $state<string | null>(null);
   let activeConversationId = $state<string | null>(null);
+  let activeGenerationId = $state<string | null>(null);
   let loadGeneration = 0;
+  let pollGeneration = 0;
+  let pollingGenerationId: string | null = null;
   let activeStream: {
     id: string;
     conversationId: string;
@@ -26,6 +29,9 @@ function createChatStore() {
     userMessage: Message;
     accepted: boolean;
     stopRequested: boolean;
+    generationId: string;
+    acceptedReady: Promise<boolean>;
+    resolveAccepted: (accepted: boolean) => void;
   } | null = null;
 
   const allMessages = $derived<Array<Message | PendingMessage>>(
@@ -35,16 +41,99 @@ function createChatStore() {
   function setActiveConversation(convId: string | null) {
     if (activeConversationId === convId) return;
     loadGeneration += 1;
+    pollGeneration += 1;
+    pollingGenerationId = null;
     if (activeStream?.conversationId !== convId) {
       activeStream?.controller.abort();
       activeStream = null;
       streaming = false;
     }
     activeConversationId = convId;
+    activeGenerationId = null;
     messages = [];
     pending = null;
     loadingMessages = false;
     error = null;
+  }
+
+  function upsertMessage(message: Message): void {
+    const index = messages.findIndex(existing => existing.id === message.id);
+    if (index < 0) messages = [...messages, message].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+    else messages = messages.map(existing => existing.id === message.id ? message : existing);
+  }
+
+  function applyGeneration(generation: ChatGeneration): boolean {
+    if (activeConversationId !== generation.conversation_id) return true;
+    if (generation.message) upsertMessage(generation.message);
+    const terminal = !['queued', 'running'].includes(generation.status);
+    if (!terminal) {
+      activeGenerationId = generation.id;
+      streaming = true;
+      pending = null;
+      return false;
+    }
+
+    if (activeGenerationId === generation.id) activeGenerationId = null;
+    if (pollingGenerationId === generation.id) {
+      pollingGenerationId = null;
+      pollGeneration += 1;
+    }
+    streaming = false;
+    pending = null;
+    if (generation.status === 'timed_out') error = generation.last_error ?? 'Generation timed out';
+    else if (generation.status === 'failed') error = generation.last_error ?? 'Generation failed';
+    else error = null;
+    return true;
+  }
+
+  function startGenerationPolling(generationId: string, convId: string): void {
+    if (pollingGenerationId === generationId) return;
+    pollingGenerationId = generationId;
+    const token = ++pollGeneration;
+    void (async () => {
+      let failures = 0;
+      while (activeConversationId === convId && token === pollGeneration) {
+        try {
+          const generation = await api.chat.generation(generationId);
+          failures = 0;
+          if (error?.startsWith('Could not refresh the running response:')) error = null;
+          if (activeConversationId !== convId || token !== pollGeneration) return;
+          if (applyGeneration(generation)) {
+            if (generation.status === 'done') playCompletionSound(preferencesStore.soundEnabled, preferencesStore.soundVolume);
+            void conversationsStore.refreshUntilTitle(convId).catch(() => {});
+            return;
+          }
+        } catch (pollError) {
+          if (activeConversationId === convId && token === pollGeneration) {
+            if ((pollError as { status?: number }).status === 404) {
+              pollingGenerationId = null;
+              activeGenerationId = null;
+              streaming = false;
+              return;
+            }
+            failures += 1;
+            error = `Could not refresh the running response: ${(pollError as Error).message}`;
+          }
+          await new Promise(resolve => setTimeout(resolve, Math.min(10_000, failures * 1_000)));
+          continue;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+      }
+      if (token === pollGeneration) pollingGenerationId = null;
+    })();
+  }
+
+  function syncGenerationState(convId: string, loaded: Message[]): void {
+    const running = [...loaded].reverse().find(message => message.role === 'assistant' && message.status === 'streaming');
+    if (running) {
+      activeGenerationId = running.id;
+      streaming = true;
+      pending = null;
+      startGenerationPolling(running.id, convId);
+    } else if (!activeStream || activeStream.conversationId !== convId) {
+      activeGenerationId = null;
+      streaming = false;
+    }
   }
 
   async function loadMessages(convId: string) {
@@ -54,7 +143,10 @@ function createChatStore() {
     error = null;
     try {
       const loaded = await api.conversations.messages(convId);
-      if (activeConversationId === convId && generation === loadGeneration) messages = loaded;
+      if (activeConversationId === convId && generation === loadGeneration) {
+        messages = loaded;
+        syncGenerationState(convId, loaded);
+      }
     } catch (e) {
       if (activeConversationId === convId && generation === loadGeneration) {
         error = (e as Error).message;
@@ -78,6 +170,7 @@ function createChatStore() {
       } else {
         messages = authoritative;
       }
+      syncGenerationState(convId, authoritative);
     } catch (reconcileError) {
       if (activeConversationId !== convId) return;
       messages = messages.map(message => message.id === optimistic.id
@@ -88,7 +181,7 @@ function createChatStore() {
   }
 
   async function send(payload: ChatPayload): Promise<ChatSendResult> {
-    if (activeStream) return { accepted: false };
+    if (activeStream || activeGenerationId) return { accepted: false };
     const convId = payload.conversation_id;
     if (!convId) {
       error = 'A conversation must be created before sending a message.';
@@ -115,6 +208,8 @@ function createChatStore() {
     error = null;
     const operationId = crypto.randomUUID();
     const controller = new AbortController();
+    let resolveAccepted!: (accepted: boolean) => void;
+    const acceptedReady = new Promise<boolean>(resolve => { resolveAccepted = resolve; });
     activeStream = {
       id: operationId,
       conversationId: convId,
@@ -122,7 +217,11 @@ function createChatStore() {
       userMessage: userMsg,
       accepted: false,
       stopRequested: false,
+      generationId: assistantMessageId,
+      acceptedReady,
+      resolveAccepted,
     };
+    activeGenerationId = assistantMessageId;
     pending = { role: 'assistant', content: '', model: payload.model };
     let terminalEvent = false;
     let acceptedByServer = false;
@@ -137,6 +236,9 @@ function createChatStore() {
         if (event.type === 'accepted') {
           acceptedByServer = true;
           activeStream.accepted = true;
+          activeStream.resolveAccepted(true);
+          activeStream.generationId = event.assistant_message_id;
+          activeGenerationId = event.assistant_message_id;
           messages = messages.map(message => message.id === userMessageId ? event.user_message : message);
         } else if (event.type === 'delta') {
           if (pending) pending.content += event.content;
@@ -144,10 +246,16 @@ function createChatStore() {
           terminalEvent = true;
           if (event.message) messages = [...messages, event.message];
           pending = null;
+          activeGenerationId = null;
           playCompletionSound(
             preferencesStore.soundEnabled,
             preferencesStore.soundVolume,
           );
+        } else if (event.type === 'cancelled') {
+          terminalEvent = true;
+          if (event.message) upsertMessage(event.message);
+          activeGenerationId = null;
+          pending = null;
         } else if (event.type === 'title') {
           conversationsStore.updateTitle(convId, event.title);
         } else if (event.type === 'error') {
@@ -168,6 +276,7 @@ function createChatStore() {
     } finally {
       const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
       const operationIsCurrent = activeStream?.id === operationId;
+      resolveAccepted(acceptedByServer);
       await reconcileMessages(convId, userMsg, accepted);
       if (operationIsCurrent && activeStream?.id === operationId) {
         if (!terminalEvent && !controller.signal.aborted) {
@@ -177,13 +286,14 @@ function createChatStore() {
         streaming = false;
         pending = null;
       }
+      if (activeConversationId === convId) syncGenerationState(convId, messages);
       void conversationsStore.refreshUntilTitle(convId).catch(() => {});
     }
     return { accepted: acceptedByServer };
   }
 
   async function regenerate(payload: RegenerateChatPayload) {
-    if (activeStream) return;
+    if (activeStream || activeGenerationId) return;
     if (activeConversationId !== payload.conversation_id) setActiveConversation(payload.conversation_id);
     const assistantIndex = messages.findIndex(message => message.id === payload.assistant_message_id);
     const retainedUser = assistantIndex > 0 ? messages[assistantIndex - 1] : undefined;
@@ -200,6 +310,8 @@ function createChatStore() {
     error = null;
     const operationId = crypto.randomUUID();
     const controller = new AbortController();
+    let resolveAccepted!: (accepted: boolean) => void;
+    const acceptedReady = new Promise<boolean>(resolve => { resolveAccepted = resolve; });
     activeStream = {
       id: operationId,
       conversationId: payload.conversation_id,
@@ -207,15 +319,23 @@ function createChatStore() {
       userMessage: retainedUser,
       accepted: false,
       stopRequested: false,
+      generationId: '',
+      acceptedReady,
+      resolveAccepted,
     };
     pending = { role: 'assistant', content: '', model: payload.model };
     let terminalEvent = false;
+    let acceptedByServer = false;
 
     try {
       await streamChat(payload, controller.signal, (event) => {
         if (activeStream?.id !== operationId) return;
         if (event.type === 'accepted') {
+          acceptedByServer = true;
           activeStream.accepted = true;
+          activeStream.resolveAccepted(true);
+          activeStream.generationId = event.assistant_message_id;
+          activeGenerationId = event.assistant_message_id;
           messages = messages.map(message => message.id === event.user_message.id ? event.user_message : message);
         } else if (event.type === 'delta') {
           if (pending) pending.content += event.content;
@@ -223,7 +343,13 @@ function createChatStore() {
           terminalEvent = true;
           if (event.message) messages = [...messages, event.message];
           pending = null;
+          activeGenerationId = null;
           playCompletionSound(preferencesStore.soundEnabled, preferencesStore.soundVolume);
+        } else if (event.type === 'cancelled') {
+          terminalEvent = true;
+          if (event.message) upsertMessage(event.message);
+          activeGenerationId = null;
+          pending = null;
         } else if (event.type === 'error') {
           terminalEvent = true;
           error = event.message;
@@ -242,6 +368,7 @@ function createChatStore() {
     } finally {
       const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
       const operationIsCurrent = activeStream?.id === operationId;
+      resolveAccepted(acceptedByServer);
       await reconcileMessages(payload.conversation_id, retainedUser, accepted);
       if (operationIsCurrent && activeStream?.id === operationId) {
         if (!terminalEvent && !controller.signal.aborted) error ??= 'The connection closed before completion; saved messages were reloaded.';
@@ -249,14 +376,30 @@ function createChatStore() {
         streaming = false;
         pending = null;
       }
+      if (activeConversationId === payload.conversation_id) syncGenerationState(payload.conversation_id, messages);
       void conversationsStore.refreshUntilTitle(payload.conversation_id).catch(() => {});
     }
   }
 
-  function stop() {
-    if (activeStream) {
-      activeStream.stopRequested = true;
-      activeStream.controller.abort();
+  async function stop() {
+    const stream = activeStream;
+    if (stream && !stream.accepted) {
+      stream.stopRequested = true;
+      if (!await stream.acceptedReady) return;
+    }
+    const generationId = activeGenerationId ?? stream?.generationId;
+    if (!generationId) return;
+    if (stream) stream.stopRequested = true;
+    error = null;
+    try {
+      const generation = await api.chat.cancel(generationId);
+      applyGeneration(generation);
+      activeStream?.controller.abort();
+      pollGeneration += 1;
+      pollingGenerationId = null;
+    } catch (stopError) {
+      if (activeStream) activeStream.stopRequested = false;
+      error = `Could not stop generation: ${(stopError as Error).message}`;
     }
   }
 
@@ -272,6 +415,15 @@ function createChatStore() {
 
   async function deleteMessage(convId: string, msgId: string) {
     await api.conversations.deleteMessage(convId, msgId);
+    if (activeGenerationId) {
+      pollGeneration += 1;
+      pollingGenerationId = null;
+      activeGenerationId = null;
+      activeStream?.controller.abort();
+      activeStream = null;
+      streaming = false;
+      pending = null;
+    }
     const idx = messages.findIndex(m => m.id === msgId);
     if (idx !== -1) messages = messages.slice(0, idx);
   }
@@ -288,6 +440,7 @@ function createChatStore() {
     get error() { return error; },
     get allMessages() { return allMessages; },
     get activeConversationId() { return activeConversationId; },
+    get activeGenerationId() { return activeGenerationId; },
     loadMessages, send, regenerate, stop, editUserMessage, editAssistantMessage, deleteMessage, clear, setActiveConversation,
   };
 }

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts",
+    "test:integration": "node --import tsx test/integration-runner.ts",
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --packages=external --format=esm --outfile=dist/index.js"
   },

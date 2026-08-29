@@ -1,7 +1,7 @@
 import type {
   User, Conversation, ConversationFolder, Message, SystemPrompt,
   ModelInfo, ModelPreset, Automation, AutomationRun,
-  UserPreferences, UploadResult
+  UserPreferences, UploadResult, ChatGeneration
 } from './types';
 
 class HttpError extends Error {
@@ -63,6 +63,11 @@ export const api = {
       patch<Message>(`/api/conversations/${convId}/messages/${msgId}`, { content }),
     deleteMessage: (convId: string, msgId: string) =>
       del<void>(`/api/conversations/${convId}/messages/${msgId}`),
+  },
+
+  chat: {
+    generation: (id: string) => get<ChatGeneration>(`/api/chat/generations/${id}`),
+    cancel: (id: string) => post<ChatGeneration>(`/api/chat/generations/${id}/cancel`),
   },
 
   folders: {

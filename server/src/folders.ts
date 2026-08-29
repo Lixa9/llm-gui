@@ -92,6 +92,25 @@ foldersRouter.delete('/:id', async (c) => {
     const folderIds = folders.map(folder => folder.id);
     if (folderIds.length === 0) return;
 
+    const conversations = await db.prepare(`
+      SELECT id FROM conversations WHERE owner_sub=? AND folder_id = ANY(?::uuid[]) ORDER BY id
+    `).all<{ id: string }>(user.sub, folderIds);
+    for (const conversation of conversations) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(conversation.id);
+
+    await db.prepare(`
+      SELECT g.id FROM chat_generations g
+      JOIN conversations c ON c.id=g.conversation_id
+      WHERE c.owner_sub=? AND c.folder_id = ANY(?::uuid[])
+      FOR UPDATE
+    `).all(user.sub, folderIds);
+    await db.prepare(`
+      DELETE FROM stream_leases WHERE id IN (
+        SELECT g.rate_lease_id FROM chat_generations g
+        JOIN conversations c ON c.id=g.conversation_id
+        WHERE c.owner_sub=? AND c.folder_id = ANY(?::uuid[])
+      )
+    `).run(user.sub, folderIds);
+
     const uploads = await db.prepare(`
       SELECT DISTINCT mu.upload_id
       FROM message_uploads mu

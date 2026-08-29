@@ -8,8 +8,8 @@ import { fetchModels } from './models';
 import { logger } from './logger';
 import type { MessageContentPart, MessageRow, SessionPayload } from './types';
 import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads';
-import { trackBackgroundTask } from './lifecycle';
 import { createBackgroundSseResponse } from './background-sse';
+import { cancelGeneration, getGeneration, isActiveGenerationConflict, runGeneration } from './generation-worker';
 
 interface UploadRow {
   sha256: string;
@@ -144,101 +144,45 @@ async function buildOpenaiMessages(
 
 interface StreamContext {
   user: SessionPayload;
-  cfg: ReturnType<typeof getConfig>;
   convId: string;
-  model: string;
-  modelEntry: { history_mode?: 'full' | 'latest_only' };
-  openaiMessages: unknown[];
   assistantMsgId: string;
   acceptedUser: MessageRow;
   acceptedContent: MessageContentPart[];
-  isFirstExchange: boolean;
-  leaseId: string;
-  titlePrompt: string;
 }
 
 function createChatResponse(context: StreamContext): Response {
-  const { user, cfg, convId, model, modelEntry, openaiMessages, assistantMsgId, acceptedUser, acceptedContent, isFirstExchange, leaseId, titlePrompt } = context;
-  const db = getDb();
-  const start = Date.now();
-  let fullText = '';
-  let assistantStored = false;
+  const { user, convId, assistantMsgId, acceptedUser, acceptedContent } = context;
   return createBackgroundSseResponse({
     type: 'accepted',
     conversation_id: convId,
     assistant_message_id: assistantMsgId,
     user_message: { ...acceptedUser, content: safeParseJson<MessageContentPart[]>(acceptedUser.content, acceptedContent) },
   }, async client => {
-    try {
-      // The browser request signal is intentionally not forwarded. Navigation,
-      // logout, and tab closure only detach the SSE observer; this tracked task
-      // must continue consuming and persisting the upstream completion.
-      const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
-      });
-      if (!response.ok) {
-        const detail = (await response.text().catch(() => '')).slice(0, 500);
-        client.send({ type: 'error', message: `upstream error ${response.status}${detail ? `: ${detail}` : ''}` });
-        return;
-      }
-      if (!response.body) throw new Error('Upstream returned no response body');
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let done = false;
-      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-        buffer += decoder.decode(chunk, { stream: true });
-        const parts = buffer.split(/\r?\n\r?\n/);
-        buffer = parts.pop() ?? '';
-        for (const part of parts) {
-          for (const line of part.split(/\r?\n/)) {
-            if (!line.startsWith('data: ')) continue;
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') { done = true; break; }
-            try {
-              const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
-              const delta = parsed.choices?.[0]?.delta?.content;
-              if (delta) { fullText += delta; client.send({ type: 'delta', content: delta }); }
-            } catch { /* ignore malformed SSE frames */ }
-          }
-          if (done) break;
-        }
-        if (done) break;
-      }
-      // Keep the assistant after the accepted user message even when a very
-      // fast upstream responds within the same millisecond.
-      const assistantTimestamp = Math.max(Date.now(), acceptedUser.timestamp + 1);
-      if (!done) {
-        if (fullText) {
-          await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
-            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
-          assistantStored = true;
-        }
-        client.send({ type: 'error', message: 'Upstream stream ended before completion' });
-        return;
-      }
-
-      await db.prepare(`
-        INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
-        VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
-      `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
-      assistantStored = true;
-      const assistant = await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(assistantMsgId);
-      client.send({ type: 'done', message: assistant ? serializeMessage(assistant) : null });
-      if (isFirstExchange && cfg.conversation.auto_title && fullText) {
-        trackBackgroundTask(generateTitle(convId, model, cfg, titlePrompt, fullText).catch(error => logger.warn('Automatic title generation failed', { error: String(error) })));
-      }
-    } catch (error) {
-      if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
-      client.send({ type: 'error', message: 'Upstream request failed' });
-    } finally {
-      await closeStream(leaseId).catch(() => {});
-      logger.info('Chat response complete', { user_sub: user.sub, model, conv_id: convId, latency_ms: Date.now() - start });
-    }
+    // The durable worker owns the upstream request. This HTTP stream is only an
+    // observer and may disappear without affecting the generation job.
+    await runGeneration(assistantMsgId, client);
   }, error => {
-    logger.error('Detached chat task failed', { user_sub: user.sub, model, conv_id: convId, error: String(error) });
+    logger.error('Detached chat observer failed', { user_sub: user.sub, conv_id: convId, generation_id: assistantMsgId, error: String(error) });
   });
+}
+
+function generationSnapshot(
+  cfg: ReturnType<typeof getConfig>,
+  model: string,
+  openaiMessages: unknown[],
+  historyMode: 'full' | 'latest_only' | undefined,
+  titlePrompt: string,
+  isFirstExchange: boolean,
+) {
+  return {
+    model,
+    openai_messages: openaiMessages,
+    history_mode: historyMode,
+    title_prompt: titlePrompt,
+    is_first_exchange: isFirstExchange,
+    auto_title: cfg.conversation.auto_title,
+    auto_title_model: cfg.conversation.auto_title_model,
+  };
 }
 
 async function findModel(userRole: string, model: string) {
@@ -264,6 +208,9 @@ relayRouter.post('/', async (c) => {
   } else if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub)) {
     return c.json({ error: 'Not found' }, 404);
   }
+  if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(convId)) {
+    return c.json({ error: 'This conversation already has a response in progress' }, 409);
+  }
 
   const existing = await db.prepare('SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<StoredMessage>(convId);
   const userContent = JSON.stringify(body.new_user_message.content);
@@ -272,16 +219,28 @@ relayRouter.post('/', async (c) => {
   const openaiMessages = await buildOpenaiMessages(stored, body.new_user_message.content, body.system_prompt, modelEntry.history_mode, user.sub);
   const rl = await acquireStream(user.sub);
   if (!rl.allowed) return c.json({ error: rl.reason }, 429);
+  const assistantMsgId = body.assistant_message_id ?? generateId();
   try {
     await runTransaction(async tx => {
+      await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(convId);
+      if (await tx.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(convId)) {
+        throw new Error('ACTIVE_GENERATION');
+      }
       await tx.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)').run(pendingUser.id, convId, 'user', pendingUser.content, pendingUser.content_text, 'done', pendingUser.timestamp);
       await attachUploadsToMessage(tx, pendingUser.id, user.sub, userContent);
+      await tx.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', '[]', '', ?, 'streaming', ?)`)
+        .run(assistantMsgId, convId, body.model, pendingUser.timestamp + 1);
+      await tx.prepare(`
+        INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, rate_lease_id, available_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+      `).run(assistantMsgId, convId, pendingUser.id, assistantMsgId, user.sub, JSON.stringify(generationSnapshot(cfg, body.model, openaiMessages, modelEntry.history_mode, pendingUser.content_text, existing.filter(message => message.role === 'user').length === 0)), rl.leaseId!, Date.now());
     });
   } catch (error) {
     await closeStream(rl.leaseId!).catch(() => {});
+    if ((error as Error).message === 'ACTIVE_GENERATION' || isActiveGenerationConflict(error)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
     throw error;
   }
-  return createChatResponse({ user, cfg, convId, model: body.model, modelEntry, openaiMessages, assistantMsgId: body.assistant_message_id ?? generateId(), acceptedUser: pendingUser, acceptedContent: body.new_user_message.content, isFirstExchange: existing.filter(message => message.role === 'user').length === 0, leaseId: rl.leaseId!, titlePrompt: pendingUser.content_text });
+  return createChatResponse({ user, convId, assistantMsgId, acceptedUser: pendingUser, acceptedContent: body.new_user_message.content });
 });
 
 relayRouter.post('/regenerate', async (c) => {
@@ -295,6 +254,7 @@ relayRouter.post('/regenerate', async (c) => {
   if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
   const db = getDb();
   if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(body.conversation_id, user.sub)) return c.json({ error: 'Not found' }, 404);
+  if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(body.conversation_id)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
   const stored = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<MessageRow>(body.conversation_id);
   const targetIndex = stored.findIndex(message => message.id === body.assistant_message_id && message.role === 'assistant');
   if (targetIndex < 1 || stored[targetIndex - 1].role !== 'user') return c.json({ error: 'Assistant message cannot be regenerated' }, 400);
@@ -304,31 +264,38 @@ relayRouter.post('/regenerate', async (c) => {
   const openaiMessages = await buildOpenaiMessages(retained.map(message => ({ role: message.role as 'user' | 'assistant', content: message.content })), userContent, body.system_prompt, modelEntry.history_mode, user.sub);
   const rl = await acquireStream(user.sub);
   if (!rl.allowed) return c.json({ error: rl.reason }, 429);
+  const assistantMsgId = generateId();
   try {
     await runTransaction(async tx => {
+      await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(body.conversation_id);
+      if (await tx.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(body.conversation_id)) {
+        throw new Error('ACTIVE_GENERATION');
+      }
       const uploadIds = await tx.prepare(`SELECT DISTINCT mu.upload_id FROM message_uploads mu JOIN messages m ON m.id=mu.message_id WHERE m.conversation_id=? AND (m.timestamp, m.id) >= (?, ?)`).all<{ upload_id: string }>(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
       await tx.prepare('DELETE FROM messages WHERE conversation_id=? AND (timestamp, id) >= (?, ?)').run(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
       await cleanupUnreferencedUploads(tx, user.sub, uploadIds.map(upload => upload.upload_id));
+      const assistantTimestamp = Math.max(Date.now(), userMessage.timestamp + 1);
+      await tx.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', '[]', '', ?, 'streaming', ?)`)
+        .run(assistantMsgId, body.conversation_id, body.model, assistantTimestamp);
+      await tx.prepare(`
+        INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, rate_lease_id, available_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+      `).run(assistantMsgId, body.conversation_id, userMessage.id, assistantMsgId, user.sub, JSON.stringify(generationSnapshot(cfg, body.model, openaiMessages, modelEntry.history_mode, contentPartsToText(userContent), false)), rl.leaseId!, Date.now());
     });
   } catch (error) {
     await closeStream(rl.leaseId!).catch(() => {});
+    if ((error as Error).message === 'ACTIVE_GENERATION' || isActiveGenerationConflict(error)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
     throw error;
   }
-  return createChatResponse({ user, cfg, convId: body.conversation_id, model: body.model, modelEntry, openaiMessages, assistantMsgId: generateId(), acceptedUser: userMessage, acceptedContent: userContent, isFirstExchange: false, leaseId: rl.leaseId!, titlePrompt: contentPartsToText(userContent) });
+  return createChatResponse({ user, convId: body.conversation_id, assistantMsgId, acceptedUser: userMessage, acceptedContent: userContent });
 });
 
-async function generateTitle(convId: string, model: string, cfg: ReturnType<typeof getConfig>, userPrompt: string, assistantResponse: string): Promise<string | null> {
-  try {
-    const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: cfg.conversation.auto_title_model || model, stream: false, max_tokens: 20, messages: [{ role: 'system', content: 'Return a 4-6 word title for this conversation. No punctuation, no quotes.' }, { role: 'user', content: `${userPrompt}\n\n${assistantResponse}`.slice(0, 2000) }] }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok) return null;
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const title = data.choices?.[0]?.message?.content?.trim().slice(0, 80);
-    if (title) await getDb().prepare("UPDATE conversations SET title=?, title_auto=true WHERE id=? AND title_auto=false AND title='New conversation'").run(title, convId);
-    return title ?? null;
-  } catch { return null; }
-}
+relayRouter.get('/generations/:id', async c => {
+  const generation = await getGeneration(c.req.param('id'), c.get('user').sub);
+  return generation ? c.json(generation) : c.json({ error: 'Not found' }, 404);
+});
+
+relayRouter.post('/generations/:id/cancel', async c => {
+  const generation = await cancelGeneration(c.req.param('id'), c.get('user').sub);
+  return generation ? c.json(generation) : c.json({ error: 'Not found' }, 404);
+});

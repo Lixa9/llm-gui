@@ -48,6 +48,15 @@ test('streamChat accepts CRLF-delimited SSE frames', async (t) => {
   assert.deepEqual(events.map(event => event.type), ['done']);
 });
 
+test('streamChat treats cancellation as a terminal event', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => responseWithEvents([
+    { type: 'cancelled', message: { id: 'a', status: 'aborted' } },
+  ]));
+  const events = [];
+  await streamChat(payload, new AbortController().signal, event => events.push(event));
+  assert.deepEqual(events.map(event => event.type), ['cancelled']);
+});
+
 test('streamChat rejects a response that closes without a terminal event', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => responseWithEvents([{ type: 'delta', content: 'partial' }]));
   await assert.rejects(

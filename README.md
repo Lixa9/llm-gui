@@ -5,16 +5,17 @@ A self-hosted Svelte chat UI and OpenAI-compatible streaming relay. The server s
 ## Features
 
 - Streaming chat with cancellation, regeneration, editing, forking, copying, and deletion.
+- Durable chat generations that continue after browser disconnects and restart safely after an application restart.
 - File attachments for common images, documents, spreadsheets, and text formats.
 - Conversation search, folders, drag-and-drop, pinning, and inline folder creation.
 - Personal prompts and model presets plus deployment-seeded shared definitions.
-- Optional scheduled automations.
+- Durable scheduled automations and automatic titles that recover after worker restarts.
 - OIDC SSO with two roles (`admin`, `user`).
 - One fixed local `admin`/`admin` account can be explicitly enabled for testing only.
 
 ## Architecture
 
-The web process is stateless. PostgreSQL stores conversations, messages, identities, sessions, preferences, uploads, rate-limit counters, and automation leases. Any replica can handle any request.
+The web process is stateless. PostgreSQL stores conversations, messages, identities, sessions, preferences, uploads, rate-limit counters, generation jobs, automation runs and delivery records, and title jobs. Any replica can handle any request. In-process maps, timers, and HTTP streams are only transient worker coordination; expired leases let another replica reclaim unfinished work.
 
 Uploaded bytes and extracted derivatives are stored in PostgreSQL, so the application has no required local data volume. Configuration files are deployment-owned and mounted read-only; they are reconciled into PostgreSQL at startup. The browser editor for server configuration has been removed.
 
@@ -87,7 +88,22 @@ storage:
 conversation:
   auto_title: true
   auto_title_model: "qwen3.5-0.8b"
+  # Limits apply to each generation attempt.
+  generation_max_duration_ms: 1800000
+  generation_idle_timeout_ms: 120000
+  # Maximum attempts for ordinary upstream failures. Worker-loss recovery does
+  # not consume this budget.
+  generation_max_attempts: 3
 ```
+
+Chat requests are committed as durable PostgreSQL jobs before the server sends
+the `accepted` event. Closing the tab, navigating away, losing the client
+connection, or logging out only detaches live streaming. The response continues
+in the background. If the application process disappears, another worker claims
+the expired job and restarts the generation from the beginning; partial text
+from the abandoned attempt is replaced so it cannot be duplicated. The Stop
+button is different: it records a durable cancellation and aborts the upstream
+request.
 
 `storage.quota` is a per-user quota for uploaded file data plus extracted text, derived images, and file metadata. Values use binary units, so `10G` means 10 GiB. `"0"` disables the quota. Uploads exceeding the quota are rejected with HTTP 507.
 
@@ -126,7 +142,16 @@ Models not listed in this file default to admin-only. `history_mode` is either `
 
 ```bash
 cd frontend && npm ci && npm run check && npm run build
-cd ../server && npm ci && npx tsc --noEmit
+cd ../server && npm ci && npm run typecheck && npm test
+```
+
+The durable worker integration suite requires an isolated PostgreSQL database
+and deliberately fails instead of silently skipping when it is invoked without
+one:
+
+```bash
+cd server
+GENERATION_TEST_DATABASE_URL=postgres://user:password@localhost/test_db npm run test:integration
 ```
 
 The server bundles as an ES module for Node.js 24+:

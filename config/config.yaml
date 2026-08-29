@@ -32,3 +32,9 @@ rate_limits:
 conversation:
   auto_title: true
   auto_title_model: "qwen3.5-0.8b"
+  # Durable generations are restarted after a lost worker lease. The duration
+  # limits bound each attempt; max_attempts applies to upstream failures, not
+  # worker-loss recovery.
+  generation_max_duration_ms: 1800000
+  generation_idle_timeout_ms: 120000
+  generation_max_attempts: 3
