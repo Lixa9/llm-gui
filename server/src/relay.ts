@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth';
 import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
@@ -10,6 +9,7 @@ import { logger } from './logger';
 import type { MessageContentPart, MessageRow, SessionPayload } from './types';
 import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads';
 import { trackBackgroundTask } from './lifecycle';
+import { createBackgroundSseResponse } from './background-sse';
 
 interface UploadRow {
   sha256: string;
@@ -27,10 +27,6 @@ interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: number;
-}
-
-function sse(data: unknown): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
@@ -147,7 +143,6 @@ async function buildOpenaiMessages(
 }
 
 interface StreamContext {
-  c: Context;
   user: SessionPayload;
   cfg: ReturnType<typeof getConfig>;
   convId: string;
@@ -162,101 +157,88 @@ interface StreamContext {
   titlePrompt: string;
 }
 
-// Hono's Context type is intentionally kept local to avoid exposing it in the
-// route contract; this helper only needs the request signal and authenticated
-// identity already established by the middleware.
-async function createChatResponse(context: StreamContext): Promise<Response> {
-  const { c, user, cfg, convId, model, modelEntry, openaiMessages, assistantMsgId, acceptedUser, acceptedContent, isFirstExchange, leaseId, titlePrompt } = context;
+function createChatResponse(context: StreamContext): Response {
+  const { user, cfg, convId, model, modelEntry, openaiMessages, assistantMsgId, acceptedUser, acceptedContent, isFirstExchange, leaseId, titlePrompt } = context;
   const db = getDb();
   const start = Date.now();
   let fullText = '';
   let assistantStored = false;
-  const stream = new ReadableStream({
-    async start(controller) {
-      controller.enqueue(sse({
-        type: 'accepted',
-        conversation_id: convId,
-        assistant_message_id: assistantMsgId,
-        user_message: { ...acceptedUser, content: safeParseJson<MessageContentPart[]>(acceptedUser.content, acceptedContent) },
-      }));
-      try {
-        const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
-          method: 'POST',
-          headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
-          signal: c.req.raw.signal,
-        });
-        if (!response.ok) {
-          const detail = (await response.text().catch(() => '')).slice(0, 500);
-          controller.enqueue(sse({ type: 'error', message: `upstream error ${response.status}${detail ? `: ${detail}` : ''}` }));
-          controller.close();
-          return;
-        }
-        if (!response.body) throw new Error('Upstream returned no response body');
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let done = false;
-        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-          buffer += decoder.decode(chunk, { stream: true });
-          const parts = buffer.split(/\r?\n\r?\n/);
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            for (const line of part.split(/\r?\n/)) {
-              if (!line.startsWith('data: ')) continue;
-              const data = line.slice(6).trim();
-              if (data === '[DONE]') { done = true; break; }
-              try {
-                const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
-                const delta = parsed.choices?.[0]?.delta?.content;
-                if (delta) { fullText += delta; controller.enqueue(sse({ type: 'delta', content: delta })); }
-              } catch { /* ignore malformed SSE frames */ }
-            }
-            if (done) break;
+  return createBackgroundSseResponse({
+    type: 'accepted',
+    conversation_id: convId,
+    assistant_message_id: assistantMsgId,
+    user_message: { ...acceptedUser, content: safeParseJson<MessageContentPart[]>(acceptedUser.content, acceptedContent) },
+  }, async client => {
+    try {
+      // The browser request signal is intentionally not forwarded. Navigation,
+      // logout, and tab closure only detach the SSE observer; this tracked task
+      // must continue consuming and persisting the upstream completion.
+      const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages: openaiMessages, stream: true, ...(modelEntry.history_mode === 'latest_only' ? { session_id: convId } : {}) }),
+      });
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 500);
+        client.send({ type: 'error', message: `upstream error ${response.status}${detail ? `: ${detail}` : ''}` });
+        return;
+      }
+      if (!response.body) throw new Error('Upstream returned no response body');
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let done = false;
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          for (const line of part.split(/\r?\n/)) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') { done = true; break; }
+            try {
+              const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) { fullText += delta; client.send({ type: 'delta', content: delta }); }
+            } catch { /* ignore malformed SSE frames */ }
           }
           if (done) break;
         }
-        // Keep the assistant after the accepted user message even when a very
-        // fast upstream responds within the same millisecond.
-        const assistantTimestamp = Math.max(Date.now(), acceptedUser.timestamp + 1);
-        if (!done) {
-          if (fullText) {
-            await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
-              .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
-            assistantStored = true;
-          }
-          controller.enqueue(sse({ type: 'error', message: 'Upstream stream ended before completion' }));
-          controller.close();
-          return;
-        }
-
-        await db.prepare(`
-          INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
-          VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
-        `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
-        assistantStored = true;
-        const assistant = await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(assistantMsgId);
-        controller.enqueue(sse({ type: 'done', message: assistant ? serializeMessage(assistant) : null }));
-        if (isFirstExchange && cfg.conversation.auto_title && fullText) {
-          trackBackgroundTask(generateTitle(convId, model, cfg, titlePrompt, fullText).catch(error => logger.warn('Automatic title generation failed', { error: String(error) })));
-        }
-        // The answer is complete at this point. Title generation is eventual
-        // work and must not keep the composer locked or hold the SSE open.
-        controller.close();
-      } catch (error) {
-        if ((error as Error).name === 'AbortError') {
-          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
-        } else {
-          if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
-          controller.enqueue(sse({ type: 'error', message: 'Upstream request failed' }));
-        }
-        controller.close();
-      } finally {
-        await closeStream(leaseId).catch(() => {});
-        logger.info('Chat response complete', { user_sub: user.sub, model, conv_id: convId, latency_ms: Date.now() - start, aborted: c.req.raw.signal.aborted });
+        if (done) break;
       }
-    },
+      // Keep the assistant after the accepted user message even when a very
+      // fast upstream responds within the same millisecond.
+      const assistantTimestamp = Math.max(Date.now(), acceptedUser.timestamp + 1);
+      if (!done) {
+        if (fullText) {
+          await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`)
+            .run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
+          assistantStored = true;
+        }
+        client.send({ type: 'error', message: 'Upstream stream ended before completion' });
+        return;
+      }
+
+      await db.prepare(`
+        INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp)
+        VALUES (?, ?, 'assistant', ?, ?, ?, 'done', ?)
+      `).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, assistantTimestamp);
+      assistantStored = true;
+      const assistant = await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(assistantMsgId);
+      client.send({ type: 'done', message: assistant ? serializeMessage(assistant) : null });
+      if (isFirstExchange && cfg.conversation.auto_title && fullText) {
+        trackBackgroundTask(generateTitle(convId, model, cfg, titlePrompt, fullText).catch(error => logger.warn('Automatic title generation failed', { error: String(error) })));
+      }
+    } catch (error) {
+      if (fullText && !assistantStored) await db.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', ?, ?, ?, 'aborted', ?)`).run(assistantMsgId, convId, JSON.stringify([{ type: 'text', text: fullText }]), fullText, model, Math.max(Date.now(), acceptedUser.timestamp + 1));
+      client.send({ type: 'error', message: 'Upstream request failed' });
+    } finally {
+      await closeStream(leaseId).catch(() => {});
+      logger.info('Chat response complete', { user_sub: user.sub, model, conv_id: convId, latency_ms: Date.now() - start });
+    }
+  }, error => {
+    logger.error('Detached chat task failed', { user_sub: user.sub, model, conv_id: convId, error: String(error) });
   });
-  return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' } });
 }
 
 async function findModel(userRole: string, model: string) {
@@ -299,7 +281,7 @@ relayRouter.post('/', async (c) => {
     await closeStream(rl.leaseId!).catch(() => {});
     throw error;
   }
-  return createChatResponse({ c, user, cfg, convId, model: body.model, modelEntry, openaiMessages, assistantMsgId: body.assistant_message_id ?? generateId(), acceptedUser: pendingUser, acceptedContent: body.new_user_message.content, isFirstExchange: existing.filter(message => message.role === 'user').length === 0, leaseId: rl.leaseId!, titlePrompt: pendingUser.content_text });
+  return createChatResponse({ user, cfg, convId, model: body.model, modelEntry, openaiMessages, assistantMsgId: body.assistant_message_id ?? generateId(), acceptedUser: pendingUser, acceptedContent: body.new_user_message.content, isFirstExchange: existing.filter(message => message.role === 'user').length === 0, leaseId: rl.leaseId!, titlePrompt: pendingUser.content_text });
 });
 
 relayRouter.post('/regenerate', async (c) => {
@@ -332,7 +314,7 @@ relayRouter.post('/regenerate', async (c) => {
     await closeStream(rl.leaseId!).catch(() => {});
     throw error;
   }
-  return createChatResponse({ c, user, cfg, convId: body.conversation_id, model: body.model, modelEntry, openaiMessages, assistantMsgId: generateId(), acceptedUser: userMessage, acceptedContent: userContent, isFirstExchange: false, leaseId: rl.leaseId!, titlePrompt: contentPartsToText(userContent) });
+  return createChatResponse({ user, cfg, convId: body.conversation_id, model: body.model, modelEntry, openaiMessages, assistantMsgId: generateId(), acceptedUser: userMessage, acceptedContent: userContent, isFirstExchange: false, leaseId: rl.leaseId!, titlePrompt: contentPartsToText(userContent) });
 });
 
 async function generateTitle(convId: string, model: string, cfg: ReturnType<typeof getConfig>, userPrompt: string, assistantResponse: string): Promise<string | null> {
