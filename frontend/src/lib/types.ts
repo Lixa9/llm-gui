@@ -37,7 +37,19 @@ export interface UploadResult {
   warning?: string;
 }
 
-export type MessageStatus = 'done' | 'aborted';
+export type MessageStatus = 'streaming' | 'done' | 'aborted' | 'timed_out' | 'failed';
+
+export type ChatGenerationStatus = 'queued' | 'running' | 'done' | 'cancelled' | 'timed_out' | 'failed';
+
+export interface ChatGeneration {
+  id: string;
+  conversation_id: string;
+  assistant_message_id: string;
+  status: ChatGenerationStatus;
+  attempt: number;
+  last_error: string | null;
+  message: Message | null;
+}
 
 export interface Message {
   id: string;
@@ -124,7 +136,7 @@ export interface Automation {
   deleted_at: number | null;
 }
 
-export type AutomationRunStatus = 'running' | 'done' | 'error';
+export type AutomationRunStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface AutomationRun {
   id: string;
@@ -147,6 +159,7 @@ export type SSEEvent =
   | { type: 'accepted'; conversation_id: string; assistant_message_id: string; user_message: Message }
   | { type: 'delta'; content: string }
   | { type: 'done'; message: Message | null }
+  | { type: 'cancelled'; message: Message | null }
   | { type: 'title'; title: string }
   | { type: 'error'; message: string };
 

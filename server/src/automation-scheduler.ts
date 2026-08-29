@@ -1,27 +1,21 @@
-import { generateId, getDb, safeParseJson } from './db/index';
+import { getDb, safeParseJson } from './db/index';
 import { logger } from './logger';
 import { intervalMs, parseScheduledDefinition } from './automation-definition';
-import { runAutomation } from './automation-runner';
+import { enqueueAutomationRun } from './automation-runner';
 import type { AutomationRow } from './types';
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 let schedulerRunning = false;
 
-interface ClaimedAutomation {
-  row: AutomationRow;
-  runId: string;
-}
-
-async function claimDueAutomation(): Promise<ClaimedAutomation | null> {
+async function enqueueDueAutomation(): Promise<boolean> {
   const now = Date.now();
   return getDb().transaction(async db => {
     const row = await db.prepare('SELECT * FROM automations WHERE enabled=true AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at<=? ORDER BY next_run_at LIMIT 1 FOR UPDATE SKIP LOCKED').get<AutomationRow>(now);
-    if (!row) return null;
+    if (!row) return false;
     const definition = parseScheduledDefinition(safeParseJson<unknown>(row.definition, {}));
-    const runId = generateId();
     await db.prepare('UPDATE automations SET next_run_at=? WHERE id=?').run(now + intervalMs(definition), row.id);
-    await db.prepare('INSERT INTO automation_runs (id, automation_id, status) VALUES (?, ?, ?)').run(runId, row.id, 'running');
-    return { row, runId };
+    await enqueueAutomationRun(db, row, 'scheduled');
+    return true;
   });
 }
 
@@ -29,8 +23,11 @@ async function schedulerTick(): Promise<void> {
   if (schedulerRunning) return;
   schedulerRunning = true;
   try {
-    const claimed = await claimDueAutomation();
-    if (claimed) await runAutomation(claimed.row, 'scheduled', undefined, claimed.runId);
+    // Drain a bounded batch so a restart does not make overdue automations wait
+    // an additional scheduler interval one at a time.
+    for (let index = 0; index < 20; index++) {
+      if (!await enqueueDueAutomation()) break;
+    }
   } catch (error) {
     logger.error('Automation scheduler tick failed', { error: String(error) });
   } finally {

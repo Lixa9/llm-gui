@@ -26,7 +26,29 @@ export interface FilePart {
 
 export type MessageContentPart = ContentPart | ImageUrlPart | FilePart;
 
-export type MessageStatus = 'done' | 'aborted';
+export type MessageStatus = 'streaming' | 'done' | 'aborted' | 'timed_out' | 'failed';
+
+export type ChatGenerationStatus = 'queued' | 'running' | 'done' | 'cancelled' | 'timed_out' | 'failed';
+
+export interface ChatGenerationRow {
+  id: string;
+  conversation_id: string;
+  user_message_id: string;
+  assistant_message_id: string;
+  owner_sub: string;
+  request_snapshot: unknown;
+  status: ChatGenerationStatus;
+  attempt: number;
+  failure_count: number;
+  lease_owner: string | null;
+  lease_until: number | null;
+  rate_lease_id: string | null;
+  last_error: string | null;
+  available_at: number;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
 
 // DB row types (snake_case)
 export interface UserRow {
@@ -113,8 +135,35 @@ export interface AutomationRunRow {
   automation_id: string;
   started_at: number;
   conversation_id: string | null;
-  status: string;
+  status: 'queued' | 'running' | 'done' | 'error';
   error: string | null;
+  source: 'scheduled' | 'manual';
+  definition_snapshot: unknown;
+  result_text: string | null;
+  attempt: number;
+  failure_count: number;
+  available_at: number;
+  lease_owner: string | null;
+  lease_until: number | null;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+export interface ConversationTitleJobRow {
+  id: string;
+  generation_id: string;
+  conversation_id: string;
+  request_snapshot: unknown;
+  status: 'queued' | 'running' | 'done' | 'skipped' | 'failed';
+  attempt: number;
+  failure_count: number;
+  available_at: number;
+  lease_owner: string | null;
+  lease_until: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
 }
 
 // Session identity loaded from the server-side session record.
@@ -160,6 +209,9 @@ export interface AppConfig {
   conversation: {
     auto_title: boolean;
     auto_title_model: string;
+    generation_max_duration_ms: number;
+    generation_idle_timeout_ms: number;
+    generation_max_attempts: number;
   };
   models?: ModelYamlEntry[];
   prompts?: PromptYamlEntry[];

@@ -22,7 +22,8 @@
   let { message, conversationId, isStreaming = false, isPending = false, onEdit, onRegenerate, onDelete, onFork }: Props = $props();
 
   const isFullMessage = $derived('id' in message && !isPending);
-  const isActionable = $derived(isFullMessage && !(message as Message).delivery_status);
+  const isPersistedStreaming = $derived(isFullMessage && (message as Message).status === 'streaming');
+  const isActionable = $derived(isFullMessage && !isPersistedStreaming && !(message as Message).delivery_status);
 
 
 
@@ -71,6 +72,10 @@
         {/if}
         {#if (message as Message).status === 'aborted'}
           <Badge variant="warning">stopped</Badge>
+        {:else if (message as Message).status === 'timed_out'}
+          <Badge variant="warning">timed out</Badge>
+        {:else if (message as Message).status === 'failed'}
+          <Badge variant="warning">failed</Badge>
         {/if}
         {#if (message as Message).delivery_status === 'sending'}
           <Badge variant="muted">sending</Badge>
@@ -88,11 +93,11 @@
     <MessageContent
       role={message.role}
       {content}
-      streaming={isPending && isStreaming}
+      streaming={(isPending || isPersistedStreaming) && isStreaming}
       streamingText={isPending ? (message as PendingMessage).content : undefined}
     />
 
-    {#if isPending && isStreaming}
+    {#if (isPending || isPersistedStreaming) && isStreaming}
       <StreamingCursor />
     {/if}
 

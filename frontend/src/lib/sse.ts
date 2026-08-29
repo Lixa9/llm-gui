@@ -48,7 +48,7 @@ export async function streamChat(
           if (!data) continue;
           try {
             const event = JSON.parse(data) as SSEEvent;
-            if (event.type === 'done' || event.type === 'error') terminalEvent = true;
+            if (event.type === 'done' || event.type === 'cancelled' || event.type === 'error') terminalEvent = true;
             onEvent(event);
           } catch {
             // malformed chunk, skip

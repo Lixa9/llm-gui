@@ -4,7 +4,7 @@ import { requireAuth } from './auth';
 import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
 import type { TxDb } from './db/index';
 import type { ConversationRow, MessageRow } from './types';
-import { attachUploadsToMessage, cleanupUnreferencedUploads, deleteAllUploadsForUser, uploadIdsForConversation } from './uploads';
+import { attachUploadsToMessage, cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads';
 
 export const conversationsRouter = new Hono();
 conversationsRouter.use('*', requireAuth);
@@ -145,8 +145,16 @@ conversationsRouter.patch('/:id', async (c) => {
 
 conversationsRouter.delete('/', async (c) => {
   const user = c.get('user');
-  await deleteAllUploadsForUser(user.sub);
-  await getDb().prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
+  await runTransaction(async db => {
+    const conversations = await db.prepare('SELECT id FROM conversations WHERE owner_sub=? ORDER BY id').all<{ id: string }>(user.sub);
+    for (const conversation of conversations) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(conversation.id);
+    // Match the worker's generation-row-first lock order so finalization and
+    // deletion cannot deadlock or resurrect a response.
+    await db.prepare(`SELECT g.id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.owner_sub=? FOR UPDATE`).all(user.sub);
+    await db.prepare(`DELETE FROM stream_leases WHERE id IN (SELECT g.rate_lease_id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.owner_sub=?)`).run(user.sub);
+    await db.prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
+    await db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(user.sub);
+  });
   return c.body(null, 204);
 });
 
@@ -154,6 +162,9 @@ conversationsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   await runTransaction(async db => {
+    await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(id);
+    await db.prepare(`SELECT g.id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.id=? AND c.owner_sub=? FOR UPDATE`).all(id, user.sub);
+    await db.prepare(`DELETE FROM stream_leases WHERE id IN (SELECT g.rate_lease_id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.id=? AND c.owner_sub=?)`).run(id, user.sub);
     const uploadIds = await uploadIdsForConversation(db, id);
     await db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
     await cleanupUnreferencedUploads(db, user.sub, uploadIds);
@@ -163,18 +174,29 @@ conversationsRouter.delete('/:id', async (c) => {
 
 conversationsRouter.post('/:id/duplicate', async (c) => {
   const user = c.get('user');
-  const src = await getDb().prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=?').get<ConversationRow>(c.req.param('id'), user.sub);
-  if (!src) return c.json({ error: 'Not found' }, 404);
-  const copy = await runTransaction(async db => {
-    const id = generateId();
-    await db.prepare(`
-      INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
-    await copyMessages(db, src.id, id);
-    return db.prepare('SELECT * FROM conversations WHERE id=?').get<ConversationRow>(id);
-  });
-  return copy ? c.json(serializeConversation(copy), 201) : c.json({ error: 'Failed to duplicate' }, 500);
+  const sourceId = c.req.param('id');
+  try {
+    const copy = await runTransaction(async db => {
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(sourceId);
+      const src = await db.prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=?').get<ConversationRow>(sourceId, user.sub);
+      if (!src) throw new Error('COPY_NOT_FOUND');
+      if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(src.id)) {
+        throw new Error('COPY_ACTIVE_GENERATION');
+      }
+      const id = generateId();
+      await db.prepare(`
+        INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, folder_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, user.sub, `${src.title} (copy)`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.folder_id);
+      await copyMessages(db, src.id, id);
+      return db.prepare('SELECT * FROM conversations WHERE id=?').get<ConversationRow>(id);
+    });
+    return copy ? c.json(serializeConversation(copy), 201) : c.json({ error: 'Failed to duplicate' }, 500);
+  } catch (error) {
+    if ((error as Error).message === 'COPY_NOT_FOUND') return c.json({ error: 'Not found' }, 404);
+    if ((error as Error).message === 'COPY_ACTIVE_GENERATION') return c.json({ error: 'Wait for the active response before duplicating this conversation' }, 409);
+    throw error;
+  }
 });
 
 conversationsRouter.post('/:id/fork', async (c) => {
@@ -182,21 +204,33 @@ conversationsRouter.post('/:id/fork', async (c) => {
   const parsedBody = z.object({ message_id: z.string().uuid() }).safeParse(await c.req.json());
   if (!parsedBody.success) return c.json({ error: 'message_id is required' }, 400);
   const body = parsedBody.data;
-  const src = await getDb().prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=?').get<ConversationRow>(c.req.param('id'), user.sub);
-  if (!src) return c.json({ error: 'Not found' }, 404);
-  if (!await getDb().prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(body.message_id, src.id)) {
-    return c.json({ error: 'Message not found' }, 404);
+  const sourceId = c.req.param('id');
+  try {
+    const fork = await runTransaction(async db => {
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(sourceId);
+      const src = await db.prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=?').get<ConversationRow>(sourceId, user.sub);
+      if (!src) throw new Error('FORK_NOT_FOUND');
+      if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(src.id)) {
+        throw new Error('FORK_ACTIVE_GENERATION');
+      }
+      if (!await db.prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(body.message_id, src.id)) {
+        throw new Error('FORK_MESSAGE_NOT_FOUND');
+      }
+      const id = generateId();
+      await db.prepare(`
+        INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
+      await copyMessages(db, src.id, id, body.message_id);
+      return db.prepare('SELECT * FROM conversations WHERE id=?').get<ConversationRow>(id);
+    });
+    return fork ? c.json(serializeConversation(fork), 201) : c.json({ error: 'Failed to fork' }, 500);
+  } catch (error) {
+    if ((error as Error).message === 'FORK_NOT_FOUND') return c.json({ error: 'Not found' }, 404);
+    if ((error as Error).message === 'FORK_MESSAGE_NOT_FOUND') return c.json({ error: 'Message not found' }, 404);
+    if ((error as Error).message === 'FORK_ACTIVE_GENERATION') return c.json({ error: 'Wait for the active response before forking this conversation' }, 409);
+    throw error;
   }
-  const fork = await runTransaction(async db => {
-    const id = generateId();
-    await db.prepare(`
-      INSERT INTO conversations (id, owner_sub, title, model_id, preset_id, system_prompt_id, custom_system_prompt, forked_from_id, forked_at_message_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, user.sub, `Fork of: ${src.title}`, src.model_id, src.preset_id, src.system_prompt_id, src.custom_system_prompt, src.id, body.message_id);
-    await copyMessages(db, src.id, id, body.message_id);
-    return db.prepare('SELECT * FROM conversations WHERE id=?').get<ConversationRow>(id);
-  });
-  return fork ? c.json(serializeConversation(fork), 201) : c.json({ error: 'Failed to fork' }, 500);
 });
 
 conversationsRouter.get('/:id/messages', async (c) => {
@@ -213,16 +247,25 @@ conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
   if (typeof body.content !== 'string' || body.content.length > 1_000_000) return c.json({ error: 'Invalid message content' }, 400);
   if (!await getDb().prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(id, user.sub)) return c.json({ error: 'Not found' }, 404);
   const msgId = c.req.param('msgId');
-  const row = await runTransaction(async db => {
-    if (!await db.prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(msgId, id)) return undefined;
-    const oldUploads = await db.prepare('SELECT upload_id FROM message_uploads WHERE message_id=?').all<{ upload_id: string }>(msgId);
-    await db.prepare('DELETE FROM message_uploads WHERE message_id=?').run(msgId);
-    await db.prepare('UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?')
-      .run(JSON.stringify([{ type: 'text', text: body.content }]), body.content, Date.now(), msgId, id);
-    await cleanupUnreferencedUploads(db, user.sub, oldUploads.map(upload => upload.upload_id));
-    return db.prepare('SELECT * FROM messages WHERE id=? AND conversation_id=?').get<MessageRow>(msgId, id);
-  });
-  return row ? c.json(serializeMessage(row)) : c.json({ error: 'Not found' }, 404);
+  try {
+    const row = await runTransaction(async db => {
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(id);
+      if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(id)) {
+        throw new Error('EDIT_ACTIVE_GENERATION');
+      }
+      if (!await db.prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(msgId, id)) return undefined;
+      const oldUploads = await db.prepare('SELECT upload_id FROM message_uploads WHERE message_id=?').all<{ upload_id: string }>(msgId);
+      await db.prepare('DELETE FROM message_uploads WHERE message_id=?').run(msgId);
+      await db.prepare('UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?')
+        .run(JSON.stringify([{ type: 'text', text: body.content }]), body.content, Date.now(), msgId, id);
+      await cleanupUnreferencedUploads(db, user.sub, oldUploads.map(upload => upload.upload_id));
+      return db.prepare('SELECT * FROM messages WHERE id=? AND conversation_id=?').get<MessageRow>(msgId, id);
+    });
+    return row ? c.json(serializeMessage(row)) : c.json({ error: 'Not found' }, 404);
+  } catch (error) {
+    if ((error as Error).message === 'EDIT_ACTIVE_GENERATION') return c.json({ error: 'Cannot edit messages while a response is in progress' }, 409);
+    throw error;
+  }
 });
 
 conversationsRouter.delete('/:id/messages/:msgId', async (c) => {
@@ -232,6 +275,16 @@ conversationsRouter.delete('/:id/messages/:msgId', async (c) => {
   const message = await getDb().prepare('SELECT id, timestamp FROM messages WHERE id=? AND conversation_id=?').get<{ id: string; timestamp: number }>(c.req.param('msgId'), id);
   if (!message) return c.body(null, 204);
   await runTransaction(async db => {
+    await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(id);
+    await db.prepare('SELECT id FROM chat_generations WHERE conversation_id=? FOR UPDATE').all(id);
+    await db.prepare(`
+      DELETE FROM stream_leases WHERE id IN (
+        SELECT g.rate_lease_id FROM chat_generations g
+        JOIN messages assistant ON assistant.id=g.assistant_message_id
+        JOIN messages prompt ON prompt.id=g.user_message_id
+        WHERE g.conversation_id=? AND ((assistant.timestamp, assistant.id) >= (?, ?) OR (prompt.timestamp, prompt.id) >= (?, ?))
+      )
+    `).run(id, message.timestamp, message.id, message.timestamp, message.id);
     const uploadIds = await db.prepare(`
       SELECT DISTINCT mu.upload_id
       FROM message_uploads mu JOIN messages m ON m.id=mu.message_id

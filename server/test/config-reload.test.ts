@@ -37,6 +37,9 @@ test('successful reload reconciles the candidate before committing it', async ()
   assert.equal(reloaded, true);
   assert.equal(reconciledName, 'After');
   assert.equal(getConfig().app.name, 'After');
+  assert.equal(getConfig().conversation.generation_max_duration_ms, 30 * 60 * 1000);
+  assert.equal(getConfig().conversation.generation_idle_timeout_ms, 2 * 60 * 1000);
+  assert.equal(getConfig().conversation.generation_max_attempts, 3);
 });
 
 test('invalid reload keeps the last valid configuration', async () => {

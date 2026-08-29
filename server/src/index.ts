@@ -22,6 +22,9 @@ import { purgeOrphanUploads, uploadsRouter } from './uploads';
 import { logger } from './logger';
 import { sweepBuckets } from './ratelimit';
 import { waitForBackgroundTasks } from './lifecycle';
+import { beginGenerationShutdown, initGenerationWorker, releaseGenerationJobs } from './generation-worker';
+import { beginAutomationShutdown, initAutomationWorker, releaseAutomationJobs } from './automation-runner';
+import { beginTitleShutdown, initTitleWorker, releaseTitleJobs } from './title-worker';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
@@ -143,6 +146,9 @@ app.get('*', async (c) => {
 
 // Init scheduler
 await initScheduler();
+initGenerationWorker();
+initAutomationWorker();
+initTitleWorker();
 
 // Periodic backend connectivity warning
 const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -209,6 +215,9 @@ async function handleShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   isShuttingDown = true;
+  beginGenerationShutdown();
+  beginAutomationShutdown();
+  beginTitleShutdown();
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
   // Stop accepting new connections, but keep the database open until active
@@ -246,6 +255,12 @@ async function handleShutdown(signal: string) {
   stopScheduler();
 
   await waitForBackgroundTasks(10_000);
+  await Promise.all([
+    releaseGenerationJobs().catch(error => logger.error('Failed to release generation jobs', { error: String(error) })),
+    releaseAutomationJobs().catch(error => logger.error('Failed to release automation jobs', { error: String(error) })),
+    releaseTitleJobs().catch(error => logger.error('Failed to release title jobs', { error: String(error) })),
+  ]);
+  await waitForBackgroundTasks(2_000);
 
   try {
     await closeDatabase();

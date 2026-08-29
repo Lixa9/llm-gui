@@ -74,6 +74,9 @@ const configSchema = z.object({
   conversation: z.object({
     auto_title: z.boolean().default(true),
     auto_title_model: z.string().default('qwen3.5-0.8b'),
+    generation_max_duration_ms: z.number().int().min(1_000).max(24 * 60 * 60 * 1000).default(30 * 60 * 1000),
+    generation_idle_timeout_ms: z.number().int().min(1_000).max(60 * 60 * 1000).default(2 * 60 * 1000),
+    generation_max_attempts: z.number().int().min(1).max(20).default(3),
   }).default({}),
 });
 

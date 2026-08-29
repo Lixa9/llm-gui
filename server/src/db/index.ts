@@ -233,6 +233,31 @@ async function applySchema(db: Db): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp, id);
     CREATE INDEX IF NOT EXISTS idx_msg_search ON messages USING GIN (to_tsvector('simple', content_text));
 
+    CREATE TABLE IF NOT EXISTS chat_generations (
+      id UUID PRIMARY KEY,
+      conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      assistant_message_id UUID NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+      owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      request_snapshot JSONB NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'cancelled', 'timed_out', 'failed')),
+      attempt INTEGER NOT NULL DEFAULT 0,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_until BIGINT,
+      rate_lease_id UUID,
+      last_error TEXT,
+      available_at BIGINT NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      completed_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_generations_claim ON chat_generations(status, available_at, lease_until);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_generations_one_active_conversation
+      ON chat_generations(conversation_id)
+      WHERE status IN ('queued', 'running');
+    ALTER TABLE chat_generations ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
+
     CREATE TABLE IF NOT EXISTS automations (
       id UUID PRIMARY KEY,
       owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
@@ -258,9 +283,58 @@ async function applySchema(db: Db): Promise<void> {
       automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
       started_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
       conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-      status TEXT NOT NULL DEFAULT 'running',
-      error TEXT
+      status TEXT NOT NULL DEFAULT 'queued',
+      error TEXT,
+      source TEXT NOT NULL DEFAULT 'scheduled',
+      definition_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      result_text TEXT,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      available_at BIGINT NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_until BIGINT,
+      updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      completed_at BIGINT
     );
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'scheduled';
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS definition_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS result_text TEXT;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS available_at BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS lease_until BIGINT;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint;
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at BIGINT;
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_claim ON automation_runs(status, available_at, lease_until);
+
+    CREATE TABLE IF NOT EXISTS automation_run_deliveries (
+      run_id UUID NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued',
+      conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+      error TEXT,
+      completed_at BIGINT,
+      PRIMARY KEY (run_id, user_sub)
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_title_jobs (
+      id UUID PRIMARY KEY,
+      generation_id UUID NOT NULL UNIQUE REFERENCES chat_generations(id) ON DELETE CASCADE,
+      conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      request_snapshot JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'skipped', 'failed')),
+      attempt INTEGER NOT NULL DEFAULT 0,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      available_at BIGINT NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_until BIGINT,
+      last_error TEXT,
+      created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+      completed_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversation_title_jobs_claim ON conversation_title_jobs(status, available_at, lease_until);
 
     CREATE TABLE IF NOT EXISTS uploads (
       id UUID PRIMARY KEY,
@@ -347,6 +421,22 @@ async function applySchema(db: Db): Promise<void> {
         ALTER TABLE users DROP CONSTRAINT IF EXISTS users_last_known_role_check;
         ALTER TABLE users ADD CONSTRAINT users_last_known_role_check CHECK (last_known_role IN ('admin', 'user'));
         INSERT INTO schema_migrations(version) VALUES ('003_persist_user_role');
+      END IF;
+    END $$;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '005_durable_background_jobs') THEN
+        -- Old running automation rows have no immutable recipient snapshot and
+        -- may already have produced side effects. Replaying them would be less
+        -- safe than recording that deployment interruption explicitly.
+        UPDATE automation_runs
+        SET status='error', error=COALESCE(error, 'Interrupted before durable automation recovery was enabled'),
+          lease_owner=NULL, lease_until=NULL,
+          updated_at=(extract(epoch from now()) * 1000)::bigint,
+          completed_at=(extract(epoch from now()) * 1000)::bigint
+        WHERE status='running';
+        INSERT INTO schema_migrations(version) VALUES ('005_durable_background_jobs');
       END IF;
     END $$;
 
