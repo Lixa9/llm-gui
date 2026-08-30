@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireAuth } from './auth';
-import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
-import type { TxDb } from './db/index';
-import type { ConversationRow, MessageRow } from './types';
-import { attachUploadsToMessage, cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId, runTransaction, safeParseJson } from './db/index.ts';
+import type { TxDb } from './db/index.ts';
+import type { ConversationRow, MessageRow } from './types.ts';
+import { attachUploadsToMessage, cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads.ts';
 
 export const conversationsRouter = new Hono();
 conversationsRouter.use('*', requireAuth);

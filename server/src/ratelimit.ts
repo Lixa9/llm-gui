@@ -1,5 +1,5 @@
-import { getConfig } from './config';
-import { getDb, generateId } from './db/index';
+import { getConfig } from './config.ts';
+import { getDb, generateId } from './db/index.ts';
 
 export interface RateLimitResult { allowed: boolean; reason?: string; }
 

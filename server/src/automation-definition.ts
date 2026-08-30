@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ScheduledDefinition } from './types';
+import type { ScheduledDefinition } from './types.ts';
 
 export const scheduledDefinitionSchema = z.object({
   interval: z.coerce.number().int().min(1),

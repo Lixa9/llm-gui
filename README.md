@@ -154,13 +154,21 @@ cd server
 GENERATION_TEST_DATABASE_URL=postgres://user:password@localhost/test_db npm run test:integration
 ```
 
-The server bundles as an ES module for Node.js 24+:
+The server uses strict, erasable TypeScript and runs directly on Node.js 26:
 
 ```bash
-node_modules/.bin/esbuild src/index.ts \
-  --bundle --platform=node --target=node24 --packages=external \
-  --format=esm --outfile=dist/index.js
+cd server
+npm run typecheck
+node src/index.ts
 ```
+
+## Continuous integration
+
+Gitea Actions audits production dependencies and runs strict server typechecking,
+server and frontend unit tests, the PostgreSQL integration suite, Svelte diagnostics, and the frontend build for
+pushes and pull requests. After those checks pass, it builds the production
+image. Pushes to `main` publish both the commit SHA and `latest` tags to
+`git.control.lan`; registry authentication uses the repository secret `PACKAGE`.
 
 ## Data and upgrades
 

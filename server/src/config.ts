@@ -2,8 +2,8 @@ import { readFileSync, accessSync, constants, writeFileSync, mkdirSync } from 'f
 import { join } from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { z } from 'zod';
-import type { AppConfig } from './types';
-import { logger } from './logger';
+import type { AppConfig } from './types.ts';
+import { logger } from './logger.ts';
 
 const CONFIG_DIR = process.env.CONFIG_DIR ?? '/app/config';
 
@@ -225,7 +225,7 @@ export interface ReloadConfigDependencies {
 }
 
 async function invalidateConfigCaches(): Promise<void> {
-  const [models, auth] = await Promise.all([import('./models'), import('./auth')]);
+  const [models, auth] = await Promise.all([import('./models.ts'), import('./auth.ts')]);
   models.invalidateModelCache();
   auth.invalidateAuthDiscoveryCache();
 }
@@ -235,7 +235,7 @@ async function performReload(dependencies: ReloadConfigDependencies): Promise<bo
   try {
     const candidate = readConfig();
     const reconcile = dependencies.reconcile ?? (async (config: AppConfig) => {
-      const module = await import('./reconcile');
+      const module = await import('./reconcile.ts');
       await module.reconcileYaml(config);
     });
     await reconcile(candidate);

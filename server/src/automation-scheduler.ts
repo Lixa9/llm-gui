@@ -1,8 +1,8 @@
-import { getDb, safeParseJson } from './db/index';
-import { logger } from './logger';
-import { intervalMs, parseScheduledDefinition } from './automation-definition';
-import { enqueueAutomationRun } from './automation-runner';
-import type { AutomationRow } from './types';
+import { getDb, safeParseJson } from './db/index.ts';
+import { logger } from './logger.ts';
+import { intervalMs, parseScheduledDefinition } from './automation-definition.ts';
+import { enqueueAutomationRun } from './automation-runner.ts';
+import type { AutomationRow } from './types.ts';
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 let schedulerRunning = false;

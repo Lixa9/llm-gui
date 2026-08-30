@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { intervalMs, nextRunAt, parseScheduledDefinition, scheduledDefinitionSchema } from '../src/automation-definition';
-import { parseStorageSize } from '../src/config';
+import { intervalMs, nextRunAt, parseScheduledDefinition, scheduledDefinitionSchema } from '../src/automation-definition.ts';
+import { parseStorageSize } from '../src/config.ts';
 
 test('human-readable storage quotas use binary units', () => {
   assert.equal(parseStorageSize('10G'), 10 * 1024 ** 3);

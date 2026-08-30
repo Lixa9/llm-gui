@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config';
-import { getDb, runTransaction, safeParseJson } from './db/index';
-import { logger } from './logger';
-import { closeStream } from './ratelimit';
-import { trackBackgroundTask } from './lifecycle';
-import { enqueueTitleJob } from './title-worker';
-import type { BackgroundSseClient } from './background-sse';
-import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow } from './types';
+import { getConfig } from './config.ts';
+import { getDb, runTransaction, safeParseJson } from './db/index.ts';
+import { logger } from './logger.ts';
+import { closeStream } from './ratelimit.ts';
+import { trackBackgroundTask } from './lifecycle.ts';
+import { enqueueTitleJob } from './title-worker.ts';
+import type { BackgroundSseClient } from './background-sse.ts';
+import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow } from './types.ts';
 
 interface GenerationSnapshot {
   model: string;

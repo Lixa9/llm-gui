@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireAuth } from './auth';
-import { getDb, generateId, safeParseJson } from './db/index';
-import type { SystemPromptRow } from './types';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId, safeParseJson } from './db/index.ts';
+import type { SystemPromptRow } from './types.ts';
 
 const promptSchema = z.object({ name: z.string().trim().min(1).max(200), content: z.string().max(100_000) });
 export const promptsRouter = new Hono();

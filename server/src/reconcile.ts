@@ -1,8 +1,8 @@
-import { getDb, generateId } from './db/index';
-import type { TxDb } from './db/index';
-import { getConfig } from './config';
-import { scheduledDefinitionSchema } from './automation-definition';
-import { logger } from './logger';
+import { getDb, generateId } from './db/index.ts';
+import type { TxDb } from './db/index.ts';
+import { getConfig } from './config.ts';
+import { scheduledDefinitionSchema } from './automation-definition.ts';
+import { logger } from './logger.ts';
 
 type ExistingResource = {
   id: string;

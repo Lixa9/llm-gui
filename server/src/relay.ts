@@ -1,15 +1,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireAuth } from './auth';
-import { getDb, generateId, runTransaction, safeParseJson } from './db/index';
-import { getConfig } from './config';
-import { acquireStream, closeStream } from './ratelimit';
-import { fetchModels } from './models';
-import { logger } from './logger';
-import type { MessageContentPart, MessageRow, SessionPayload } from './types';
-import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads';
-import { createBackgroundSseResponse } from './background-sse';
-import { cancelGeneration, getGeneration, isActiveGenerationConflict, runGeneration } from './generation-worker';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId, runTransaction, safeParseJson } from './db/index.ts';
+import { getConfig } from './config.ts';
+import { acquireStream, closeStream } from './ratelimit.ts';
+import { fetchModels } from './models.ts';
+import { logger } from './logger.ts';
+import type { MessageContentPart, MessageRow, SessionPayload } from './types.ts';
+import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads.ts';
+import { createBackgroundSseResponse } from './background-sse.ts';
+import { cancelGeneration, getGeneration, isActiveGenerationConflict, runGeneration } from './generation-worker.ts';
 
 interface UploadRow {
   sha256: string;

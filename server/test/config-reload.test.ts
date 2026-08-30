@@ -7,7 +7,7 @@ import test from 'node:test';
 const configDir = await mkdtemp(join(tmpdir(), 'llm-gui-config-'));
 process.env.CONFIG_DIR = configDir;
 
-const { getConfig, loadConfig, reloadConfig } = await import('../src/config');
+const { getConfig, loadConfig, reloadConfig } = await import('../src/config.ts');
 
 async function writeConfigs(appName: string): Promise<void> {
   await Promise.all([

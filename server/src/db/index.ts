@@ -1,5 +1,5 @@
 import { Pool, types as pgTypes, type PoolClient, type QueryResultRow } from 'pg';
-import { logger } from '../logger';
+import { logger } from '../logger.ts';
 
 // Keep millisecond timestamps ergonomic for the existing API contracts.
 pgTypes.setTypeParser(20, value => Number.parseInt(value, 10));
@@ -9,7 +9,11 @@ pgTypes.setTypeParser(20, value => Number.parseInt(value, 10));
  * route modules use parameterized SQL without coupling them to a query builder.
  */
 export class Db {
-  constructor(private readonly pool: Pool) {}
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   prepare(sql: string): Stmt {
     return new Stmt(this.pool, sql);
@@ -57,7 +61,11 @@ export class Db {
 }
 
 class QueryDb {
-  constructor(protected readonly client: Pool | PoolClient) {}
+  protected readonly client: Pool | PoolClient;
+
+  constructor(client: Pool | PoolClient) {
+    this.client = client;
+  }
 
   prepare(sql: string): Stmt {
     return new Stmt(this.client, sql);
@@ -67,7 +75,13 @@ class QueryDb {
 export class TxDb extends QueryDb {}
 
 class Stmt {
-  constructor(private readonly client: Pool | PoolClient, private readonly sql: string) {}
+  private readonly client: Pool | PoolClient;
+  private readonly sql: string;
+
+  constructor(client: Pool | PoolClient, sql: string) {
+    this.client = client;
+    this.sql = sql;
+  }
 
   async run(...params: unknown[]): Promise<{ changes: number }> {
     const result = await this.client.query(this.convert(), params);

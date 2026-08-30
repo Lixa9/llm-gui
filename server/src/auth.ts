@@ -4,10 +4,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
 import type { Context, Next } from 'hono';
-import { getConfig } from './config';
-import { getDb, generateId } from './db/index';
-import { logger } from './logger';
-import type { Role, SessionPayload } from './types';
+import { getConfig } from './config.ts';
+import { getDb, generateId } from './db/index.ts';
+import { logger } from './logger.ts';
+import type { Role, SessionPayload } from './types.ts';
 
 const sessionRowSchema = z.object({
   id: z.string(),

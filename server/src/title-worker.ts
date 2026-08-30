@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config';
-import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index';
-import { trackBackgroundTask } from './lifecycle';
-import { logger } from './logger';
-import type { ConversationTitleJobRow } from './types';
+import { getConfig } from './config.ts';
+import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
+import { trackBackgroundTask } from './lifecycle.ts';
+import { logger } from './logger.ts';
+import type { ConversationTitleJobRow } from './types.ts';
 
 interface TitleRequestSnapshot {
   model: string;

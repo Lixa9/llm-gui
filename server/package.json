@@ -4,12 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts",
-    "test": "node --import tsx --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts",
-    "test:integration": "node --import tsx test/integration-runner.ts",
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "test": "node --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts",
+    "test:integration": "node test/integration-runner.ts",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --packages=external --format=esm --outfile=dist/index.js"
+    "build": "npm run typecheck"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.12",
@@ -23,9 +23,10 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "esbuild": "^0.28.1",
-    "tsx": "^4.19.2",
+    "@types/node": "^26.0.0",
     "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
   }
 }
