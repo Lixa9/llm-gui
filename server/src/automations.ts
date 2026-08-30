@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { requireAuth } from './auth';
-import { getDb, generateId, safeParseJson } from './db/index';
-import { automationSchema, nextRunAt, scheduledDefinitionSchema } from './automation-definition';
-import { runAutomation } from './automation-runner';
-import { findAllowedModel } from './models';
-import type { AutomationRow, AutomationRunRow } from './types';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId, safeParseJson } from './db/index.ts';
+import { automationSchema, nextRunAt, scheduledDefinitionSchema } from './automation-definition.ts';
+import { runAutomation } from './automation-runner.ts';
+import { findAllowedModel } from './models.ts';
+import type { AutomationRow, AutomationRunRow } from './types.ts';
 
 export const automationsRouter = new Hono();
 automationsRouter.use('*', requireAuth);

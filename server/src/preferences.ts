@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { requireAuth } from './auth';
-import { getDb } from './db/index';
-import type { UserPrefRow } from './types';
+import { requireAuth } from './auth.ts';
+import { getDb } from './db/index.ts';
+import type { UserPrefRow } from './types.ts';
 
 const ALLOWED_PREF_KEYS = new Set(['sound_enabled', 'sound_volume', 'default_model_id', 'default_preset_id', 'theme']);
 const MAX_PREF_VALUE_LEN = 4096;

@@ -65,12 +65,12 @@ conversation:
   ]);
   process.env.CONFIG_DIR = configDir;
 
-  const { loadConfig } = await import('../src/config');
-  const { openDatabase, closeDatabase, getDb, generateId, runTransaction } = await import('../src/db/index');
-  const { runGeneration, cancelGeneration } = await import('../src/generation-worker');
-  const { runTitleJob } = await import('../src/title-worker');
-  const { enqueueAutomationRun, runAutomationJob } = await import('../src/automation-runner');
-  const { conversationsRouter } = await import('../src/conversations');
+  const { loadConfig } = await import('../src/config.ts');
+  const { openDatabase, closeDatabase, getDb, generateId, runTransaction } = await import('../src/db/index.ts');
+  const { runGeneration, cancelGeneration } = await import('../src/generation-worker.ts');
+  const { runTitleJob } = await import('../src/title-worker.ts');
+  const { enqueueAutomationRun, runAutomationJob } = await import('../src/automation-runner.ts');
+  const { conversationsRouter } = await import('../src/conversations.ts');
   loadConfig();
   await openDatabase(databaseUrl);
   const db = getDb();

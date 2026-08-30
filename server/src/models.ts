@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import { requireAuth } from './auth';
-import { getConfig } from './config';
-import { logger } from './logger';
-import type { ModelYamlEntry } from './types';
+import { requireAuth } from './auth.ts';
+import { getConfig } from './config.ts';
+import { logger } from './logger.ts';
+import type { ModelYamlEntry } from './types.ts';
 
 export const modelsRouter = new Hono();
 modelsRouter.use('*', requireAuth);

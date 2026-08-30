@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireAuth } from './auth';
-import { getDb, generateId, runTransaction } from './db/index';
-import { cleanupUnreferencedUploads } from './uploads';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId, runTransaction } from './db/index.ts';
+import { cleanupUnreferencedUploads } from './uploads.ts';
 
 const folderName = z.string().trim().min(1).max(200);
 export const foldersRouter = new Hono();

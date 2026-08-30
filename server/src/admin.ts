@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { requireRole } from './auth';
-import { getDb, safeParseJson } from './db/index';
-import type { SystemPromptRow, AutomationRow } from './types';
+import { requireRole } from './auth.ts';
+import { getDb, safeParseJson } from './db/index.ts';
+import type { SystemPromptRow, AutomationRow } from './types.ts';
 
 export const adminRouter = new Hono();
 adminRouter.use('*', requireRole('admin'));

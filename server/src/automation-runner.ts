@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config';
-import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index';
-import { parseScheduledDefinition } from './automation-definition';
-import { trackBackgroundTask } from './lifecycle';
-import { logger } from './logger';
-import { findAllowedModel } from './models';
-import type { AutomationRow, AutomationRunRow, Role, ScheduledDefinition } from './types';
+import { getConfig } from './config.ts';
+import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
+import { parseScheduledDefinition } from './automation-definition.ts';
+import { trackBackgroundTask } from './lifecycle.ts';
+import { logger } from './logger.ts';
+import { findAllowedModel } from './models.ts';
+import type { AutomationRow, AutomationRunRow, Role, ScheduledDefinition } from './types.ts';
 
 interface AutomationRunSnapshot {
   name: string;

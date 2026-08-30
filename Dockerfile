@@ -1,38 +1,21 @@
-# Stage 1: Build Svelte frontend
-FROM node:24-alpine AS build-frontend
+# Stage 1: Build the Svelte frontend
+FROM node:26-alpine AS build-frontend
 WORKDIR /app
-RUN npm install -g npm@latest
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-# Stage 2: Build server (bundle TS)
-FROM node:24-alpine AS build-server
+# Stage 2: Install only runtime dependencies and run TypeScript natively
+FROM node:26-alpine
 WORKDIR /app
-RUN npm install -g npm@latest
+
 COPY server/package.json server/package-lock.json* ./
-RUN npm ci
-COPY server/ .
-RUN node_modules/.bin/esbuild src/index.ts \
-      --bundle --platform=node --target=node24 \
-      --packages=external --format=esm --outfile=dist/index.js
-RUN npm prune --omit=dev
-
-# Stage 3: Clean runtime image
-FROM node:24-alpine
-WORKDIR /app
-
-RUN apk add --no-cache gosu
-
-COPY --chown=node:node --from=build-server /app/node_modules ./node_modules
-COPY --chown=node:node --from=build-server /app/dist/index.js ./index.js
-COPY --chown=node:node --from=build-server /app/package.json ./package.json
+RUN npm ci --omit=dev
+COPY --chown=node:node server/src ./src
 COPY --chown=node:node --from=build-frontend /app/dist ./static
-COPY docker-entrypoint.sh /docker-entrypoint.sh
 
-RUN mkdir -p /app/config && \
-    chmod +x /docker-entrypoint.sh
+RUN mkdir -p /app/config && chown node:node /app/config
 
 EXPOSE 3000
 
@@ -41,5 +24,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 USER node
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["node", "index.js"]
+CMD ["node", "src/index.ts"]

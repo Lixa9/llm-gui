@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBackgroundSseResponse } from '../src/background-sse';
-import { waitForBackgroundTasks } from '../src/lifecycle';
+import { createBackgroundSseResponse } from '../src/background-sse.ts';
+import { waitForBackgroundTasks } from '../src/lifecycle.ts';
 
 test('tab close, navigation, or logout detaches SSE without cancelling the background task', async () => {
   let releaseTask!: () => void;
@@ -38,7 +38,7 @@ test('connected clients continue to receive terminal events', async () => {
       client.send({ type: 'delta', content: 'hello' });
       client.send({ type: 'done' });
     },
-    error => assert.fail(error),
+    error => assert.fail(error instanceof Error ? error : String(error)),
   );
 
   const body = await response.text();

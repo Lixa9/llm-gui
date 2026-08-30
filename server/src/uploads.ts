@@ -1,11 +1,11 @@
-import { requireAuth } from './auth';
+import { requireAuth } from './auth.ts';
 import { Hono } from 'hono';
-import { getDb, generateId, safeParseJson } from './db/index';
-import type { TxDb } from './db/index';
-import { checkRateLimit } from './ratelimit';
-import { getConfig } from './config';
-import { logger } from './logger';
-import { extractText, renderPdfPages, extractDocImages } from './extract';
+import { getDb, generateId, safeParseJson } from './db/index.ts';
+import type { TxDb } from './db/index.ts';
+import { checkRateLimit } from './ratelimit.ts';
+import { getConfig } from './config.ts';
+import { logger } from './logger.ts';
+import { extractText, renderPdfPages, extractDocImages } from './extract.ts';
 
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);

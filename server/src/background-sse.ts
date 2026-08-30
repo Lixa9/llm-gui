@@ -1,4 +1,4 @@
-import { trackBackgroundTask } from './lifecycle';
+import { trackBackgroundTask } from './lifecycle.ts';
 
 export interface BackgroundSseClient {
   send(event: unknown): void;

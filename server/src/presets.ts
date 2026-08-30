@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireAuth } from './auth';
-import { getDb, generateId } from './db/index';
-import type { ModelPresetRow } from './types';
+import { requireAuth } from './auth.ts';
+import { getDb, generateId } from './db/index.ts';
+import type { ModelPresetRow } from './types.ts';
 
 const presetSchema = z.object({
   name: z.string().trim().min(1).max(200),
