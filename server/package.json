@@ -6,23 +6,27 @@
   "scripts": {
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",
-    "test": "node --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts",
+    "test": "node --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts test/file-processing.test.ts test/transport.test.ts test/processing.test.ts",
     "test:integration": "node test/integration-runner.ts",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck"
+    "build": "npm run typecheck",
+    "test:conversions": "FILE_CONVERSION_TESTS=1 node --test test/conversion.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.12",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/pg": "^8.20.3",
-    "adm-zip": "^0.6.0",
-    "hono": "^4.12.34",
+    "adm-zip": "^0.6.1",
+    "hono": "^4.13.12",
     "jose": "^5.9.0",
-    "js-yaml": "^5.2.3",
+    "js-yaml": "^5.4.2",
+    "mailparser": "^3.9.33",
     "mupdf": "^1.27.0",
     "pg": "^8.22.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^26.0.0",
     "typescript": "^5.5.0"
   },

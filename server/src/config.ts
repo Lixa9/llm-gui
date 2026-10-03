@@ -2,6 +2,8 @@ import { readFileSync, accessSync, constants, writeFileSync, mkdirSync } from 'f
 import { join } from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
+import { scheduledDefinitionSchema } from './automation-definition.ts';
 import type { AppConfig } from './types.ts';
 import { logger } from './logger.ts';
 
@@ -42,7 +44,10 @@ const storageSizeSchema = z.string()
 
 const configSchema = z.object({
   app: z.object({
-    name: z.string().default('Chat'),
+    name: z.string().trim().min(1).max(80).default('Chat'),
+    tagline: z.string().max(200).default(''),
+    logo_url: z.string().regex(/^\/(?!\/)[a-zA-Z0-9_./-]+$/).optional(),
+    accent_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
     base_url: z.string().default('http://localhost:3000'),
   }),
   openai: z.object({
@@ -64,14 +69,26 @@ const configSchema = z.object({
     default_role: roleSchema.default('user'),
   }).default({}),
   rate_limits: z.object({
-    requests_per_minute: z.number().default(60),
-    requests_per_hour: z.number().default(300),
-    concurrent_streams: z.number().default(2),
+    requests_per_minute: z.number().int().min(0).default(60),
+    requests_per_hour: z.number().int().min(0).default(300),
+    concurrent_streams: z.number().int().min(0).default(2),
+    global_workers: z.number().int().min(1).max(100).default(8),
+    workers_per_owner: z.number().int().min(1).max(20).default(2),
+    max_queued_jobs: z.number().int().min(1).max(10000).default(200),
+  }).default({}),
+  attachments: z.object({
+    max_request_bytes: z.number().int().min(1024).max(100 * 1024 * 1024).default(32 * 1024 * 1024),
+    max_images: z.number().int().min(0).max(1000).default(100),
+    max_files: z.number().int().min(1).max(200).default(50),
+    max_text_chars: z.number().int().min(1000).max(10000000).default(500000),
+    processing_workers: z.number().int().min(1).max(8).default(2),
   }).default({}),
   storage: z.object({
     quota: storageSizeSchema,
   }).strict().default({ quota: '0' }),
   conversation: z.object({
+    max_output_bytes: z.number().int().min(1024).max(10000000).default(1000000),
+    max_frame_bytes: z.number().int().min(1024).max(10000000).default(1000000),
     auto_title: z.boolean().default(true),
     auto_title_model: z.string().default('qwen3.5-0.8b'),
     generation_max_duration_ms: z.number().int().min(1_000).max(24 * 60 * 60 * 1000).default(30 * 60 * 1000),
@@ -79,6 +96,49 @@ const configSchema = z.object({
     generation_max_attempts: z.number().int().min(1).max(20).default(3),
   }).default({}),
 });
+
+const roles = z.array(roleSchema).min(1).default(['admin', 'user']);
+const modelSchema = z.object({
+  id: z.string().trim().min(1).max(300), display_name: z.string().min(1).max(200), allowed_roles: roles,
+  history_mode: z.enum(['full', 'latest_only']).optional(),
+  capabilities: z.object({
+    vision: z.boolean().default(false), native_pdf: z.boolean().default(false),
+    image_detail: z.enum(['auto', 'low', 'high']).default('auto'),
+    stream_usage: z.boolean().default(false),
+    max_text_chars: z.number().int().min(1000).optional(),
+  }).default({}),
+}).refine(model=>!model.capabilities.native_pdf || model.capabilities.vision,{message:'Native PDF models must enable vision'});
+const promptSchema = z.object({ name: z.string().min(1).max(200), content: z.string().max(100000), allowed_roles: roles });
+const presetSchema = z.object({ name: z.string().min(1).max(200), base_model_id: z.string().min(1), system_prompt: z.string().max(100000).optional(), allowed_roles: roles });
+const automationSchema = scheduledDefinitionSchema.extend({ name: z.string().min(1).max(200), allowed_roles: roles });
+function uniqueEntries<T extends Record<string, unknown>>(entries: T[], key: keyof T, label: string): T[] {
+  if (new Set(entries.map(e => e[key])).size !== entries.length) throw new Error(`Duplicate ${key.toString()} in ${label}`);
+  return entries;
+}
+
+export function configurationRevision(config=getConfig()):string {
+  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+}
+export async function runtimeConfigurationIsCurrent():Promise<boolean>{
+  const {getDb}=await import('./db/index.ts');
+  const row=await getDb().prepare("SELECT revision FROM runtime_configuration WHERE key='active'").get<{revision:string}>();
+  return !row || row.revision===configurationRevision();
+}
+/** All replicas watch the same configuration mount. A shared activation revision
+ * fences requests/work on stale replicas until their next successful reload. */
+export async function refreshChangedConfiguration():Promise<void>{
+  try{if(configurationRevision(readConfig())!==configurationRevision())await reloadConfig();}
+  catch(error){logger.warn('Configuration refresh failed; retaining current configuration',{error:String(error)});}
+}
+
+/** Credentials never enter durable request snapshots. A changed account/key fails closed. */
+export function providerIdentity(config = getConfig()): { base_url: string; revision: string } {
+  return { base_url: config.openai.base_url.replace(/\/$/, ''), revision: createHash('sha256').update(JSON.stringify(config.openai)).digest('hex') };
+}
+export function assertProviderIdentity(identity?: { base_url: string; revision: string }): void {
+  if(!identity)throw new Error('Legacy job has no provider identity. Resubmit this request.');
+  if (identity && identity.revision !== providerIdentity().revision) throw new Error('Provider configuration changed. Resubmit this request to use the new provider.');
+}
 
 const DEFAULT_CONFIGS: Record<string, string> = {
   'config.yaml': [
@@ -191,21 +251,27 @@ let reloadQueue: Promise<void> = Promise.resolve();
 
 function readConfig(): AppConfig {
   scaffoldConfigIfNeeded();
-  const mainRaw = loadYaml('config.yaml') as Record<string, unknown>;
-  const modelsRaw = loadYaml('models.yaml') as { models?: unknown[] };
-  const promptsRaw = loadYaml('prompts.yaml') as { prompts?: unknown[] };
-  const presetsRaw = loadYaml('presets.yaml') as { presets?: unknown[] };
-  const automationsRaw = loadYaml('automations.yaml') as { automations?: unknown[] };
-
-  const parsed = configSchema.parse(mainRaw);
-
-  return {
+  const parsed = configSchema.parse(loadYaml('config.yaml'));
+  const models = z.object({models:z.array(modelSchema).default([])}).strict().parse(loadYaml('models.yaml')).models;
+  const prompts = z.object({prompts:z.array(promptSchema).default([])}).strict().parse(loadYaml('prompts.yaml')).prompts;
+  const presets = z.object({presets:z.array(presetSchema).default([])}).strict().parse(loadYaml('presets.yaml')).presets;
+  const automations = z.object({automations:z.array(automationSchema).default([])}).strict().parse(loadYaml('automations.yaml')).automations;
+  const candidate = {
     ...parsed,
-    models: (modelsRaw.models ?? []) as AppConfig['models'],
-    prompts: (promptsRaw.prompts ?? []) as AppConfig['prompts'],
-    presets: (presetsRaw.presets ?? []) as AppConfig['presets'],
-    automations: (automationsRaw.automations ?? []) as AppConfig['automations'],
+    models: uniqueEntries(models, 'id', 'models'),
+    prompts: uniqueEntries(prompts, 'name', 'prompts'),
+    presets: uniqueEntries(presets, 'name', 'presets'),
+    automations: uniqueEntries(automations, 'name', 'automations'),
   };
+  if (candidate.models.length) {
+    const known = new Map(candidate.models.map(model => [model.id, model]));
+    for (const entry of [...candidate.presets.map(preset => ({ name:preset.name, model:preset.base_model_id, roles:preset.allowed_roles })), ...candidate.automations.map(automation => ({ name:automation.name, model:automation.model, roles:automation.allowed_roles }))]) {
+      const model = known.get(entry.model);
+      if (!model) throw new Error(`${entry.name} references an unconfigured model: ${entry.model}`);
+      if (entry.roles.some(role => !model.allowed_roles.includes(role))) throw new Error(`${entry.name} allows roles without access to ${entry.model}`);
+    }
+  }
+  return candidate;
 }
 
 export function loadConfig(): AppConfig {

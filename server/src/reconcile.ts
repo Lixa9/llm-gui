@@ -1,6 +1,6 @@
 import { getDb, generateId } from './db/index.ts';
 import type { TxDb } from './db/index.ts';
-import { getConfig } from './config.ts';
+import { getConfig, configurationRevision } from './config.ts';
 import { scheduledDefinitionSchema } from './automation-definition.ts';
 import { logger } from './logger.ts';
 
@@ -97,6 +97,7 @@ export async function reconcileYaml(config = getConfig()): Promise<void> {
     const prompts = await reconcilePrompts(db, config);
     const presets = await reconcilePresets(db, config);
     const automations = await reconcileAutomations(db, config);
+    await db.prepare("INSERT INTO runtime_configuration (key,revision) VALUES ('active',?) ON CONFLICT(key) DO UPDATE SET revision=excluded.revision").run(configurationRevision(config));
     logger.info('YAML reconciliation complete', { prompts, presets, automations });
   });
 }

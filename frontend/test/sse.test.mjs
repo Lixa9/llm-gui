@@ -75,3 +75,15 @@ test('streamChat surfaces an HTTP rejection', async (t) => {
     /rate limited/,
   );
 });
+
+test('streamChat propagates event handler failures', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => responseWithEvents([{ type: 'done' }]));
+  await assert.rejects(streamChat(payload, new AbortController().signal, () => { throw new Error('state failure'); }), /state failure/);
+});
+
+test('streamChat bounds unterminated frames and rejects malformed frames', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response('data: ' + 'x'.repeat(2 * 1024 * 1024)));
+  await assert.rejects(streamChat(payload, new AbortController().signal, () => {}), /streaming limit/);
+  t.mock.method(globalThis, 'fetch', async () => new Response('data: {invalid}\n\n'));
+  await assert.rejects(streamChat(payload, new AbortController().signal, () => {}), /Invalid response frame/);
+});

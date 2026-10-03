@@ -5,7 +5,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
 import type { Context, Next } from 'hono';
 import { getConfig } from './config.ts';
-import { getDb, generateId } from './db/index.ts';
+import { getDb, generateId, safeParseJson } from './db/index.ts';
 import { logger } from './logger.ts';
 import type { Role, SessionPayload } from './types.ts';
 
@@ -122,12 +122,23 @@ function normalizeGroups(raw: unknown): string[] {
   return [];
 }
 
-function resolveRole(groups: string[]): Role {
+export function resolveRole(groups: string[]): Role {
   const cfg = getConfig();
   for (const mapping of cfg.rbac.mappings) {
     if (groups.includes(mapping.oidc_group)) return mapping.role;
   }
   return cfg.rbac.default_role;
+}
+
+/** IdP changes are observed on login. Stored groups are re-evaluated on each
+ * request against current RBAC; scheduled work requires a login within 24h. */
+export async function resolveCurrentRole(sub: string, requireFresh = false): Promise<Role | null> {
+  const row = await getDb().prepare('SELECT last_known_role, oidc_groups, auth_method, role_updated_at, created_at FROM users WHERE sub=?').get<{ last_known_role: Role; oidc_groups: unknown; auth_method: string | null; role_updated_at: number | null; created_at: number }>(sub);
+  if (!row) return null;
+  if (row.auth_method === 'local' || sub === 'local:test-admin') return isLocalAuthEnabled() ? 'admin' : null;
+  if (requireFresh && Date.now() - (row.role_updated_at ?? row.created_at) >= SESSION_TTL_MS) return null;
+  if (row.auth_method === 'oidc' && row.oidc_groups === null) return null;
+  return row.oidc_groups !== null ? resolveRole(safeParseJson<string[]>(row.oidc_groups, [])) : row.last_known_role;
 }
 
 async function createSession(payload: Omit<SessionPayload, 'sessionId' | 'expiresAt'>): Promise<string> {
@@ -149,11 +160,15 @@ async function verifySession(token: string): Promise<SessionPayload | null> {
   `).get(hashToken(token), Date.now());
   const parsed = sessionRowSchema.safeParse(row);
   if (!parsed.success) return null;
+  if (parsed.data.method === 'local' && !isLocalAuthEnabled()) return null;
+  const role = await resolveCurrentRole(parsed.data.sub);
+  if (!role) return null;
+  if (parsed.data.method === 'oidc' && !await getDb().prepare('SELECT sub FROM users WHERE sub=? AND oidc_groups IS NOT NULL').get(parsed.data.sub)) return null;
   return {
     sub: parsed.data.sub,
     email: parsed.data.email,
     name: parsed.data.name,
-    role: parsed.data.role,
+    role,
     method: parsed.data.method,
     sessionId: parsed.data.id,
     expiresAt: parsed.data.expires_at,
@@ -279,13 +294,14 @@ authRouter.get('/callback', async (c) => {
 
   const db = getDb();
   await db.prepare(`
-    INSERT INTO users (sub, email, name, last_known_role, role_updated_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO users (sub, email, name, last_known_role, role_updated_at, oidc_groups, auth_method) VALUES (?, ?, ?, ?, ?, ?::jsonb, 'oidc')
     ON CONFLICT(sub) DO UPDATE SET
       email=excluded.email,
       name=excluded.name,
       last_known_role=excluded.last_known_role,
-      role_updated_at=excluded.role_updated_at
-  `).run(sub, email, name, role, Date.now());
+      role_updated_at=excluded.role_updated_at,
+      oidc_groups=excluded.oidc_groups, auth_method=excluded.auth_method
+  `).run(sub, email, name, role, Date.now(), JSON.stringify(groups));
   const session = await createSession({ sub, email, name, role, method: 'oidc' });
   setSessionCookie(c, session);
   logger.info('OIDC login success', { sub, role });
@@ -332,6 +348,7 @@ authRouter.post('/local', async (c) => {
       last_known_role=excluded.last_known_role,
       role_updated_at=excluded.role_updated_at
   `).run(sub, Date.now());
+  await db.prepare("UPDATE users SET auth_method='local' WHERE sub=?").run(sub);
   const session = await createSession({ sub, email: '', name: 'admin', role: 'admin', method: 'local' });
   setSessionCookie(c, session);
   return c.json({ ok: true });

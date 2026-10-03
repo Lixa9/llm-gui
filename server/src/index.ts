@@ -4,7 +4,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { compress } from 'hono/compress';
 import { bodyLimit } from 'hono/body-limit';
 import { readFile } from 'fs/promises';
-import { loadConfig, reloadConfig, getConfig } from './config.ts';
+import { loadConfig, reloadConfig, getConfig, refreshChangedConfiguration, runtimeConfigurationIsCurrent } from './config.ts';
 import { openDatabase, closeDatabase } from './db/index.ts';
 import { reconcileYaml } from './reconcile.ts';
 import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth.ts';
@@ -14,6 +14,7 @@ import { foldersRouter } from './folders.ts';
 import { modelsRouter } from './models.ts';
 import { promptsRouter } from './prompts.ts';
 import { presetsRouter } from './presets.ts';
+import { draftsRouter } from './drafts.ts';
 import { preferencesRouter } from './preferences.ts';
 import { automationsRouter } from './automations.ts';
 import { initScheduler, stopScheduler } from './automation-scheduler.ts';
@@ -77,6 +78,7 @@ app.use('/api/*', async (c, next) => {
 });
 
 app.use('/api/*', async (c, next) => {
+  if(!await runtimeConfigurationIsCurrent())return c.json({error:'Configuration is updating. Retry shortly.'},503);
   const origin = c.req.header('origin');
   if (origin) {
     const cfg = getConfig();
@@ -105,9 +107,16 @@ app.route('/api/models', modelsRouter);
 app.route('/api/prompts', promptsRouter);
 app.route('/api/presets', presetsRouter);
 app.route('/api/preferences', preferencesRouter);
+app.route('/api/drafts', draftsRouter);
+app.get('/api/app', c => { const app=getConfig().app; return c.json({name:app.name,tagline:app.tagline,logo_url:app.logo_url,accent_color:app.accent_color}); });
 app.route('/api/automations', automationsRouter);
 app.route('/api/admin', adminRouter);
 app.route('/api/uploads', uploadsRouter);
+
+app.onError((error,c)=>{
+  if(error instanceof SyntaxError || (error as {code?:string}).code==='22P02') return c.json({error:'Malformed request'},400);
+  logger.error('Request failed',{path:c.req.path,error:String(error)}); return c.json({error:'Request failed'},500);
+});
 
 let isShuttingDown = false;
 
@@ -177,12 +186,12 @@ function startBackendHealthCheck() {
 startBackendHealthCheck();
 
 // Purge expired sessions at startup and every hour
-purgeExpiredSessions();
+void purgeExpiredSessions().catch(error=>logger.warn('Session purge failed',{error:String(error)}));
 const purgeInterval = setInterval(() => { purgeExpiredSessions().catch(error => logger.warn('Session purge failed', { error: String(error) })); }, 60 * 60 * 1000);
 
 // Sweep rate limit buckets every 5 minutes
-void sweepBuckets();
-const sweepInterval = setInterval(() => { void sweepBuckets(); }, 5 * 60 * 1000);
+void sweepBuckets().catch(error=>logger.warn('Rate limit maintenance failed',{error:String(error)}));
+const sweepInterval = setInterval(() => { void sweepBuckets().catch(error=>logger.warn('Rate limit maintenance failed',{error:String(error)})); }, 5 * 60 * 1000);
 
 // Remove uploads abandoned before they were attached to a message.
 void purgeOrphanUploads().catch(error => logger.warn('Upload orphan purge failed', { error: String(error) }));
@@ -193,6 +202,8 @@ const orphanUploadInterval = setInterval(() => {
 // Hot-reload config on SIGHUP. reloadConfig contains its own error boundary so
 // malformed deployment files cannot turn a reload into a process crash.
 process.on('SIGHUP', () => { void reloadConfig(); });
+const configRefreshInterval=setInterval(()=>{void refreshChangedConfiguration();},5000);
+configRefreshInterval.unref();
 
 // Start server
 const server = serve({
@@ -215,6 +226,7 @@ async function handleShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   isShuttingDown = true;
+  clearInterval(configRefreshInterval);
   beginGenerationShutdown();
   beginAutomationShutdown();
   beginTitleShutdown();

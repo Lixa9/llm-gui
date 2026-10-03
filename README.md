@@ -85,6 +85,10 @@ String values support `${ENV_VAR}` substitution; an unset variable becomes an em
 ```yaml
 app:
   name: "Chat"
+  # Optional deployment branding:
+  # tagline: "Your team assistant"
+  # logo_url: "/logo.svg"
+  # accent_color: "#7566dd"
   base_url: "http://localhost:3000"
 
 openai:
@@ -108,12 +112,24 @@ rate_limits:
   requests_per_minute: 120
   requests_per_hour: 1000
   concurrent_streams: 4
+  global_workers: 8
+  workers_per_owner: 2
+  max_queued_jobs: 200
+
+attachments:
+  max_request_bytes: 33554432
+  max_images: 100
+  max_files: 50
+  max_text_chars: 500000
+  processing_workers: 2
 
 storage:
   # Per-user upload quota; use values such as "10G". 0 means unlimited.
   quota: "10G"
 
 conversation:
+  max_output_bytes: 1000000
+  max_frame_bytes: 1000000
   auto_title: true
   auto_title_model: "qwen3.5-0.8b"
   # Limits apply to each generation attempt.
@@ -144,6 +160,12 @@ models:
   - id: "qwen3.5-0.8b"
     display_name: "Qwen 3.5 0.8B"
     allowed_roles: [admin, user]
+    capabilities:
+      vision: true
+      native_pdf: false
+      image_detail: auto
+      stream_usage: false
+      max_text_chars: 500000
 
   - id: "external-agent"
     display_name: "External agent"
@@ -162,21 +184,38 @@ docker compose kill -s SIGHUP chat
 docker compose logs --tail=50 chat
 ```
 
-The server validates and reconciles the candidate configuration before replacing the active configuration, then invalidates model and OIDC discovery caches. Failed reloads retain the previous configuration and are logged. In a replicated deployment, distribute the same YAML files and reload every application process.
+The server validates and reconciles the candidate configuration before replacing the active configuration, then invalidates model and OIDC discovery caches. Failed reloads retain the previous configuration and are logged. Replicas must share the same YAML configuration mount; each checks for changes every five seconds. PostgreSQL records the active revision and fences API calls and job claims on stale replicas. SIGHUP remains available for immediate reload. Queued work is pinned to its original endpoint and credential revision; changing either fails the job with a resubmit message. Credentials are never stored in job snapshots. Models, prompts, presets, automations, duplicate identifiers, and limits are validated before reconciliation. With a nonempty model registry, preset and automation model references and role access must match it.
 
 ## Attachments and automations
 
-Images (JPEG, PNG, GIF, WebP) can be up to 20 MiB each; supported documents and text files can be up to 50 MiB each. Documents include PDF, DOCX, ODT, EPUB, XLSX, and ODS, alongside plain text, Markdown, CSV/TSV, HTML, JSON, YAML, and XML. Legacy XLS uploads are accepted, but their contents are not extracted; convert them to XLSX first.
+Images can be up to 20 MiB each; supported documents, text, and archives can be up to 50 MiB each. The composer reads its accepted formats from the server registry.
 
-PDF pages are rendered as images. DOCX, ODT, and EPUB uploads provide extracted text and embedded images; spreadsheets provide extracted text. Extraction has size and image/page caps. Use a vision-capable upstream model for images and PDFs.
+| Family | Supported formats |
+| --- | --- |
+| Images | JPEG, PNG, GIF, WebP, HEIC/HEIF, BMP, TIFF, SVG |
+| Documents | PDF, DOC/DOCX, ODT, RTF, PPT/PPTX, ODP, EPUB |
+| Spreadsheets | XLS/XLSX, ODS |
+| Text/data | TXT/TEXT, MD/MARKDOWN, HTML/HTM, CSV/TSV, JSON, JSONL/NDJSON, YAML/YML, XML |
+| Source/config/logs | PY, JS/MJS/CJS, TS/TSX/JSX, JAVA, C/H/CPP/HPP, CS, GO, RS, SH/BASH, SQL, CSS, TOML, INI, CONF, PROPERTIES, LOG, DIFF, PATCH, Dockerfile, Makefile, .env, .gitignore |
+| Archives/email | ZIP, TAR, TAR.GZ/TGZ, GZ, EML |
 
-Automations use a positive integer interval in `hours`, `days`, or `weeks`. Users can create and enable personal automations, run them manually, and inspect their latest 50 runs. Shared automations come from YAML and require users to opt in through subscriptions. Successful runs create conversations for the owner or eligible subscribers. The scheduler checks for due work every 30 seconds and schedules the next run relative to the current time. Automations call the upstream API with their configured prompts; any browsing or tools must be supplied by the upstream.
+PDF fallback includes extracted text and page images. Word and presentation files use an isolated LibreOffice process to preserve layout through PDF conversion; PPTX also includes speaker notes. XLS is converted to XLSX before reading cells. Images are normalized to supported PNG inputs, with orientation applied. SVG rejects active/external content. GIF includes its first frame; TIFF includes up to 20 frames. Spreadsheets preserve cell values, cached formula results, common dates/percentages/booleans, and CSV quoting; formulas are not evaluated.
+
+Archive entries are read in memory with path, expanded-size, count, text, and image limits. Up to 50 supported files and 20 images are included per collection; nested archives/email containers are omitted. EML includes headers, its text body, and supported attachments. Coverage controls on sent attachments show included/omitted content, and originals remain downloadable. Failed processing returns HTTP 422 instead of a successful placeholder.
+
+Set `capabilities.vision: true` only for models/routes that accept image inputs. Native PDF requires both `vision: true` and `native_pdf: true`; this sends the original through Chat Completions `file.file_data` and bypasses local rendering at upload when that model is selected. A native-only PDF cannot be switched to a fallback model without reuploading. Capability defaults are conservative (`false`). Private application URLs never go to the provider. The complete replayed request is bounded by configured bytes, image/file counts, and text characters. Character budgets are operational limits, not exact token estimates.
+
+Draft text and ready attachments are stored privately in PostgreSQL per conversation (including a new-conversation draft), with serialized autosaves. Accepted messages clear their drafts; rejected messages retain them. Drafts and running jobs pin their uploads against orphan cleanup. Folder expansion preferences persist per user. Branding uses the optional `app` fields above; logo paths must be same-origin assets served by the deployment.
+
+See [implementation notes](docs/implementation-notes.md) for issue mapping, limits, upgrade behavior, and validation.
+
+Automations use a positive integer interval in `hours`, `days`, or `weeks`. Users can create and enable personal automations, run them manually, and inspect their latest 50 runs. Shared automations come from YAML and require users to opt in through subscriptions. Successful runs create conversations for the owner or eligible subscribers and retain their effective system prompt. Unsubscribe, visibility/role narrowing, disabling, or deletion prevents pending deliveries. Only one queued/running job is allowed per automation; manual triggers use user rate limits, and all generation types share database-backed worker and queue admission. The scheduler checks for due work every 30 seconds and schedules the next run relative to the current time. Automations call the upstream API with their configured prompts; any browsing or tools must be supplied by the upstream.
 
 ## Security model
 
 - OIDC ID tokens are verified against the issuer, audience, and provider JWKS.
 - OIDC roles are resolved from group claims; there is no local user-management or role-override UI.
-- The most recently resolved role is stored with the user so scheduled automations do not depend on an active session. IdP role changes take effect for background jobs after the user's next successful login.
+- Stored OIDC groups are reevaluated against current RBAC for every authenticated request. IdP group changes are observed on the next login; scheduled automation owners/recipients require an observed role within 24 hours. Existing OIDC sessions from older versions without stored groups require a new login.
 - The local test account is disabled unless `LOCAL_AUTH` is explicitly enabled.
 - Mutating API requests require same-origin checks and the application request header.
 - Session cookies are `HttpOnly` and `SameSite=Lax`; `Secure` is enabled when `app.base_url` starts with `https://`.
@@ -184,6 +223,8 @@ Automations use a positive integer interval in `hours`, `days`, or `weeks`. User
 - Markdown is sanitized before rendering, and responses include browser security headers.
 
 ## Development
+
+Document/image conversion also requires LibreOffice Writer/Impress/Calc, ImageMagick with HEIC decoding, DejaVu fonts, and `prlimit` (util-linux); the supplied Dockerfile installs them. Run `npm --prefix server run test:conversions` with these tools installed to exercise actual conversion fixtures.
 
 Use Node.js 26.x (both packages require `>=26.0.0 <27`) and a PostgreSQL database. CI and Compose use PostgreSQL 17. Install dependencies and run the checks from the repository root:
 

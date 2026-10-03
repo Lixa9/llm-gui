@@ -180,7 +180,7 @@ function createChatStore() {
     }
   }
 
-  async function send(payload: ChatPayload): Promise<ChatSendResult> {
+  async function send(payload: ChatPayload, onAccepted?: (conversationId:string) => void): Promise<ChatSendResult> {
     if (activeStream || activeGenerationId) return { accepted: false };
     const convId = payload.conversation_id;
     if (!convId) {
@@ -189,7 +189,7 @@ function createChatStore() {
     }
     if (activeConversationId !== convId) setActiveConversation(convId);
 
-    const userMessageId = crypto.randomUUID();
+    const userMessageId = payload.edit_message_id ?? crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
     const userMsg: Message = {
       id: userMessageId,
@@ -202,7 +202,12 @@ function createChatStore() {
       edited_at: null,
       delivery_status: 'sending',
     };
-    messages = [...messages, userMsg];
+    const originalMessages = messages;
+    if (payload.edit_message_id) {
+      const index=messages.findIndex(m=>m.id===payload.edit_message_id);
+      if(index<0)return {accepted:false};
+      messages=[...messages.slice(0,index),{...userMsg,content:[...userMsg.content,...messages[index].content.filter(p=>p.type!=='text')]}];
+    } else messages = [...messages, userMsg];
 
     streaming = true;
     error = null;
@@ -240,6 +245,7 @@ function createChatStore() {
           activeStream.generationId = event.assistant_message_id;
           activeGenerationId = event.assistant_message_id;
           messages = messages.map(message => message.id === userMessageId ? event.user_message : message);
+          onAccepted?.(event.conversation_id);
         } else if (event.type === 'delta') {
           if (pending) pending.content += event.content;
         } else if (event.type === 'done') {
@@ -277,6 +283,7 @@ function createChatStore() {
       const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
       const operationIsCurrent = activeStream?.id === operationId;
       resolveAccepted(acceptedByServer);
+      if(payload.edit_message_id && !accepted && activeConversationId===convId) messages=originalMessages;
       await reconcileMessages(convId, userMsg, accepted);
       if (operationIsCurrent && activeStream?.id === operationId) {
         if (!terminalEvent && !controller.signal.aborted) {
@@ -403,11 +410,6 @@ function createChatStore() {
     }
   }
 
-  async function editUserMessage(convId: string, msgId: string) {
-    await api.conversations.deleteMessage(convId, msgId);
-    await loadMessages(convId);
-  }
-
   async function editAssistantMessage(convId: string, msgId: string, newContent: string) {
     const updated = await api.conversations.editMessage(convId, msgId, newContent);
     messages = messages.map(m => m.id === msgId ? updated : m);
@@ -441,7 +443,7 @@ function createChatStore() {
     get allMessages() { return allMessages; },
     get activeConversationId() { return activeConversationId; },
     get activeGenerationId() { return activeGenerationId; },
-    loadMessages, send, regenerate, stop, editUserMessage, editAssistantMessage, deleteMessage, clear, setActiveConversation,
+    loadMessages, send, regenerate, stop, editAssistantMessage, deleteMessage, clear, setActiveConversation,
   };
 }
 

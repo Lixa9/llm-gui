@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { requireAuth } from './auth.ts';
 import { getDb, generateId, safeParseJson } from './db/index.ts';
 import { automationSchema, nextRunAt, scheduledDefinitionSchema } from './automation-definition.ts';
+import { checkRateLimit } from './ratelimit.ts';
+import { AdmissionError } from './work-admission.ts';
 import { runAutomation } from './automation-runner.ts';
 import { findAllowedModel } from './models.ts';
 import type { AutomationRow, AutomationRunRow } from './types.ts';
@@ -88,7 +90,10 @@ automationsRouter.post('/:id/trigger', async (c) => {
   if (!row) return c.json({ error: 'Not found' }, 404);
   const definition = scheduledDefinitionSchema.safeParse(safeParseJson<unknown>(row.definition, {}));
   if (!definition.success || !await findAllowedModel(definition.data.model, user.role)) return c.json({ error: 'Model not available for this role' }, 403);
-  return c.json(await runAutomation(row, 'manual', user.role), 201);
+  const rate = await checkRateLimit(user.sub);
+  if (!rate.allowed) return c.json({error:rate.reason},429);
+  try { return c.json(await runAutomation(row, 'manual', user.role), 201); }
+  catch (error) { if (error instanceof AdmissionError) return c.json({error:error.message},429); throw error; }
 });
 
 automationsRouter.get('/:id/runs', async (c) => {

@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { api } from '$lib/api';
   import { renderMarkdown } from '$lib/markdown';
-  import type { MessageContentPart } from '$lib/types';
+  import type { MessageContentPart, ImageUrlPart, FilePart } from '$lib/types';
   import { fileIcon } from '$lib/fileUtils';
 
   interface Props {
@@ -16,11 +17,11 @@
   );
 
   const imageParts = $derived(
-    content.filter((p): p is { type: 'image_url'; image_url: { url: string }; _filename?: string } => p.type === 'image_url')
+    content.filter((p): p is ImageUrlPart => p.type === 'image_url')
   );
 
   const fileParts = $derived(
-    content.filter((p): p is { type: 'file'; file: { url: string }; _filename?: string; _mime_type?: string } => p.type === 'file')
+    content.filter((p): p is FilePart => p.type === 'file')
   );
 
 const text = $derived(
@@ -31,6 +32,8 @@ const text = $derived(
 
   const rendered = $derived(role === 'assistant' ? renderMarkdown(text) : null);
 
+  let coverage=$state<{warning?:string;page_count?:number;served_pages?:number;sheet_names?:string[];entries?:Array<{name:string;status:string;reason?:string}>;error?:string}|null>(null);
+  async function showCoverage(url:string){try{const result=await api.uploads.metadata(url.split('/').pop()!);coverage=result.coverage;}catch(error){coverage={error:(error as Error).message};}}
   let lightboxSrc = $state<string | null>(null);
 
   function onProseClick(e: MouseEvent) {
@@ -53,6 +56,18 @@ const text = $derived(
   </div>
 {/if}
 
+{#if coverage}
+  <div class="coverage-panel" aria-label="Attachment coverage">
+    <button onclick={()=>coverage=null}>Close coverage</button>
+    {#if coverage.error}<p>{coverage.error}</p>{:else}
+      {#if coverage.page_count}<p>Included {coverage.served_pages ?? coverage.page_count} of {coverage.page_count} pages.</p>{/if}
+      {#if coverage.sheet_names?.length}<p>Sheets: {coverage.sheet_names.join(', ')}</p>{/if}
+      {#if coverage.warning}<p>{coverage.warning}</p>{:else}<p>Processed successfully within the attachment limits.</p>{/if}
+      {#if coverage.entries?.length}<ul>{#each coverage.entries as entry}<li>{entry.name}: {entry.status}{entry.reason ? ` — ${entry.reason}` : ''}</li>{/each}</ul>{/if}
+    {/if}
+  </div>
+{/if}
+
 <div class="msg-content" class:user={role === 'user'} class:assistant={role === 'assistant'}>
   {#if imageParts.length > 0}
     <div class="image-parts">
@@ -61,20 +76,24 @@ const text = $derived(
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <img
           class="msg-image"
-          src={img.image_url.url}
+          src={img.image_url.url.startsWith('/api/uploads/') ? `${img.image_url.url}/preview` : img.image_url.url}
           alt={img._filename ?? 'attached image'}
-          title={img._filename}
-          onclick={() => lightboxSrc = img.image_url.url}
+          title={img._warning ?? img._filename}
+          onclick={() => lightboxSrc = img.image_url.url.startsWith('/api/uploads/') ? `${img.image_url.url}/preview` : img.image_url.url}
         />
+        {#if img.image_url.url.startsWith('/api/uploads/')}<a href={img.image_url.url} download={img._filename}>Download original</a><button onclick={()=>void showCoverage(img.image_url.url)}>Coverage</button>{/if}
+        {#if img._warning}<span class="coverage-warning">{img._warning}</span>{/if}
       {/each}
     </div>
   {/if}
   {#if fileParts.length > 0}
     <div class="file-parts">
       {#each fileParts as fp}
-        <span class="file-chip" title={fp._filename}>
+        <a class="file-chip" href={fp.file.url} download={fp._filename} title={fp._warning ?? fp._filename}>
           {fileIcon(fp._mime_type)}&nbsp;{fp._filename ?? 'Attached file'}
-        </span>
+        </a>
+        {#if fp.file.url.startsWith('/api/uploads/')}<button onclick={()=>void showCoverage(fp.file.url)}>Coverage</button>{/if}
+        {#if fp._warning}<span class="coverage-warning">{fp._warning}</span>{/if}
       {/each}
     </div>
   {/if}
@@ -88,6 +107,8 @@ const text = $derived(
 </div>
 
 <style>
+  .coverage-panel { font-size:12px; max-height:300px; overflow:auto; }
+  .coverage-warning { font-size:12px; color:var(--text-secondary); }
   .msg-content { max-width: 100%; min-width: 0; }
 
   .msg-content.user {

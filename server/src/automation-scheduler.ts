@@ -1,6 +1,7 @@
 import { getDb, safeParseJson } from './db/index.ts';
 import { logger } from './logger.ts';
 import { intervalMs, parseScheduledDefinition } from './automation-definition.ts';
+import { AdmissionError } from './work-admission.ts';
 import { enqueueAutomationRun } from './automation-runner.ts';
 import type { AutomationRow } from './types.ts';
 
@@ -14,7 +15,7 @@ async function enqueueDueAutomation(): Promise<boolean> {
     if (!row) return false;
     const definition = parseScheduledDefinition(safeParseJson<unknown>(row.definition, {}));
     await db.prepare('UPDATE automations SET next_run_at=? WHERE id=?').run(now + intervalMs(definition), row.id);
-    await enqueueAutomationRun(db, row, 'scheduled');
+    try { await enqueueAutomationRun(db, row, 'scheduled'); } catch (error) { if (!(error instanceof AdmissionError)) throw error; }
     return true;
   });
 }

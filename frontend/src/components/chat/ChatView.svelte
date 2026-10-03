@@ -6,6 +6,7 @@
   import ModelPicker from './ModelPicker.svelte';
   import PromptPicker from './PromptPicker.svelte';
   import PresetPicker from './PresetPicker.svelte';
+  import { draftsStore } from '../../stores/drafts.svelte';
   import { chatStore } from '../../stores/chat.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import { modelsStore } from '../../stores/models.svelte';
@@ -52,7 +53,7 @@
       const conv = conversationsStore.list.find(c => c.id === conversationId);
       if (conv?.model_id) return conv.model_id;
     }
-    return preferencesStore.defaultModelId ?? modelsStore.models[0]?.id ?? '';
+    return preferencesStore.defaultModelId || modelsStore.models[0]?.id || '';
   });
 
   const selectedPromptId = $derived.by((): string => {
@@ -62,13 +63,13 @@
     return conversationsStore.list.find(c => c.id === conversationId)?.system_prompt_id ?? '';
   });
 
-  const systemPromptText = $derived(
-    selectedPromptId === '__preset__'
-      ? (modelsStore.presets.find(p => p.id === selectedPresetId)?.system_prompt ?? '')
-      : selectedPromptId
-        ? (promptsStore.prompts.find(p => p.id === selectedPromptId)?.content ?? '')
-        : ''
-  );
+  const systemPromptText = $derived.by(()=>{
+    const conv=conversationsStore.list.find(c=>c.id===conversationId);
+    if(_promptId===null && _presetId===null && conv?.custom_system_prompt != null)return conv.custom_system_prompt;
+    if(selectedPromptId==='__preset__')return modelsStore.presets.find(p=>p.id===selectedPresetId)?.system_prompt ?? '';
+    if(selectedPromptId)return promptsStore.prompts.find(p=>p.id===selectedPromptId)?.content ?? '';
+    return '';
+  });
   const systemPromptId = $derived(
     selectedPromptId && selectedPromptId !== '__preset__' ? selectedPromptId : undefined
   );
@@ -99,12 +100,12 @@
   function saveConvSettings() {
     if (!conversationId) return;
     const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
-    conversationsStore.update(conversationId, {
+    void conversationsStore.update(conversationId, {
       model_id: selectedModel,
       preset_id: selectedPresetId || null,
       system_prompt_id: (!selectedPresetId && selectedPromptId && selectedPromptId !== '__preset__') ? selectedPromptId : null,
-      custom_system_prompt: preset?.system_prompt || null,
-    });
+      custom_system_prompt: systemPromptText,
+    }).catch(error=>toast((error as Error).message,'error'));
   }
 
   function handleModelChange(newModel: string) {
@@ -135,7 +136,7 @@
     saveConvSettings();
   }
 
-  async function handleSend(payload: ChatPayload): Promise<ChatSendResult> {
+  async function handleSend(payload: ChatPayload, onAccepted?: (conversationId:string) => void): Promise<ChatSendResult> {
     let convId = conversationId;
     if (!convId) {
       const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
@@ -147,26 +148,24 @@
         folder_id: conversationsStore.activeFolderId ?? undefined,
       });
       convId = conv.id;
+      await draftsStore.save(convId,await draftsStore.load('new'));
       conversationsStore.setActive(convId);
       chatStore.setActiveConversation(convId);
       skipNextLoad = true;
       navigateTo('chat', convId);
     }
-    return chatStore.send({ ...payload, conversation_id: convId });
+    return chatStore.send({ ...payload, conversation_id: convId },onAccepted);
   }
 
   async function handleEdit(msg: Message, newContent: string) {
     if (!conversationId) return;
     try {
       if (msg.role === 'user') {
-        await chatStore.editUserMessage(conversationId, msg.id);
-        const messages = chatStore.messages;
-        const idx = messages.findIndex(m => m.id === msg.id);
-        const history = idx >= 0 ? messages.slice(0, idx) : messages;
         const payload: ChatPayload = {
           conversation_id: conversationId,
-          model: messages[idx]?.model ?? selectedModel,
-          system_prompt: systemPromptText || undefined,
+          edit_message_id: msg.id,
+          model: selectedModel,
+          system_prompt: systemPromptText,
           system_prompt_id: systemPromptId,
           new_user_message: { content: [{ type: 'text', text: newContent }] },
         };
@@ -189,7 +188,7 @@
     await chatStore.regenerate({
       conversation_id: conversationId,
       model: msg.model ?? history.find(m => m.model)?.model ?? selectedModel,
-      system_prompt: systemPromptText || undefined,
+      system_prompt: systemPromptText,
       assistant_message_id: msg.id,
     });
   }

@@ -9,6 +9,8 @@ RUN npm run build
 # Stage 2: Install only runtime dependencies and run TypeScript natively
 FROM node:26-alpine
 WORKDIR /app
+ENV NODE_ENV=production
+RUN apk add --no-cache libreoffice-writer libreoffice-impress libreoffice-calc imagemagick imagemagick-heic font-dejavu util-linux-misc
 
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci --omit=dev

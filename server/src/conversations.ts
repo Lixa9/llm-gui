@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from './auth.ts';
 import { getDb, generateId, runTransaction, safeParseJson } from './db/index.ts';
 import type { TxDb } from './db/index.ts';
-import type { ConversationRow, MessageRow } from './types.ts';
+import type { ConversationRow, MessageRow, MessageContentPart } from './types.ts';
 import { attachUploadsToMessage, cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads.ts';
 
 export const conversationsRouter = new Hono();
@@ -152,6 +152,7 @@ conversationsRouter.delete('/', async (c) => {
     // deletion cannot deadlock or resurrect a response.
     await db.prepare(`SELECT g.id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.owner_sub=? FOR UPDATE`).all(user.sub);
     await db.prepare(`DELETE FROM stream_leases WHERE id IN (SELECT g.rate_lease_id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.owner_sub=?)`).run(user.sub);
+    await db.prepare('DELETE FROM conversation_drafts WHERE user_sub=?').run(user.sub);
     await db.prepare('DELETE FROM conversations WHERE owner_sub=?').run(user.sub);
     await db.prepare('DELETE FROM uploads WHERE owner_sub=?').run(user.sub);
   });
@@ -166,6 +167,7 @@ conversationsRouter.delete('/:id', async (c) => {
     await db.prepare(`SELECT g.id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.id=? AND c.owner_sub=? FOR UPDATE`).all(id, user.sub);
     await db.prepare(`DELETE FROM stream_leases WHERE id IN (SELECT g.rate_lease_id FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE c.id=? AND c.owner_sub=?)`).run(id, user.sub);
     const uploadIds = await uploadIdsForConversation(db, id);
+    await db.prepare('DELETE FROM conversation_drafts WHERE user_sub=? AND conversation_key=?').run(user.sub,id);
     await db.prepare('DELETE FROM conversations WHERE id=? AND owner_sub=?').run(id, user.sub);
     await cleanupUnreferencedUploads(db, user.sub, uploadIds);
   });
@@ -253,11 +255,12 @@ conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
       if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(id)) {
         throw new Error('EDIT_ACTIVE_GENERATION');
       }
-      if (!await db.prepare('SELECT id FROM messages WHERE id=? AND conversation_id=?').get(msgId, id)) return undefined;
+      const original = await db.prepare('SELECT content FROM messages WHERE id=? AND conversation_id=?').get<{content:unknown}>(msgId,id);
+      if (!original) return undefined;
+      const attachments = safeParseJson<MessageContentPart[]>(original.content,[]).filter(p=>p.type!=='text');
       const oldUploads = await db.prepare('SELECT upload_id FROM message_uploads WHERE message_id=?').all<{ upload_id: string }>(msgId);
-      await db.prepare('DELETE FROM message_uploads WHERE message_id=?').run(msgId);
       await db.prepare('UPDATE messages SET content=?, content_text=?, edited_at=? WHERE id=? AND conversation_id=?')
-        .run(JSON.stringify([{ type: 'text', text: body.content }]), body.content, Date.now(), msgId, id);
+        .run(JSON.stringify([{ type: 'text', text: body.content }, ...attachments]), body.content, Date.now(), msgId, id);
       await cleanupUnreferencedUploads(db, user.sub, oldUploads.map(upload => upload.upload_id));
       return db.prepare('SELECT * FROM messages WHERE id=? AND conversation_id=?').get<MessageRow>(msgId, id);
     });

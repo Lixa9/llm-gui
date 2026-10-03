@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { brandingStore } from './stores/branding.svelte';
   import { onMount } from 'svelte';
   import TopBar from './components/layout/TopBar.svelte';
   import Sidebar from './components/layout/Sidebar.svelte';
@@ -32,6 +33,7 @@
 
     // Boot sequence — just resolve auth; store loading is driven by the $effect below
     authStore.init();
+    void brandingStore.load();
 
     // Sync active conversation from URL
     const syncActive = () => {
@@ -58,6 +60,8 @@
       preferencesStore.load();
     }
   });
+
+  $effect(()=>{document.title=brandingStore.value.name;if(brandingStore.value.accent_color)document.documentElement.style.setProperty('--accent',brandingStore.value.accent_color);});
 
   // Apply the theme from preferences globally
   $effect(() => {

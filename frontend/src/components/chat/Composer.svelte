@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
+  import { modelsStore } from '../../stores/models.svelte';
+  import { draftsStore } from '../../stores/drafts.svelte';
   import { api } from '$lib/api';
   import type { ChatPayload, ChatSendResult, UploadResult } from '$lib/types';
   import { fileIcon } from '$lib/fileUtils';
@@ -11,14 +13,19 @@
     selectedModel: string;
     systemPromptText: string;
     systemPromptId: string | undefined;
-    onSend: (payload: ChatPayload) => Promise<ChatSendResult>;
+    onSend: (payload: ChatPayload, onAccepted?: (conversationId:string) => void) => Promise<ChatSendResult>;
     onStop: () => void;
     streaming: boolean;
     expanded?: boolean;
   }
   let { conversationId, selectedModel, systemPromptText, systemPromptId, onSend, onStop, streaming, expanded = $bindable(false) }: Props = $props();
 
-  const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+  const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/tiff', 'image/bmp', 'image/svg+xml']);
+  let acceptFormats = $state('');
+  let draftKey = $state('');
+  let draftReady = $state(false);
+  let draftGeneration = 0;
+  onMount(()=>{ void api.uploads.formats().then(formats=>{ acceptFormats = formats.flatMap(f=>[f.mime,...f.extensions.map(ext=>`.${ext}`)]).join(','); }).catch(error=>toast((error as Error).message,'error')); });
   const MAX_ATTACHMENTS = 20;
   const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
   const TEXT_MAX_BYTES = 50 * 1024 * 1024;
@@ -46,11 +53,35 @@
     void deleteUploadBestEffort(uploadId, api.uploads.delete);
   }
 
+  function saveDraft() {
+    if(!draftReady || !draftKey)return Promise.resolve();
+    return draftsStore.save(draftKey,{text,attachments:pendingAttachments.flatMap(a=>a.result?[a.result]:[])});
+  }
+  $effect(()=>{
+    const key=conversationId ?? 'new';
+    untrack(()=>{
+      if(draftKey && draftKey!==key)void saveDraft();
+      for(const attachment of pendingAttachments){ if(attachment.localUrl.startsWith('blob:'))URL.revokeObjectURL(attachment.localUrl); discardedAttachmentIds.add(attachment.id); }
+      draftKey=key;draftReady=false;text='';pendingAttachments=[];
+      const generation=++draftGeneration;
+      void draftsStore.load(key).then(draft=>{
+        if(destroyed || generation!==draftGeneration)return;
+        text=draft.text;
+        pendingAttachments=draft.attachments.map(result=>({id:crypto.randomUUID(),localUrl:result.kind==='image'?`${result.url}/preview`:'',filename:result.filename,mimeType:result.mime_type,kind:result.kind ?? 'file',status:'ready',result,warning:result.warning}));
+        draftReady=true;
+      }).catch(error=>{if(generation===draftGeneration){draftReady=true;toast(`Could not load draft: ${(error as Error).message}`,'error');}});
+    });
+  });
+  $effect(()=>{
+    const value=text,attachments=pendingAttachments,ready=draftReady,key=draftKey;
+    if(!ready || !key)return;
+    const timer=setTimeout(()=>{void draftsStore.save(key,{text:value,attachments:attachments.flatMap(a=>a.result?[a.result]:[])});},250);
+    return ()=>clearTimeout(timer);
+  });
   onDestroy(() => {
-    destroyed = true;
-    for (const attachment of pendingAttachments) {
-      if (attachment.localUrl) URL.revokeObjectURL(attachment.localUrl);
-      if (attachment.result?.id) discardStoredUpload(attachment.result.id);
+    void saveDraft();destroyed=true;
+    for(const attachment of pendingAttachments){
+      if(attachment.localUrl.startsWith('blob:'))URL.revokeObjectURL(attachment.localUrl);
       discardedAttachmentIds.add(attachment.id);
     }
   });
@@ -85,13 +116,14 @@
       const attachment: PendingAttachment = { id: crypto.randomUUID(), localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
       pendingAttachments = [...pendingAttachments, attachment];
       try {
-        const result = await api.uploads.upload(file);
+        const result = await api.uploads.upload(file, selectedModel);
         if (destroyed || discardedAttachmentIds.has(attachment.id)) {
           discardStoredUpload(result.id);
           continue;
         }
+        if (localUrl.startsWith('blob:')) URL.revokeObjectURL(localUrl);
         pendingAttachments = pendingAttachments.map(a =>
-          a.id === attachment.id ? { ...a, status: 'ready', result, warning: result.warning } : a
+          a.id === attachment.id ? { ...a, status: 'ready', kind: result.kind ?? a.kind, mimeType: result.mime_type, localUrl: result.kind === 'image' ? `${result.url}/preview` : '', result, warning: result.warning } : a
         );
       } catch (err) {
         if (destroyed || discardedAttachmentIds.has(attachment.id)) continue;
@@ -106,8 +138,8 @@
     const a = pendingAttachments[idx];
     discardedAttachmentIds.add(a.id);
     if (a.localUrl) URL.revokeObjectURL(a.localUrl);
-    if (a.result?.id) discardStoredUpload(a.result.id);
     pendingAttachments = pendingAttachments.filter((_, i) => i !== idx);
+    if(a.result?.id)void saveDraft().then(()=>discardStoredUpload(a.result!.id)).catch(()=>{});
   }
 
   async function send() {
@@ -121,6 +153,8 @@
         type: 'image_url' as const,
         image_url: { url: a.result!.url },
         _filename: a.result!.filename,
+        _mime_type: a.result!.mime_type,
+        _warning: a.result!.warning ?? undefined,
       }));
 
     const fileParts = readyAttachments
@@ -130,6 +164,7 @@
         file: { url: a.result!.url },
         _filename: a.result!.filename,
         _mime_type: a.result!.mime_type,
+        _warning: a.result!.warning ?? undefined,
       }));
 
     const textParts = trimmed ? [{ type: 'text' as const, text: trimmed }] : [];
@@ -138,24 +173,30 @@
     const payload: ChatPayload = {
       conversation_id: conversationId,
       model: selectedModel,
-      system_prompt: systemPromptText || undefined,
+      system_prompt: systemPromptText,
       system_prompt_id: systemPromptId,
       new_user_message: { content: contentParts },
     };
 
+    const submittedDraftKey=draftKey;
+    let cleared = false;
+    const clearAcceptedDraft = (acceptedConversationId?:string) => {
+      if (cleared) return;
+      cleared = true;
+      if (draftKey===submittedDraftKey || draftKey===acceptedConversationId) {
+        for (const attachment of pendingAttachments) {
+          if (attachment.localUrl.startsWith('blob:')) URL.revokeObjectURL(attachment.localUrl);
+        }
+        draftGeneration++; draftReady=true; text=''; pendingAttachments=[];
+      }
+      void draftsStore.save(submittedDraftKey,{text:'',attachments:[]});
+      if(acceptedConversationId && acceptedConversationId!==submittedDraftKey) void draftsStore.save(acceptedConversationId,{text:'',attachments:[]});
+      expanded = false;
+    };
     submitting = true;
     try {
-      await submitComposerDraft(
-        () => onSend(payload),
-        () => {
-          for (const attachment of pendingAttachments) {
-            if (attachment.localUrl) URL.revokeObjectURL(attachment.localUrl);
-          }
-          text = '';
-          pendingAttachments = [];
-          expanded = false;
-        },
-      );
+      await saveDraft();
+      await submitComposerDraft(() => onSend(payload,clearAcceptedDraft),clearAcceptedDraft);
     } catch (error) {
       toast((error as Error).message, 'error');
     } finally {
@@ -164,14 +205,19 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       if (canSend) void send();
     }
   }
 
+  const modelCapabilities=$derived(modelsStore.models.find(m=>m.id===selectedModel)?.capabilities);
+  const incompatibleAttachments=$derived(pendingAttachments.some(a=>a.status==='ready' && (
+    ((a.kind==='image' || Number(a.result?.coverage?.served_image_count ?? 0)>0) && modelCapabilities?.vision!==true) ||
+    (a.result?.coverage?.processing_status==='native_only' && !modelCapabilities?.native_pdf)
+  )));
   const canSend = $derived(canSubmitComposerDraft({
-    streaming,
+    streaming: streaming || !draftReady || incompatibleAttachments,
     submitting,
     hasContent: !!text.trim(),
     hasReadyAttachment: pendingAttachments.some(a => a.status === 'ready'),
@@ -181,6 +227,7 @@
 </script>
 
 <div class="composer" class:expanded>
+  {#if incompatibleAttachments}<p role="status">Choose a model that supports these images or native PDF attachments.</p>{/if}
   {#if pendingAttachments.length > 0}
     <div class="attachments">
       {#each pendingAttachments as att, i}
@@ -200,7 +247,7 @@
           <span class="chip-name" title={att.status === 'error' ? att.errorMsg : att.filename}>
             {att.filename}
           </span>
-          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" disabled={streaming || submitting}>✕</button>
+          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" disabled={streaming || submitting || !draftReady}>✕</button>
         </div>
       {/each}
     </div>
@@ -212,14 +259,14 @@
       placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
       rows={3}
       onkeydown={handleKeydown}
-      disabled={streaming || submitting}
+      disabled={streaming || submitting || !draftReady}
     ></textarea>
     <div class="composer-controls">
       <button
         class="icon-btn"
         onclick={() => fileInputEl.click()}
-        title="Attach image"
-        disabled={streaming || submitting}
+        title="Attach files"
+        disabled={streaming || submitting || !draftReady}
       >📎</button>
       <button
         class="expand-btn"
@@ -238,7 +285,7 @@
   <input
     bind:this={fileInputEl}
     type="file"
-    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.oasis.opendocument.spreadsheet,application/epub+zip,text/plain,text/markdown,text/csv,text/html,application/json,.pdf,.docx,.odt,.xlsx,.xls,.ods,.epub,.html,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml"
+    accept={acceptFormats || undefined}
     multiple
     style="display:none"
     onchange={onFileSelected}

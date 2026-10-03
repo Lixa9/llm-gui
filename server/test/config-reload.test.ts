@@ -76,3 +76,16 @@ test('reload requests are serialized', async () => {
   assert.deepEqual(results, [true, true]);
   assert.equal(maxActive, 1);
 });
+
+test('invalid collection roots, model capabilities, duplicates, and references never activate', async () => {
+  for (const models of ['models: null\n', 'model: []\n', 'models: [wrong]\n', 'models:\n  - id: test\n    display_name: Test\n    capabilities: {native_pdf: true, vision: false}\n', 'models:\n  - {id: test, display_name: Test}\n  - {id: test, display_name: Duplicate}\n']) {
+    await writeConfigs('Stable'); loadConfig();
+    await writeFile(join(configDir,'models.yaml'),models);
+    assert.equal(await reloadConfig({reconcile:async()=>assert.fail('invalid config activated'),invalidateCaches:async()=>{}}),false);
+    assert.equal(getConfig().app.name,'Stable');
+  }
+  await writeConfigs('References');loadConfig();
+  await writeFile(join(configDir,'models.yaml'),'models:\n  - {id: test, display_name: Test, allowed_roles: [admin]}\n');
+  await writeFile(join(configDir,'presets.yaml'),'presets:\n  - {name: Wrong, base_model_id: missing, allowed_roles: [admin]}\n');
+  assert.equal(await reloadConfig({reconcile:async()=>assert.fail(),invalidateCaches:async()=>{}}),false);
+});

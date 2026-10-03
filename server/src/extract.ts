@@ -1,20 +1,22 @@
 import { extname } from 'path';
+import { decodeText } from './formats.ts';
 
 const MAX_ARCHIVE_ENTRIES = 2_000;
-const MAX_ARCHIVE_EXPANDED_BYTES = 200 * 1024 * 1024;
+const MAX_ARCHIVE_EXPANDED_BYTES = 64 * 1024 * 1024;
 
-function assertArchiveBudget(zip: { getEntries(): Array<{ header?: { size?: number } }> }): void {
+export function assertArchiveBudget(zip: { getEntries(): Array<{ header?: { size?: number } }> }): void {
   const entries = zip.getEntries();
   if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('Archive contains too many entries');
   const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
   if (expanded > MAX_ARCHIVE_EXPANDED_BYTES) throw new Error('Archive expands beyond the allowed size');
 }
 
-function stripHtml(html: string): string {
+export function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, value => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&nbsp;': ' ' }[value] ?? value))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -84,7 +86,7 @@ function parseXml(xml: string): XmlToken[] {
 }
 
 export interface FileMeta {
-  format: 'plain' | 'pdf' | 'docx' | 'odt' | 'xlsx' | 'ods' | 'html' | 'epub';
+  format: string;
   page_count?: number;
   served_pages?: number;
   sheet_names?: string[];
@@ -146,14 +148,14 @@ export async function extractText(bytes: Buffer, mimeType: string): Promise<Extr
 }
 
 async function extractPlain(bytes: Buffer): Promise<ExtractionResult> {
-  let raw = bytes.toString('utf-8');
+  let raw = decodeText(bytes);
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  const { text, warning } = truncate(raw.trim() || '[File appears empty or has no extractable text]');
+  const { text, warning } = truncate(raw.trim() ? raw : '[File appears empty or has no extractable text]');
   return { text, meta: { format: 'plain', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
-  let raw = bytes.toString('utf-8');
+  let raw = decodeText(bytes);
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const extracted = stripHtml(raw) || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(extracted);
@@ -176,12 +178,14 @@ async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
       if (token.tag.name === 'w:t' && !token.tag.isEnd) inTextTag = true;
       if (token.tag.name === 'w:t' && token.tag.isEnd) inTextTag = false;
       if (token.tag.name === 'w:p' && !token.tag.isEnd) text += '\n';
+      if (token.tag.name === 'w:tc' && token.tag.isEnd) text += '\t';
+      if (token.tag.name === 'w:tr' && token.tag.isEnd) text += '\n';
     } else if (token.type === 'text' && inTextTag && token.text) {
-      text += token.text + ' ';
+      text += token.text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     }
   }
 
-  const raw = text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
+  const raw = text.replace(/[ \t]+/g, ' ').trim() || '[File appears empty or has no extractable text]';
   const { text: truncatedText, warning } = truncate(raw);
   return { text: truncatedText, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
@@ -202,11 +206,11 @@ async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
       if (token.tag.name === 'text:p' && !token.tag.isEnd) { inP = true; text += '\n'; }
       if (token.tag.name === 'text:p' && token.tag.isEnd) inP = false;
     } else if (token.type === 'text' && inP && token.text) {
-      text += token.text + ' ';
+      text += token.text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     }
   }
 
-  const raw = text.replace(/\s+/g, ' ').trim() || '[File appears empty or has no extractable text]';
+  const raw = text.replace(/[ \t]+/g, ' ').trim() || '[File appears empty or has no extractable text]';
   const { text: truncatedText, warning } = truncate(raw);
   return { text: truncatedText, meta: { format: 'odt', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
@@ -216,7 +220,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
 
   if (mimeType === 'application/vnd.ms-excel') {
     // Legacy XLS binary format — not supported without a binary parser
-    return { text: '[XLS binary format not supported — please convert to XLSX]', meta: { format: 'xlsx' } };
+    throw new Error('XLS must first be converted to XLSX');
   }
 
   const zip = new AdmZip(bytes);
@@ -224,70 +228,32 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   const format = mimeType.includes('oasis') ? 'ods' : 'xlsx';
 
   if (format === 'ods') {
-    // ODS: content.xml has <table:table table:name="…"> with <table:table-row> / <table:table-cell>
-    const entry = zip.getEntry('content.xml');
-    if (!entry) throw new Error('ODS has no content.xml');
-    const xml = entry.getData().toString('utf-8');
-    const tokens = parseXml(xml);
-    const sheetNames: string[] = [];
-    const sections: string[] = [];
-
-    let currentSheetName = '';
-    let sheetRows: string[] = [];
-    let currentRowCells: string[] = [];
-    let currentCellText = '';
-    let inCell = false;
-    let cellRepeated = 1;
-
-    for (const token of tokens) {
-      if (token.type === 'tag' && token.tag) {
-        const { name, isEnd, attributes } = token.tag;
-        if (name === 'table:table') {
-          if (!isEnd) {
-            currentSheetName = attributes['table:name'] || '';
-            sheetNames.push(currentSheetName);
-            sheetRows = [];
-          } else {
-            if (sheetRows.length > 0) {
-              sections.push(`=== Sheet: ${currentSheetName} ===\n${sheetRows.join('\n')}`);
-            }
-          }
-        } else if (name === 'table:table-row') {
-          if (!isEnd) {
-            currentRowCells = [];
-          } else {
-            if (currentRowCells.some(c => c !== '')) {
-              let lastNonEmpty = currentRowCells.length - 1;
-              while (lastNonEmpty >= 0 && currentRowCells[lastNonEmpty] === '') {
-                lastNonEmpty--;
-              }
-              const rowJoined = currentRowCells.slice(0, lastNonEmpty + 1).join(',');
-              sheetRows.push(rowJoined);
-            }
-          }
-        } else if (name === 'table:table-cell') {
-          if (!isEnd) {
-            inCell = true;
-            currentCellText = '';
-            const rep = attributes['table:number-columns-repeated'];
-            cellRepeated = rep ? Math.min(parseInt(rep, 10), 100) : 1;
-          } else {
-            inCell = false;
-            const val = currentCellText.replace(/\s+/g, ' ').trim();
-            const formatted = val.includes(',') ? `"${val.replace(/"/g, '""')}"` : val;
-            for (let k = 0; k < cellRepeated; k++) {
-              currentRowCells.push(formatted);
-            }
-          }
+    const entry=zip.getEntry('content.xml');if(!entry)throw new Error('ODS has no content.xml');
+    const xml=entry.getData().toString('utf8'),sheetNames:string[]=[],sections:string[]=[];
+    const attr=(tag:string,key:string)=>decodeEntities(tag.match(new RegExp(`${key}=["']([^"']*)["']`))?.[1] ?? '');
+    for(const table of xml.matchAll(/<table:table\b([^>]*)>([\s\S]*?)<\/table:table>/g)){
+      const name=attr(table[1],'table:name');sheetNames.push(name);const rows:string[]=[];
+      for(const row of table[2].matchAll(/<table:table-row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/table:table-row>)/g)){
+        const cells:string[]=[];
+        for(const cell of (row[2] ?? '').matchAll(/<table:(?:table-cell|covered-table-cell)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/table:table-cell>)/g)){
+          const value=decodeEntities((cell[2] ?? '').replace(/<\/text:p>/g,'\n').replace(/<[^>]+>/g,'').trim()) || attr(cell[1],'office:string-value') || attr(cell[1],'office:date-value') || attr(cell[1],'office:time-value') || attr(cell[1],'office:boolean-value') || attr(cell[1],'office:value');
+          const repeat=Number(attr(cell[1],'table:number-columns-repeated') || '1');
+          if(!Number.isSafeInteger(repeat) || repeat<1)throw new Error('Invalid repeated spreadsheet column');
+          // Empty trailing repeated columns can span the full ODS grid without allocating it.
+          if(!value && repeat>256)break;
+          if(cells.length+repeat>256)throw new Error('Spreadsheet exceeds 256 columns');
+          for(let i=0;i<repeat;i++)cells.push(/[,\n"]/.test(value)?`"${value.replace(/"/g,'""')}"`:value);
         }
-      } else if (token.type === 'text' && inCell && token.text) {
-        currentCellText += token.text + ' ';
+        if(!cells.some(Boolean))continue;
+        const repeat=Number(attr(row[1],'table:number-rows-repeated') || '1');
+        if(!Number.isSafeInteger(repeat) || repeat<1 || rows.length+repeat>10000)throw new Error('Spreadsheet exceeds 10,000 rows');
+        while(cells.at(-1)==='')cells.pop();
+        for(let i=0;i<repeat;i++)rows.push(cells.join(','));
       }
+      if(rows.length)sections.push(`=== Sheet: ${name} ===\n${rows.join('\n')}`);
     }
-
-    const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
-    const { text, warning } = truncate(raw);
-    return { text, meta: { format: 'ods', sheet_names: sheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+    const result=truncate(sections.join('\n\n') || '[Workbook has no readable cells]');
+    return {text:result.text,meta:{format:'ods',sheet_names:sheetNames,truncated:!!result.warning},warning:result.warning};
   }
 
   // XLSX: xl/workbook.xml (sheet list), xl/sharedStrings.xml (string table), xl/worksheets/sheet*.xml
@@ -356,11 +322,16 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     }
   }
 
+  const stylesXml=zip.getEntry('xl/styles.xml')?.getData().toString('utf8') ?? '';
+  const formats=new Map<number,string>();
+  for(const token of parseXml(stylesXml))if(token.tag?.name==='numFmt' && !token.tag.isEnd)formats.set(Number(token.tag.attributes.numFmtId),decodeEntities(token.tag.attributes.formatCode ?? ''));
+  const cellStyles=(stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1].match(/<xf\b[^>]*>/g) ?? []).map(tag=>Number(tag.match(/numFmtId=["'](\d+)["']/)?.[1] ?? 0));
+  const date1904=/date1904=["'](?:1|true)["']/.test(workbookXml);
   const sections: string[] = [];
   for (const { name, rId } of sheetRels) {
     const target = relMap.get(rId);
     if (!target) continue;
-    const wsPath = target.startsWith('worksheets/') ? `xl/${target}` : target;
+    const wsPath = target.startsWith('/') ? target.slice(1) : target.startsWith('xl/') ? target : `xl/${target}`;
     const wsEntry = zip.getEntry(wsPath);
     if (!wsEntry) continue;
     const wsXml = wsEntry.getData().toString('utf-8');
@@ -372,6 +343,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     const wsTokens = parseXml(wsXml);
     let currentCellRef = '';
     let currentCellType = '';
+    let currentStyle=0;
     let inV = false;
     let currentVal = '';
 
@@ -381,12 +353,13 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
         if (match) {
           const col = colIndex(match[1]);
           const row = parseInt(match[2], 10) - 1;
+          if (row >= 10000 || col >= 256 || cellMap.size >= 100000) throw new Error('Spreadsheet exceeds 10,000 rows, 256 columns, or 100,000 cells');
           let val = '';
           if (currentCellType === 's') {
             const idx = parseInt(currentVal, 10);
-            val = sharedStrings[idx] ?? '';
+            val = decodeEntities(sharedStrings[idx] ?? '');
           } else {
-            val = currentVal;
+            val = currentCellType==='b' ? (currentVal==='1'?'true':'false') : currentCellType==='inlineStr'?decodeEntities(currentVal):formatCell(currentVal,cellStyles[currentStyle] ?? 0,formats,date1904);
           }
           cellMap.set(`${row}:${col}`, val);
           if (row > maxRow) maxRow = row;
@@ -405,6 +378,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
           if (!isEnd) {
             currentCellRef = attributes['r'] || '';
             currentCellType = attributes['t'] || '';
+            currentStyle=Number(attributes.s ?? 0);
             currentVal = '';
             if (selfClosing) {
               commitCell();
@@ -412,7 +386,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
           } else {
             commitCell();
           }
-        } else if (tagName === 'v') {
+        } else if (tagName === 'v' || (tagName === 't' && currentCellType === 'inlineStr')) {
           inV = !isEnd;
         }
       } else if (token.type === 'text' && inV && token.text) {
@@ -420,12 +394,13 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
       }
     }
 
+    if ((maxRow + 1) * (maxCol + 1) > 250000) throw new Error('Spreadsheet used range exceeds 250,000 cells');
     const rows: string[] = [];
     for (let r = 0; r <= maxRow; r++) {
       const cells: string[] = [];
       for (let c = 0; c <= maxCol; c++) {
         const v = cellMap.get(`${r}:${c}`) ?? '';
-        cells.push(v.includes(',') ? `"${v.replace(/"/g, '""')}"` : v);
+        cells.push(/[,\n"]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
       }
       if (cells.some(c => c !== '')) rows.push(cells.join(','));
     }
@@ -435,6 +410,28 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(raw);
   return { text, meta: { format: 'xlsx', sheet_names: sheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+}
+
+function decodeEntities(value:string):string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos);|&#(?:x[0-9a-f]+|[0-9]+);/gi,entity=>{
+    const predefined:Record<string,string>={'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&apos;':"'"};
+    if(predefined[entity])return predefined[entity];
+    const point=parseInt(entity.slice(entity[2]==='x'?3:2,-1),entity[2]==='x'?16:10);
+    return point>0 && point<=0x10ffff?String.fromCodePoint(point):entity;
+  });
+}
+function formatCell(value:string,id:number,formats:Map<number,string>,date1904:boolean):string {
+  if(value==='' || !Number.isFinite(Number(value)))return value;
+  const numeric=Number(value),format=formats.get(id) ?? '';
+  const dateFormat=(id>=14 && id<=22)||(id>=27 && id<=36)||(id>=45 && id<=47)||/[ymdhis]/i.test(format.replace(/"[^"']*"|\[[^\]]*\]/g,''));
+  if(dateFormat){
+    if(!date1904 && numeric===60)return '1900-02-29';
+    const epoch=date1904?Date.UTC(1904,0,1):Date.UTC(1899,11,numeric<60?31:30);
+    const date=new Date(epoch+numeric*86400000);
+    return Number.isFinite(date.getTime())?date.toISOString().replace('T',' ').replace(/(?: 00:00:00\.000Z|\.000Z)$/,''):value;
+  }
+  if(id===9 || id===10 || format.includes('%'))return `${(numeric*100).toFixed(id===9?0:2)}%`;
+  return value;
 }
 
 function colIndex(col: string): number {
@@ -506,32 +503,36 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   return { text, meta: { format: 'epub', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
-export async function renderPdfPages(
-  bytes: Buffer,
-): Promise<{ page_count: number; served: number; pages: string[]; warning?: string }> {
+export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: number; served: number; pages: string[]; text: string; warning?: string }> {
   const mupdf = (await import('mupdf')).default;
-
   const doc = mupdf.Document.openDocument(new Uint8Array(bytes), 'application/pdf');
-  const page_count = doc.countPages();
-  const served = Math.min(page_count, PDF_PAGE_CAP);
-  const matrix = mupdf.Matrix.scale(150 / 72, 150 / 72);
-
-  const pages: string[] = [];
-  for (let i = 0; i < served; i++) {
-    const page = doc.loadPage(i);
-    const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false);
-    pages.push(Buffer.from(pixmap.asJPEG(85)).toString('base64'));
-    pixmap.destroy();
-    page.destroy();
-  }
-  doc.destroy();
-
-  return {
-    page_count,
-    served,
-    pages,
-    warning: page_count > PDF_PAGE_CAP ? `Showing first ${PDF_PAGE_CAP} of ${page_count} pages` : undefined,
-  };
+  const pages: string[] = [], text: string[] = [];
+  let derivedBytes = 0;
+  try {
+    const page_count = doc.countPages();
+    const served = Math.min(page_count, PDF_PAGE_CAP);
+    for (let i = 0; i < served; i++) {
+      const page = doc.loadPage(i);
+      try {
+        const [x0, y0, x1, y1] = page.getBounds();
+        if (![x0,y0,x1,y1].every(Number.isFinite) || x1 <= x0 || y1 <= y0) throw new Error('Invalid PDF page dimensions');
+        const scale = Math.min(150 / 72, 3000 / Math.max(x1-x0, y1-y0));
+        if ((x1-x0)*scale*(y1-y0)*scale > 9000000) throw new Error('PDF page exceeds pixel limit');
+        const structured = page.toStructuredText();
+        try { text.push(`=== Page ${i+1} ===\n${structured.asText()}`); } finally { structured.destroy(); }
+        const pixmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
+        try {
+          const data = Buffer.from(pixmap.asJPEG(85));
+          derivedBytes += data.length;
+          if (derivedBytes > 24 * 1024 * 1024) throw new Error('Rendered document exceeds 24 MB derivative limit');
+          pages.push(data.toString('base64'));
+        } finally { pixmap.destroy(); }
+        if (text.reduce((n,t) => n+t.length, 0) > TEXT_CAP) break;
+      } finally { page.destroy(); }
+    }
+    return { page_count, served: pages.length, pages, text: truncate(text.join('\n\n')).text,
+      warning: pages.length < page_count ? `Showing first ${pages.length} of ${page_count} pages` : undefined };
+  } finally { doc.destroy(); }
 }
 
 export async function extractDocImages(
@@ -568,7 +569,7 @@ export async function extractDocImages(
           if (href && mediaType.startsWith('image/')) {
             const entry = zip.getEntry(opfBase + href) ?? zip.getEntry(href);
             if (entry) {
-              const ext = mediaType === 'image/png' ? '.png' : mediaType === 'image/gif' ? '.gif' : mediaType === 'image/webp' ? '.webp' : '.jpg';
+              const ext = extname(href) || '.bin';
               imageEntriesList.push({ data: entry.getData(), ext });
             }
           }

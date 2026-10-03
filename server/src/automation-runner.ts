@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config.ts';
+import { getConfig, runtimeConfigurationIsCurrent, assertProviderIdentity, providerIdentity } from './config.ts';
 import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
 import { parseScheduledDefinition } from './automation-definition.ts';
 import { trackBackgroundTask } from './lifecycle.ts';
@@ -7,7 +7,12 @@ import { logger } from './logger.ts';
 import { findAllowedModel } from './models.ts';
 import type { AutomationRow, AutomationRunRow, Role, ScheduledDefinition } from './types.ts';
 
+import { resolveCurrentRole } from './auth.ts';
+import { admittedClaim, assertQueueCapacity, AdmissionError } from './work-admission.ts';
+import { boundedJson, isRetryable, UpstreamError } from './upstream.ts';
+
 interface AutomationRunSnapshot {
+  provider?: {base_url:string;revision:string};
   name: string;
   owner_sub: string | null;
   definition: ScheduledDefinition;
@@ -40,8 +45,7 @@ function abortControl(control: RunningAutomationControl, reason: RunningAutomati
 }
 
 async function resolveOwnerRole(ownerSub: string): Promise<Role | null> {
-  const owner = await getDb().prepare('SELECT last_known_role FROM users WHERE sub=?').get<{ last_known_role: Role }>(ownerSub);
-  return owner?.last_known_role ?? null;
+  return resolveCurrentRole(ownerSub, true);
 }
 
 async function assertModelAccess(snapshot: AutomationRunSnapshot, ownerRole?: Role): Promise<void> {
@@ -64,11 +68,19 @@ export async function enqueueAutomationRun(
   row: AutomationRow,
   source: 'scheduled' | 'manual',
 ): Promise<AutomationRunRow> {
+  const current = await db.prepare('SELECT * FROM automations WHERE id=? FOR UPDATE').get<AutomationRow>(row.id);
+  if (!current || current.deleted_at !== null || !current.enabled) throw new AdmissionError('Automation is disabled or deleted');
+  row = current;
+  if (await db.prepare("SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('queued','running')").get(row.id)) throw new AdmissionError('This automation already has a run in progress');
+  await assertQueueCapacity(db);
+  const queued = await db.prepare("SELECT count(*)::int AS count FROM automation_runs r JOIN automations a ON a.id=r.automation_id WHERE a.owner_sub IS NOT DISTINCT FROM ?::text AND r.status IN ('queued','running')").get<{count:number}>(row.owner_sub);
+  if ((queued?.count ?? 0) >= 20) throw new AdmissionError('Automation queue limit reached for this owner');
   const definition = parseScheduledDefinition(row.definition);
   const recipientSubs = row.owner_sub === null
     ? (await db.prepare('SELECT user_sub FROM user_automation_subscriptions WHERE automation_id=? AND enabled=true ORDER BY user_sub').all<{ user_sub: string }>(row.id)).map(item => item.user_sub)
     : [row.owner_sub];
   const snapshot: AutomationRunSnapshot = {
+    provider: providerIdentity(),
     name: row.name,
     owner_sub: row.owner_sub,
     definition,
@@ -99,6 +111,7 @@ export async function runAutomation(
   ownerRole?: Role,
 ): Promise<AutomationRunRow> {
   const snapshot: AutomationRunSnapshot = {
+    provider: providerIdentity(),
     name: row.name,
     owner_sub: row.owner_sub,
     definition: parseScheduledDefinition(row.definition),
@@ -111,13 +124,13 @@ export async function runAutomation(
 
 async function claimAutomationRun(id: string): Promise<AutomationRunRow | undefined> {
   const now = Date.now();
-  return getDb().prepare(`
+  return admittedClaim('automation_runs', id, db => db.prepare(`
     UPDATE automation_runs
     SET status='running', attempt=attempt+1, lease_owner=?, lease_until=?, updated_at=?, error=NULL
     WHERE id=? AND available_at<=?
       AND (status='queued' OR (status='running' AND lease_until<?))
     RETURNING *
-  `).get<AutomationRunRow>(WORKER_ID, now + LEASE_MS, now, id, now, now);
+  `).get<AutomationRunRow>(WORKER_ID, now + LEASE_MS, now, id, now, now));
 }
 
 async function persistResult(row: AutomationRunRow, resultText: string): Promise<boolean> {
@@ -144,12 +157,24 @@ async function deliverResult(
     `).get<{ status: string }>(row.id, userSub);
     if (!delivery || delivery.status === 'done' || delivery.status === 'skipped') return;
 
+    const auto = await db.prepare('SELECT * FROM automations WHERE id=? FOR SHARE').get<AutomationRow>(row.automation_id);
+    await db.prepare('SELECT sub FROM users WHERE sub=? FOR SHARE').get(userSub);
+    const role = await resolveCurrentRole(userSub, true);
+    const subscription = auto?.owner_sub === null ? await db.prepare('SELECT enabled FROM user_automation_subscriptions WHERE automation_id=? AND user_sub=? FOR SHARE').get<{enabled:boolean}>(row.automation_id,userSub) : null;
+    const roles = safeParseJson<Role[] | null>(auto?.visible_to,null);
+    const eligible = auto && auto.deleted_at === null && auto.enabled && role &&
+      (auto.owner_sub === userSub || (auto.owner_sub === null && subscription?.enabled && (!roles || roles.includes(role)))) &&
+      await findAllowedModel(snapshot.definition.model,role);
+    if (!eligible) {
+      await db.prepare("UPDATE automation_run_deliveries SET status='skipped', error='Recipient no longer eligible', completed_at=? WHERE run_id=? AND user_sub=?").run(Date.now(),row.id,userSub);
+      return;
+    }
     const convId = generateId();
     const timestamp = Date.now();
     await db.prepare(`
-      INSERT INTO conversations (id, owner_sub, title, title_auto, model_id)
-      VALUES (?, ?, ?, false, ?)
-    `).run(convId, userSub, makeConversationTitle(snapshot.name), snapshot.definition.model || null);
+      INSERT INTO conversations (id, owner_sub, title, title_auto, model_id, custom_system_prompt)
+      VALUES (?, ?, ?, false, ?, ?)
+    `).run(convId, userSub, makeConversationTitle(snapshot.name), snapshot.definition.model || null, snapshot.definition.system_prompt ?? '');
     await db.prepare(`
       INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp)
       VALUES (?, ?, 'user', ?, ?, 'done', ?)
@@ -179,10 +204,10 @@ async function finishAutomationRun(row: AutomationRunRow): Promise<void> {
   `).run(now, now, row.id, WORKER_ID, row.attempt);
 }
 
-async function retryOrFail(row: AutomationRunRow, error: string): Promise<void> {
+async function retryOrFail(row: AutomationRunRow, error: string, retryable = true): Promise<void> {
   const now = Date.now();
   const maxAttempts = getConfig().conversation.generation_max_attempts;
-  if (row.failure_count + 1 < maxAttempts) {
+  if (retryable && row.failure_count + 1 < maxAttempts) {
     const retryAt = now + Math.min(30_000, 1_000 * (2 ** row.failure_count));
     await getDb().prepare(`
       UPDATE automation_runs
@@ -211,9 +236,10 @@ async function fetchCompletion(definition: ScheduledDefinition, signal: AbortSig
     body: JSON.stringify({ model: definition.model, messages, stream: false }),
     signal,
   });
-  if (!response.ok) throw new Error(`automation upstream error ${response.status}`);
-  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  return data.choices?.[0]?.message?.content ?? '';
+  const data = await boundedJson(response, cfg.conversation.max_output_bytes) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content) throw new UpstreamError('Automation model returned no text');
+  return content;
 }
 
 async function executeAutomationRun(row: AutomationRunRow): Promise<void> {
@@ -239,20 +265,36 @@ async function executeAutomationRun(row: AutomationRunRow): Promise<void> {
 
   try {
     if (!snapshot.name || !snapshot.definition || !Array.isArray(snapshot.recipient_subs) || !Array.isArray(snapshot.visible_roles)) throw new Error('Invalid automation run snapshot');
-    await assertModelAccess(snapshot);
+    assertProviderIdentity(snapshot.provider);
+    const currentAuto = await getDb().prepare('SELECT enabled, deleted_at FROM automations WHERE id=?').get<{enabled:boolean;deleted_at:number|null}>(row.automation_id);
+    if (!currentAuto || !currentAuto.enabled || currentAuto.deleted_at !== null) throw new UpstreamError('Automation was disabled or deleted');
+    if (snapshot.owner_sub !== null) await assertModelAccess(snapshot);
     if (snapshot.recipient_subs.length === 0) {
       await finishAutomationRun(row);
       return;
     }
+    const currentRecipients: string[] = [];
+    for (const recipient of snapshot.recipient_subs) {
+      const role = await resolveCurrentRole(recipient, true);
+      const auto = await getDb().prepare('SELECT * FROM automations WHERE id=?').get<AutomationRow>(row.automation_id);
+      const roles = safeParseJson<Role[] | null>(auto?.visible_to,null);
+      const subscribed = snapshot.owner_sub !== null || await getDb().prepare('SELECT user_sub FROM user_automation_subscriptions WHERE automation_id=? AND user_sub=? AND enabled=true').get(row.automation_id,recipient);
+      if (auto?.enabled && auto.deleted_at === null && role && subscribed && (!roles || roles.includes(role)) && await findAllowedModel(snapshot.definition.model,role)) currentRecipients.push(recipient);
+      else await getDb().prepare("UPDATE automation_run_deliveries SET status='skipped', error='Recipient no longer eligible', completed_at=? WHERE run_id=? AND user_sub=? AND status='queued'").run(Date.now(),row.id,recipient);
+    }
+    if (!currentRecipients.length) { await finishAutomationRun(row); return; }
     let resultText = row.result_text;
     if (resultText === null) {
+      assertProviderIdentity(snapshot.provider);
+      if(!await runtimeConfigurationIsCurrent())throw new UpstreamError('Configuration is updating',true);
       resultText = await fetchCompletion(snapshot.definition, control.controller.signal);
       if (!await persistResult(row, resultText)) {
         abortControl(control, 'superseded');
         return;
       }
     }
-    for (const userSub of snapshot.recipient_subs) {
+    if(!await runtimeConfigurationIsCurrent())throw new UpstreamError('Configuration is updating before delivery',true);
+    for (const userSub of currentRecipients) {
       if (control.controller.signal.aborted) break;
       await deliverResult(row, snapshot, userSub, resultText);
     }
@@ -261,7 +303,7 @@ async function executeAutomationRun(row: AutomationRunRow): Promise<void> {
     if ((error as Error).message === 'AUTOMATION_SUPERSEDED') abortControl(control, 'superseded');
     if (control.reason !== 'shutdown' && control.reason !== 'superseded') {
       const message = control.reason === 'timed_out' ? 'Automation exceeded its time limit' : error instanceof Error ? error.message : String(error);
-      await retryOrFail(row, message);
+      await retryOrFail(row, message, isRetryable(error));
     }
   } finally {
     clearTimeout(timeout);
@@ -271,7 +313,7 @@ async function executeAutomationRun(row: AutomationRunRow): Promise<void> {
 }
 
 export async function runAutomationJob(id: string): Promise<boolean> {
-  if (!acceptingWork || activeJobs.has(id)) return false;
+  if (!acceptingWork || activeJobs.has(id) || activeJobs.size >= getConfig().rate_limits.global_workers) return false;
   const row = await claimAutomationRun(id);
   if (!row) return false;
   await executeAutomationRun(row);

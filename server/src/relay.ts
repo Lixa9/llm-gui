@@ -1,110 +1,28 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth.ts';
-import { getDb, generateId, runTransaction, safeParseJson } from './db/index.ts';
-import { getConfig } from './config.ts';
+import { getDb, generateId, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
+import { getConfig, providerIdentity } from './config.ts';
 import { acquireStream, closeStream } from './ratelimit.ts';
 import { fetchModels } from './models.ts';
 import { logger } from './logger.ts';
-import type { MessageContentPart, MessageRow, SessionPayload } from './types.ts';
+import type { ConversationRow, MessageContentPart, MessageRow, ModelYamlEntry, SessionPayload } from './types.ts';
+import { InputError, contentPartSchema, canonicalizeAttachments, resolveContentParts, assertRequestBudget } from './attachment-transport.ts';
+import { AdmissionError, assertQueueCapacity } from './work-admission.ts';
 import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads.ts';
 import { createBackgroundSseResponse } from './background-sse.ts';
 import { cancelGeneration, getGeneration, isActiveGenerationConflict, runGeneration } from './generation-worker.ts';
-
-interface UploadRow {
-  sha256: string;
-  mime_type: string;
-  filename: string;
-  size: number;
-  extracted_text: string | null;
-  file_meta: unknown;
-  data: Buffer;
-  derived_images: unknown;
-}
-
-interface StoredMessage {
-  id?: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp?: number;
-}
-
-async function resolveContentParts(parts: MessageContentPart[], ownerSub: string): Promise<unknown[]> {
-  const resolved: unknown[] = [];
-  const db = getDb();
-  for (const part of parts) {
-    if (part.type === 'text') {
-      resolved.push(part);
-      continue;
-    }
-    const url = part.type === 'image_url' ? part.image_url.url : part.file.url;
-    if (url.startsWith('data:')) {
-      resolved.push(part);
-      continue;
-    }
-    if (!url.startsWith('/api/uploads/')) continue;
-    const uploadId = url.split('/').pop();
-    if (!uploadId) continue;
-    const row = await db.prepare(`
-      SELECT sha256, mime_type, filename, size, extracted_text, file_meta, data, derived_images
-      FROM uploads WHERE id=? AND owner_sub=?
-    `).get<UploadRow>(uploadId, ownerSub);
-    if (!row) continue;
-
-    if (part.type === 'image_url') {
-      resolved.push({ type: 'image_url', image_url: { url: `data:${row.mime_type};base64,${row.data.toString('base64')}` } });
-      continue;
-    }
-
-    const meta = safeParseJson<Record<string, unknown>>(row.file_meta, {});
-    const derived = safeParseJson<Array<{ data: string; ext: string }>>(row.derived_images, []);
-    const isPdf = row.mime_type === 'application/pdf';
-    if (isPdf && derived.length > 0) {
-      for (let index = 0; index < derived.length; index++) {
-        const image = derived[index];
-        resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, page: index + 1, total_pages: meta.page_count }) });
-        resolved.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.data}` } });
-      }
-      if (Number(meta.page_count) > derived.length) resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, note: `Showing first ${derived.length} of ${meta.page_count} pages` }) });
-    } else if (derived.length > 0) {
-      resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, ext: MIME_TO_EXT[row.mime_type] ?? '', size_kb: Math.round(row.size / 1024), content: row.extracted_text ?? '[Text extraction unavailable]' }) });
-      for (let index = 0; index < derived.length; index++) {
-        const image = derived[index];
-        const mime = image.ext === '.png' ? 'image/png' : image.ext === '.gif' ? 'image/gif' : image.ext === '.webp' ? 'image/webp' : 'image/jpeg';
-        resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, embedded_image: index + 1, of: derived.length }) });
-        resolved.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${image.data}` } });
-      }
-    } else {
-      resolved.push({ type: 'text', text: JSON.stringify({ filename: row.filename, ext: MIME_TO_EXT[row.mime_type] ?? '', size_kb: Math.round(row.size / 1024), content: row.extracted_text ?? '[Text extraction unavailable]' }) });
-    }
-  }
-  return resolved;
-}
-
-const MIME_TO_EXT: Record<string, string> = {
-  'application/pdf': '.pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-  'application/vnd.oasis.opendocument.text': '.odt',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-  'application/vnd.ms-excel': '.xls',
-  'application/vnd.oasis.opendocument.spreadsheet': '.ods',
-  'application/epub+zip': '.epub',
-};
 
 function contentPartsToText(content: MessageContentPart[]): string {
   return content.filter((part): part is { type: 'text'; text: string } => part.type === 'text').map(part => part.text).join('\n');
 }
 
-const contentPartSchema = z.union([
-  z.object({ type: z.literal('text'), text: z.string().max(1_000_000) }),
-  z.object({ type: z.literal('image_url'), image_url: z.object({ url: z.string().min(1).max(30_000_000) }), _filename: z.string().max(255).optional() }),
-  z.object({ type: z.literal('file'), file: z.object({ url: z.string().min(1).max(30_000_000) }), _filename: z.string().max(255).optional() }),
-]);
 const chatRequestSchema = z.object({
   conversation_id: z.string().uuid().nullable().optional(),
   model: z.string().trim().min(1).max(300),
   system_prompt: z.string().max(100_000).optional(),
   assistant_message_id: z.string().uuid().optional(),
+  edit_message_id: z.string().uuid().optional(),
   new_user_message: z.object({
     id: z.string().uuid().optional(),
     content: z.array(contentPartSchema).min(1).max(200),
@@ -124,22 +42,55 @@ function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { cont
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
 
-async function buildOpenaiMessages(
-  stored: StoredMessage[],
-  latestContent: MessageContentPart[],
-  systemPrompt: string | undefined,
-  historyMode: 'full' | 'latest_only' | undefined,
-  ownerSub: string,
-): Promise<unknown[]> {
-  const messages: unknown[] = [];
-  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-  if (historyMode !== 'latest_only') {
-    for (const message of stored.slice(0, -1)) {
-      messages.push({ role: message.role, content: await resolveContentParts(safeParseJson<MessageContentPart[]>(message.content, []), ownerSub) });
+async function buildOpenaiMessages(stored: MessageRow[], latest: MessageContentPart[], prompt: string, model: ModelYamlEntry, owner: string, db: TxDb): Promise<unknown[]> {
+  const messages: unknown[] = [], manifest: Array<{role:string;content:string|MessageContentPart[]}> = [];
+  if (prompt) {manifest.push({role:'system',content:prompt});}
+  if (prompt) messages.push({ role: 'system', content: prompt });
+  if (model.history_mode !== 'latest_only') {
+    for (const message of stored) {
+      const content=safeParseJson<MessageContentPart[]>(message.content,[]);
+      manifest.push({role:message.role,content});
+      messages.push({ role: message.role, content: await resolveContentParts(content, owner, model, db) });
+      assertRequestBudget(messages,model);
     }
   }
-  messages.push({ role: 'user', content: await resolveContentParts(latestContent, ownerSub) });
-  return messages;
+  manifest.push({role:'user',content:latest});
+  const attachmentCount=manifest.reduce((sum,m)=>sum+(typeof m.content==='string'?0:m.content.filter(p=>p.type!=='text').length),0);
+  if(attachmentCount>getConfig().attachments.max_files)throw new InputError('Conversation exceeds the attachment count limit');
+  messages.push({ role: 'user', content: await resolveContentParts(latest, owner, model, db) });
+  assertRequestBudget(messages, model);
+  return manifest;
+}
+async function effectivePrompt(conv: ConversationRow, supplied: string | undefined, db: TxDb): Promise<string> {
+  if (supplied !== undefined) return supplied;
+  if (conv.custom_system_prompt !== null) return conv.custom_system_prompt;
+  const preset = conv.preset_id ? await db.prepare('SELECT system_prompt FROM model_presets WHERE id=?').get<{ system_prompt: string }>(conv.preset_id) : null;
+  const prompt = conv.system_prompt_id ? await db.prepare('SELECT content FROM system_prompts WHERE id=?').get<{ content: string }>(conv.system_prompt_id) : null;
+  return preset?.system_prompt ?? prompt?.content ?? '';
+}
+async function removeTail(db: TxDb, convId: string, from: MessageRow, owner: string): Promise<void> {
+  const uploads = await db.prepare('SELECT DISTINCT mu.upload_id FROM message_uploads mu JOIN messages m ON m.id=mu.message_id WHERE m.conversation_id=? AND (m.timestamp,m.id)>=(?,?)').all<{upload_id:string}>(convId,from.timestamp,from.id);
+  await db.prepare('DELETE FROM messages WHERE conversation_id=? AND (timestamp,id)>=(?,?)').run(convId,from.timestamp,from.id);
+  await cleanupUnreferencedUploads(db,owner,uploads.map(row=>row.upload_id));
+}
+async function pinGenerationUploads(db: TxDb, id:string, messages:unknown[], model:ModelYamlEntry):Promise<void>{
+  const ids=new Set<string>();
+  for(const message of messages as Array<{content:string|MessageContentPart[]}>){
+    if(typeof message.content==='string')continue;
+    for(const part of message.content){
+      const url=part.type==='image_url'?part.image_url.url:part.type==='file'?part.file.url:'';
+      if(url.startsWith('/api/uploads/'))ids.add(url.slice('/api/uploads/'.length));
+    }
+  }
+  for(const uploadId of ids)await db.prepare('INSERT INTO generation_uploads (generation_id,upload_id) VALUES (?,?) ON CONFLICT DO NOTHING').run(id,uploadId);
+  await db.prepare(`UPDATE chat_generations SET request_snapshot=jsonb_set(request_snapshot,'{model_entry}',?::jsonb) WHERE id=?`).run(JSON.stringify(model),id);
+}
+function requestError(error: unknown): { error:string; status:400|404|409|429 } | null {
+  if (error instanceof InputError) return { error:error.message,status:400 };
+  if (error instanceof AdmissionError) return {error:error.message,status:429};
+  if ((error as Error).message === 'NOT_FOUND') return {error:'Not found',status:404};
+  if ((error as Error).message === 'ACTIVE_GENERATION' || isActiveGenerationConflict(error)) return {error:'This conversation already has a response in progress',status:409};
+  return null;
 }
 
 interface StreamContext {
@@ -176,7 +127,9 @@ function generationSnapshot(
 ) {
   return {
     model,
-    openai_messages: openaiMessages,
+    provider: providerIdentity(cfg),
+    input_messages: openaiMessages,
+    attachment_manifest_version: 1,
     history_mode: historyMode,
     title_prompt: titlePrompt,
     is_first_exchange: isFirstExchange,
@@ -191,103 +144,97 @@ async function findModel(userRole: string, model: string) {
   return modelEntry;
 }
 
-relayRouter.post('/', async (c) => {
-  const user = c.get('user');
-  const cfg = getConfig();
-  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
-  const parsedBody = chatRequestSchema.safeParse(await c.req.json());
-  if (!parsedBody.success) return c.json({ error: 'Invalid chat request' }, 400);
-  const body = parsedBody.data;
-  const modelEntry = await findModel(user.role, body.model);
-  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
-  const db = getDb();
-  let convId = body.conversation_id;
-  if (!convId) {
-    convId = generateId();
-    await db.prepare('INSERT INTO conversations (id, owner_sub, model_id, custom_system_prompt) VALUES (?, ?, ?, ?)').run(convId, user.sub, body.model, body.system_prompt ?? null);
-  } else if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(convId, user.sub)) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-  if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(convId)) {
-    return c.json({ error: 'This conversation already has a response in progress' }, 409);
-  }
-
-  const existing = await db.prepare('SELECT role, content FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<StoredMessage>(convId);
-  const userContent = JSON.stringify(body.new_user_message.content);
-  const pendingUser: MessageRow = { id: body.new_user_message.id ?? generateId(), conversation_id: convId, role: 'user', content: userContent, content_text: contentPartsToText(body.new_user_message.content), model: null, status: 'done', timestamp: Date.now(), edited_at: null };
-  const stored: StoredMessage[] = [...existing, { role: 'user', content: userContent }];
-  const openaiMessages = await buildOpenaiMessages(stored, body.new_user_message.content, body.system_prompt, modelEntry.history_mode, user.sub);
+relayRouter.post('/', async c => {
+  const user = c.get('user'), cfg = getConfig();
+  if (!cfg.openai.base_url) return c.json({error:'OpenAI-compatible endpoint is not configured.'},503);
+  const parsed = chatRequestSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({error:'Invalid chat request. Attachments must use managed upload references.'},400);
+  const body = parsed.data, model = await findModel(user.role,body.model);
+  if (!model) return c.json({error:'Model not available'},400);
   const rl = await acquireStream(user.sub);
-  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
-  const assistantMsgId = body.assistant_message_id ?? generateId();
+  if (!rl.allowed) return c.json({error:rl.reason},429);
+  const convId = body.conversation_id ?? generateId(), assistantMsgId = body.assistant_message_id ?? generateId();
   try {
-    await runTransaction(async tx => {
-      await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(convId);
-      if (await tx.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(convId)) {
-        throw new Error('ACTIVE_GENERATION');
+    const accepted = await runTransaction(async db => {
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(convId);
+      let conv = await db.prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=? FOR UPDATE').get<ConversationRow>(convId,user.sub);
+      if (!conv && body.conversation_id) throw new Error('NOT_FOUND');
+      if (!conv) {
+        await db.prepare('INSERT INTO conversations (id,owner_sub,model_id,custom_system_prompt) VALUES (?,?,?,?)').run(convId,user.sub,body.model,body.system_prompt ?? null);
+        conv = (await db.prepare('SELECT * FROM conversations WHERE id=?').get<ConversationRow>(convId))!;
       }
-      await tx.prepare('INSERT INTO messages (id, conversation_id, role, content, content_text, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)').run(pendingUser.id, convId, 'user', pendingUser.content, pendingUser.content_text, 'done', pendingUser.timestamp);
-      await attachUploadsToMessage(tx, pendingUser.id, user.sub, userContent);
-      await tx.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', '[]', '', ?, 'streaming', ?)`)
-        .run(assistantMsgId, convId, body.model, pendingUser.timestamp + 1);
-      await tx.prepare(`
-        INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, rate_lease_id, available_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-      `).run(assistantMsgId, convId, pendingUser.id, assistantMsgId, user.sub, JSON.stringify(generationSnapshot(cfg, body.model, openaiMessages, modelEntry.history_mode, pendingUser.content_text, existing.filter(message => message.role === 'user').length === 0)), rl.leaseId!, Date.now());
+      if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued','running')").get(convId)) throw new Error('ACTIVE_GENERATION');
+      await assertQueueCapacity(db);
+      const existing = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp,id').all<MessageRow>(convId);
+      const editIndex = body.edit_message_id ? existing.findIndex(m=>m.id===body.edit_message_id && m.role==='user') : -1;
+      if (body.edit_message_id && editIndex < 0) throw new InputError('User message cannot be edited');
+      const original = editIndex >= 0 ? existing[editIndex] : null;
+      // Text editing preserves every original attachment. Removing an attachment
+      // is a separate explicit content operation, never an effect of editing text.
+      let content = body.new_user_message.content as MessageContentPart[];
+      if (original) content = [...content.filter(p=>p.type==='text'), ...safeParseJson<MessageContentPart[]>(original.content,[]).filter(p=>p.type!=='text')];
+      content = await canonicalizeAttachments(content,user.sub,db);
+      const retained = editIndex >= 0 ? existing.slice(0,editIndex) : existing;
+      const prompt = await effectivePrompt(conv,body.system_prompt,db);
+      const upstream = await buildOpenaiMessages(retained,content,prompt,model,user.sub,db);
+      const timestamp = original?.timestamp ?? Math.max(Date.now(),(existing.at(-1)?.timestamp ?? 0)+1);
+      const userId = original?.id ?? body.new_user_message.id ?? generateId();
+      if (original) {
+        await db.prepare('UPDATE messages SET content=?,content_text=?,edited_at=? WHERE id=?').run(JSON.stringify(content),contentPartsToText(content),Date.now(),userId);
+        // Keep the edited message and its upload links while truncating its tail.
+        if (existing[editIndex+1]) await removeTail(db,convId,existing[editIndex+1],user.sub);
+      } else {
+        await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,status,timestamp) VALUES (?,?,'user',?,?,'done',?)").run(userId,convId,JSON.stringify(content),contentPartsToText(content),timestamp);
+      }
+      await attachUploadsToMessage(db,userId,user.sub,JSON.stringify(content));
+      await db.prepare('UPDATE conversations SET custom_system_prompt=?, model_id=? WHERE id=?').run(prompt,body.model,convId);
+      await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,model,status,timestamp) VALUES (?,?,'assistant','[]','',?,'streaming',?)").run(assistantMsgId,convId,body.model,Math.max(Date.now(),timestamp+1));
+      await db.prepare("INSERT INTO chat_generations (id,conversation_id,user_message_id,assistant_message_id,owner_sub,request_snapshot,status,rate_lease_id,available_at) VALUES (?,?,?,?,?,?,'queued',?,?)")
+        .run(assistantMsgId,convId,userId,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,model.history_mode,contentPartsToText(content),retained.every(m=>m.role!=='user'))),rl.leaseId!,Date.now());
+      await pinGenerationUploads(db,assistantMsgId,upstream,model);
+      return { message:(await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(userId))!,content };
     });
-  } catch (error) {
-    await closeStream(rl.leaseId!).catch(() => {});
-    if ((error as Error).message === 'ACTIVE_GENERATION' || isActiveGenerationConflict(error)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
+    return createChatResponse({user,convId,assistantMsgId,acceptedUser:accepted.message,acceptedContent:accepted.content});
+  } catch(error) {
+    await closeStream(rl.leaseId!).catch(()=>{});
+    const failure = requestError(error); if(failure) return c.json({error:failure.error},failure.status);
     throw error;
   }
-  return createChatResponse({ user, convId, assistantMsgId, acceptedUser: pendingUser, acceptedContent: body.new_user_message.content });
 });
 
-relayRouter.post('/regenerate', async (c) => {
-  const user = c.get('user');
-  const cfg = getConfig();
-  if (!cfg.openai.base_url) return c.json({ error: 'OpenAI-compatible endpoint is not configured.' }, 503);
-  const parsedBody = regenerateRequestSchema.safeParse(await c.req.json());
-  if (!parsedBody.success) return c.json({ error: 'Invalid regeneration request' }, 400);
-  const body = parsedBody.data;
-  const modelEntry = await findModel(user.role, body.model);
-  if (!modelEntry) return c.json({ error: 'Model not available' }, 400);
-  const db = getDb();
-  if (!await db.prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(body.conversation_id, user.sub)) return c.json({ error: 'Not found' }, 404);
-  if (await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(body.conversation_id)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
-  const stored = await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp, id').all<MessageRow>(body.conversation_id);
-  const targetIndex = stored.findIndex(message => message.id === body.assistant_message_id && message.role === 'assistant');
-  if (targetIndex < 1 || stored[targetIndex - 1].role !== 'user') return c.json({ error: 'Assistant message cannot be regenerated' }, 400);
-  const retained = stored.slice(0, targetIndex);
-  const userMessage = retained[retained.length - 1];
-  const userContent = safeParseJson<MessageContentPart[]>(userMessage.content, []);
-  const openaiMessages = await buildOpenaiMessages(retained.map(message => ({ role: message.role as 'user' | 'assistant', content: message.content })), userContent, body.system_prompt, modelEntry.history_mode, user.sub);
-  const rl = await acquireStream(user.sub);
-  if (!rl.allowed) return c.json({ error: rl.reason }, 429);
-  const assistantMsgId = generateId();
+relayRouter.post('/regenerate', async c => {
+  const user=c.get('user'), cfg=getConfig();
+  const parsed=regenerateRequestSchema.safeParse(await c.req.json());
+  if(!parsed.success) return c.json({error:'Invalid regeneration request'},400);
+  const body=parsed.data, model=await findModel(user.role,body.model);
+  if(!model) return c.json({error:'Model not available'},400);
+  const rl=await acquireStream(user.sub); if(!rl.allowed) return c.json({error:rl.reason},429);
+  const assistantMsgId=generateId();
   try {
-    await runTransaction(async tx => {
-      await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(body.conversation_id);
-      if (await tx.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued', 'running')").get(body.conversation_id)) {
-        throw new Error('ACTIVE_GENERATION');
-      }
-      const uploadIds = await tx.prepare(`SELECT DISTINCT mu.upload_id FROM message_uploads mu JOIN messages m ON m.id=mu.message_id WHERE m.conversation_id=? AND (m.timestamp, m.id) >= (?, ?)`).all<{ upload_id: string }>(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
-      await tx.prepare('DELETE FROM messages WHERE conversation_id=? AND (timestamp, id) >= (?, ?)').run(body.conversation_id, stored[targetIndex].timestamp, stored[targetIndex].id);
-      await cleanupUnreferencedUploads(tx, user.sub, uploadIds.map(upload => upload.upload_id));
-      const assistantTimestamp = Math.max(Date.now(), userMessage.timestamp + 1);
-      await tx.prepare(`INSERT INTO messages (id, conversation_id, role, content, content_text, model, status, timestamp) VALUES (?, ?, 'assistant', '[]', '', ?, 'streaming', ?)`)
-        .run(assistantMsgId, body.conversation_id, body.model, assistantTimestamp);
-      await tx.prepare(`
-        INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, rate_lease_id, available_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-      `).run(assistantMsgId, body.conversation_id, userMessage.id, assistantMsgId, user.sub, JSON.stringify(generationSnapshot(cfg, body.model, openaiMessages, modelEntry.history_mode, contentPartsToText(userContent), false)), rl.leaseId!, Date.now());
+    const userMessage=await runTransaction(async db=>{
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(body.conversation_id);
+      const conv=await db.prepare('SELECT * FROM conversations WHERE id=? AND owner_sub=? FOR UPDATE').get<ConversationRow>(body.conversation_id,user.sub);
+      if(!conv) throw new Error('NOT_FOUND');
+      if(await db.prepare("SELECT id FROM chat_generations WHERE conversation_id=? AND status IN ('queued','running')").get(conv.id)) throw new Error('ACTIVE_GENERATION');
+      await assertQueueCapacity(db);
+      const stored=await db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY timestamp,id').all<MessageRow>(conv.id);
+      const index=stored.findIndex(m=>m.id===body.assistant_message_id && m.role==='assistant');
+      if(index<1 || stored[index-1].role!=='user') throw new InputError('Assistant message cannot be regenerated');
+      const prompt=await effectivePrompt(conv,body.system_prompt,db), message=stored[index-1];
+      const content=safeParseJson<MessageContentPart[]>(message.content,[]);
+      const upstream=await buildOpenaiMessages(stored.slice(0,index-1),content,prompt,model,user.sub,db);
+      await removeTail(db,conv.id,stored[index],user.sub);
+      await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,model,status,timestamp) VALUES (?,?,'assistant','[]','',?,'streaming',?)").run(assistantMsgId,conv.id,body.model,Math.max(Date.now(),message.timestamp+1));
+      await db.prepare("INSERT INTO chat_generations (id,conversation_id,user_message_id,assistant_message_id,owner_sub,request_snapshot,status,rate_lease_id,available_at) VALUES (?,?,?,?,?,?,'queued',?,?)")
+        .run(assistantMsgId,conv.id,message.id,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,model.history_mode,contentPartsToText(content),false)),rl.leaseId!,Date.now());
+      await pinGenerationUploads(db,assistantMsgId,upstream,model);
+      return message;
     });
-  } catch (error) {
-    await closeStream(rl.leaseId!).catch(() => {});
-    if ((error as Error).message === 'ACTIVE_GENERATION' || isActiveGenerationConflict(error)) return c.json({ error: 'This conversation already has a response in progress' }, 409);
-    throw error;
+    return createChatResponse({user,convId:body.conversation_id,assistantMsgId,acceptedUser:userMessage,acceptedContent:safeParseJson(userMessage.content,[])});
+  } catch(error) {
+    await closeStream(rl.leaseId!).catch(()=>{});
+    const failure=requestError(error);if(failure)return c.json({error:failure.error},failure.status);throw error;
   }
-  return createChatResponse({ user, convId: body.conversation_id, assistantMsgId, acceptedUser: userMessage, acceptedContent: userContent });
 });
 
 relayRouter.get('/generations/:id', async c => {

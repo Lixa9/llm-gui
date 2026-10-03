@@ -2,6 +2,15 @@ import { api } from '$lib/api';
 import { toast } from '../components/ui/Toast.svelte';
 import type { UserPreferences } from '$lib/types';
 
+function parseCollapsedFolderIds(value: string | undefined): string[] {
+  try {
+    const ids: unknown = JSON.parse(value ?? '[]');
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function createPreferencesStore() {
   let prefs = $state<UserPreferences>({
     sound_enabled: 'true',
@@ -9,6 +18,7 @@ function createPreferencesStore() {
     default_model_id: '',
     default_preset_id: '',
     theme: '',
+    collapsed_folder_ids: '[]',
   });
 
   let systemTheme = $state<'dark' | 'light'>('dark');
@@ -35,6 +45,14 @@ function createPreferencesStore() {
   const defaultPresetId = $derived(prefs.default_preset_id ?? '');
   const theme = $derived(prefs.theme === 'dark' || prefs.theme === 'light' ? prefs.theme : systemTheme);
 
+  const collapsedFolderIds = $derived(parseCollapsedFolderIds(prefs.collapsed_folder_ids));
+  let writeQueue=Promise.resolve();
+  function setFolderOpen(id: string, open: boolean) {
+    const ids = collapsedFolderIds.filter(value => value !== id);
+    if (!open) ids.push(id);
+    void set('collapsed_folder_ids', JSON.stringify(ids));
+  }
+
   async function load() {
     try {
       prefs = await api.preferences.get();
@@ -47,9 +65,10 @@ function createPreferencesStore() {
     const prev = prefs;
     prefs = { ...prefs, [key]: value };
     try {
-      await api.preferences.set(key, value);
+      const write=writeQueue.catch(()=>{}).then(()=>api.preferences.set(key,value));
+      writeQueue=write;await write;
     } catch (e) {
-      prefs = prev;
+      if(prefs[key]===value)prefs={...prefs,[key]:prev[key]};
       toast((e as Error).message, 'error');
     }
   }
@@ -61,7 +80,8 @@ function createPreferencesStore() {
     get defaultModelId() { return defaultModelId; },
     get defaultPresetId() { return defaultPresetId; },
     get theme() { return theme; },
-    load, set,
+    get collapsedFolderIds(){return collapsedFolderIds;},
+    load, set, setFolderOpen,
   };
 }
 

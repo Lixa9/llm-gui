@@ -3,6 +3,7 @@
   import type { ConversationFolder } from '$lib/types';
   import SidebarConversation from './SidebarConversation.svelte';
   import SidebarFolder from './SidebarFolder.svelte';
+  import { preferencesStore } from '../../stores/preferences.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
 
   interface Props {
@@ -10,7 +11,8 @@
   }
   let { folder }: Props = $props();
 
-  let open = $state(true);
+  const open = $derived(!preferencesStore.collapsedFolderIds.includes(folder.id));
+  function setOpen(value:boolean){ preferencesStore.setFolderOpen(folder.id,value); }
   let renaming = $state(false);
   let renameValue = $state('');
   let dragCounter = $state(0);
@@ -33,8 +35,8 @@
   });
 
   function toggleOpen() {
-    open = !open;
-    if (open) {
+    const opening=!open; setOpen(opening);
+    if (opening) {
       conversationsStore.setActiveFolder(folder.id);
     } else {
       if (conversationsStore.activeFolderId === folder.id) {
@@ -69,7 +71,7 @@
     const convId = e.dataTransfer?.getData('text/plain');
     if (convId) {
       conversationsStore.move(convId, folder.id);
-      open = true;
+      setOpen(true);
       conversationsStore.setActiveFolder(folder.id);
     }
   }

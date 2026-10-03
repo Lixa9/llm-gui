@@ -1,16 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config.ts';
+import { getConfig, runtimeConfigurationIsCurrent, assertProviderIdentity } from './config.ts';
 import { getDb, runTransaction, safeParseJson } from './db/index.ts';
 import { logger } from './logger.ts';
 import { closeStream } from './ratelimit.ts';
 import { trackBackgroundTask } from './lifecycle.ts';
 import { enqueueTitleJob } from './title-worker.ts';
 import type { BackgroundSseClient } from './background-sse.ts';
-import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow } from './types.ts';
+import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow, ModelYamlEntry } from './types.ts';
+
+import { resolveContentParts, assertRequestBudget } from './attachment-transport.ts';
+import { resolveCurrentRole } from './auth.ts';
+import { findAllowedModel } from './models.ts';
+import { admittedClaim } from './work-admission.ts';
+import { checkUpstreamResponse, parseCompletionFrame, isRetryable, UpstreamError } from './upstream.ts';
 
 interface GenerationSnapshot {
+  provider?: { base_url: string; revision: string };
   model: string;
-  openai_messages: unknown[];
+  openai_messages?: unknown[];
+  input_messages?: Array<{role:string;content:string|MessageContentPart[]}>;
+  model_entry?: ModelYamlEntry;
   history_mode?: 'full' | 'latest_only';
   title_prompt: string;
   is_first_exchange: boolean;
@@ -59,7 +68,7 @@ function abortControl(control: RunningControl, reason: RunningControl['reason'])
 
 async function claimGeneration(id: string): Promise<ChatGenerationRow | undefined> {
   const now = Date.now();
-  return runTransaction(async db => {
+  return admittedClaim('chat_generations', id, async db => {
     const row = await db.prepare(`
       UPDATE chat_generations
       SET status='running', attempt=attempt+1, lease_owner=?, lease_until=?, updated_at=?, last_error=NULL
@@ -103,6 +112,7 @@ async function finalizeGeneration(
   return runTransaction(async db => {
     const current = await db.prepare('SELECT * FROM chat_generations WHERE id=? FOR UPDATE').get<ChatGenerationRow>(row.id);
     if (!current || current.status !== 'running' || current.lease_owner !== WORKER_ID || current.attempt !== row.attempt) return undefined;
+    await db.prepare('DELETE FROM generation_uploads WHERE generation_id=?').run(row.id);
     const messageStatus = status;
     await db.prepare('UPDATE messages SET content=?, content_text=?, status=? WHERE id=?')
       .run(contentJson(fullText), fullText, messageStatus, row.assistant_message_id);
@@ -117,6 +127,7 @@ async function finalizeGeneration(
         model: snapshot.auto_title_model || snapshot.model,
         title_prompt: snapshot.title_prompt,
         assistant_response: fullText,
+        provider: snapshot.provider,
       });
     }
     if (row.rate_lease_id) await db.prepare('DELETE FROM stream_leases WHERE id=?').run(row.rate_lease_id);
@@ -178,6 +189,25 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
   activeJobs.set(row.id, control);
   let fullText = '';
   let lastCheckpoint = 0;
+  let outputBytes = 0;
+  let finishReason: string | null = null;
+  let usage: Record<string, unknown> | undefined;
+  let requestId: string | null = null;
+  let providerStatus: number | null = null;
+  let inputBudget: ReturnType<typeof assertRequestBudget> | undefined;
+  let requestBytes = 0;
+  const saveDiagnostics = () => getDb()
+    .prepare('UPDATE chat_generations SET diagnostics=?::jsonb WHERE id=? AND lease_owner=? AND attempt=?')
+    .run(JSON.stringify({
+      request_id: requestId,
+      provider_status: providerStatus,
+      finish_reason: finishReason,
+      usage,
+      output_bytes: outputBytes,
+      request_bytes: requestBytes,
+      input: inputBudget,
+    }), row.id, WORKER_ID, row.attempt)
+    .catch(() => logger.warn('Could not store generation diagnostics', { generation_id: row.id }));
   let heartbeatBusy = false;
   let idleTimer: NodeJS.Timeout;
 
@@ -212,16 +242,33 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
   }, HEARTBEAT_MS);
 
   try {
+    assertProviderIdentity(snapshot.provider);
+    let input=snapshot.openai_messages;
+    if(snapshot.input_messages && snapshot.model_entry){
+      input=[];
+      for(const message of snapshot.input_messages){
+        input.push({role:message.role,content:typeof message.content==='string'?message.content:await resolveContentParts(message.content,row.owner_sub,snapshot.model_entry)});
+        assertRequestBudget(input,snapshot.model_entry);
+      }
+    }
+    if(!input)throw new UpstreamError('Invalid generation snapshot');
+    const currentRole=await resolveCurrentRole(row.owner_sub);
+    const currentModel=currentRole ? await findAllowedModel(snapshot.model,currentRole) : undefined;
+    if(!currentModel)throw new UpstreamError('Model access changed before this request could run');
+    inputBudget=assertRequestBudget(input,snapshot.model_entry ?? currentModel);
+    assertProviderIdentity(snapshot.provider);
+    if(!await runtimeConfigurationIsCurrent())throw new UpstreamError('Configuration is updating. The request will be retried.',true);
+    const requestBody=JSON.stringify({ model: snapshot.model, messages: input, stream: true, ...(snapshot.model_entry?.capabilities?.stream_usage ? {stream_options:{include_usage:true}} : {}), ...(snapshot.history_mode === 'latest_only' ? { session_id: row.conversation_id } : {}) });
+    requestBytes=Buffer.byteLength(requestBody);
     const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: snapshot.model, messages: snapshot.openai_messages, stream: true, ...(snapshot.history_mode === 'latest_only' ? { session_id: row.conversation_id } : {}) }),
+      body: requestBody,
       signal: control.controller.signal,
     });
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => '')).slice(0, 500);
-      throw new Error(`upstream error ${response.status}${detail ? `: ${detail}` : ''}`);
-    }
+    requestId = response.headers.get('x-request-id');
+    providerStatus=response.status;
+    checkUpstreamResponse(response);
     if (!response.body) throw new Error('Upstream returned no response body');
 
     const decoder = new TextDecoder();
@@ -230,19 +277,21 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
     for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
       resetIdleTimer();
       buffer += decoder.decode(chunk, { stream: true });
+      if (Buffer.byteLength(buffer) > cfg.conversation.max_frame_bytes) throw new UpstreamError('Provider streaming frame exceeds the configured limit');
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() ?? '';
       for (const part of parts) {
         for (const line of part.split(/\r?\n/)) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
           if (data === '[DONE]') { done = true; break; }
-          let delta: string | undefined;
-          try {
-            const parsed = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
-            delta = parsed.choices?.[0]?.delta?.content;
-          } catch { continue; /* ignore malformed upstream SSE frames */ }
+          const parsed = parseCompletionFrame(data);
+          if (parsed.usage) usage = parsed.usage;
+          if (parsed.choices?.[0]?.finish_reason) finishReason = parsed.choices[0].finish_reason;
+          const delta = parsed.choices?.[0]?.delta?.content;
           if (delta) {
+            outputBytes += Buffer.byteLength(delta);
+            if (outputBytes > cfg.conversation.max_output_bytes) throw new UpstreamError('Response exceeds the configured output limit');
             fullText += delta;
             client?.send({ type: 'delta', content: delta });
             if (Date.now() - lastCheckpoint >= CHECKPOINT_MS) {
@@ -257,11 +306,15 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
     }
     if (!done) throw new Error('Upstream stream ended before completion');
 
+    if (finishReason === 'length') throw new UpstreamError('Model response was truncated by its token limit');
+    if (!fullText) throw new UpstreamError('Model returned no text response');
+    await saveDiagnostics();
     const assistant = await finalizeGeneration(row, 'done', fullText, null, snapshot);
     if (assistant) {
       client?.send({ type: 'done', message: serializeMessage(assistant) });
     }
   } catch (error) {
+    await saveDiagnostics();
     const view = await generationView(row.id).catch(() => null);
     if (!view && row.rate_lease_id) {
       await closeStream(row.rate_lease_id).catch(() => {});
@@ -275,11 +328,11 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
       client?.send({ type: 'error', message: control.reason === 'idle_timeout' ? 'Generation timed out waiting for the model' : 'Generation exceeded its time limit', ...(assistant ? { response: serializeMessage(assistant) } : {}) });
     } else {
       const message = error instanceof Error ? error.message : String(error);
-      if (await scheduleRetry(row, message)) {
+      if (isRetryable(error) && await scheduleRetry(row, message)) {
         client?.send({ type: 'error', message: 'The model request failed and will be retried automatically' });
       } else {
         await finalizeGeneration(row, 'failed', fullText, message.slice(0, 1000));
-        client?.send({ type: 'error', message: 'Upstream request failed' });
+        client?.send({ type: 'error', message });
       }
     }
   } finally {
@@ -292,7 +345,7 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
 }
 
 export async function runGeneration(id: string, client?: BackgroundSseClient): Promise<boolean> {
-  if (!acceptingWork || activeJobs.has(id)) return false;
+  if (!acceptingWork || activeJobs.has(id) || activeJobs.size >= getConfig().rate_limits.global_workers) return false;
   const row = await claimGeneration(id);
   if (!row) return false;
   await executeGeneration(row, client);
@@ -350,6 +403,7 @@ export async function cancelGeneration(id: string, ownerSub: string): Promise<Ge
   await runTransaction(async db => {
     const row = await db.prepare('SELECT * FROM chat_generations WHERE id=? AND owner_sub=? FOR UPDATE').get<ChatGenerationRow>(id, ownerSub);
     if (!row || !['queued', 'running'].includes(row.status)) return;
+    await db.prepare('DELETE FROM generation_uploads WHERE generation_id=?').run(id);
     await db.prepare("UPDATE messages SET status='aborted' WHERE id=?").run(row.assistant_message_id);
     await db.prepare(`
       UPDATE chat_generations SET status='cancelled', last_error=NULL, lease_owner=NULL,

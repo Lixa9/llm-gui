@@ -38,21 +38,20 @@ export async function streamChat(
       if (done) break;
 
       buf += decoder.decode(value, { stream: true });
+      if (buf.length > 2 * 1024 * 1024) throw new Error('Response frame exceeds the streaming limit');
       const parts = buf.split(/\r?\n\r?\n/);
       buf = parts.pop() ?? '';
 
       for (const part of parts) {
         for (const line of part.split(/\r?\n/)) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
           if (!data) continue;
-          try {
-            const event = JSON.parse(data) as SSEEvent;
-            if (event.type === 'done' || event.type === 'cancelled' || event.type === 'error') terminalEvent = true;
-            onEvent(event);
-          } catch {
-            // malformed chunk, skip
-          }
+          let event: SSEEvent;
+          try { event = JSON.parse(data) as SSEEvent; }
+          catch { throw new Error('Invalid response frame'); }
+          if (event.type === 'done' || event.type === 'cancelled' || event.type === 'error') terminalEvent = true;
+          onEvent(event);
         }
       }
     }

@@ -2,15 +2,27 @@ models:
   - id: "qwen3.5-0.8b"
     display_name: "Qwen 3.5 0.8B"
     allowed_roles: [admin, user]
+    capabilities:
+      vision: true
+      native_pdf: false
 
   - id: "anthropic/claude-opus-4-5"
     display_name: "Claude Opus"
     allowed_roles: [admin, user]
+    capabilities:
+      vision: true
+      native_pdf: false
 
   - id: "anthropic/claude-sonnet-4-5"
     display_name: "Claude Sonnet"
     allowed_roles: [admin, user]
+    capabilities:
+      vision: true
+      native_pdf: false
 
   - id: "meta-llama/llama-3.3-70b-instruct"
     display_name: "Llama 3.3 70B"
     allowed_roles: [admin, user]
+    capabilities:
+      vision: false
+      native_pdf: false

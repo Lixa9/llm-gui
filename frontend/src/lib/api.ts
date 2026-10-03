@@ -37,6 +37,11 @@ const put = <T>(path: string, body?: unknown) => req<T>('PUT', path, body);
 
 // Auth
 export const api = {
+  app: { get: () => get<{name:string;tagline:string;logo_url?:string;accent_color?:string}>('/api/app') },
+  drafts: {
+    get: (key:string) => get<{text:string;attachments:UploadResult[]}>(`/api/drafts/${key}`),
+    save: (key:string,data:{text:string;attachments:Array<{id:string}>}) => put<void>(`/api/drafts/${key}`,data),
+  },
   auth: {
     me: () => get<User>('/api/auth/me'),
     logout: () => post<void>('/api/auth/logout'),
@@ -113,9 +118,10 @@ export const api = {
   },
 
   uploads: {
-    upload: async (file: File): Promise<UploadResult> => {
+    upload: async (file: File, model?: string): Promise<UploadResult> => {
       const form = new FormData();
       form.append('file', file);
+      if(model)form.append('model',model);
       const res = await fetch('/api/uploads', {
         method: 'POST',
         headers: { 'X-Requested-With': 'llm-frontend' },
@@ -129,6 +135,8 @@ export const api = {
       }
       return res.json() as Promise<UploadResult>;
     },
+    formats: () => get<Array<{mime:string;extensions:string[];kind:string}>>('/api/uploads/formats'),
+    metadata: (id:string) => get<{coverage:Record<string,unknown>}>(`/api/uploads/${id}/metadata`),
     delete: (id: string) => del<void>(`/api/uploads/${id}`),
   },
 

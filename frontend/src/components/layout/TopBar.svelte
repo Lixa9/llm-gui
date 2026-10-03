@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { brandingStore } from '../../stores/branding.svelte';
   import { authStore } from '../../stores/auth.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
 
@@ -38,7 +39,10 @@
 
 <header class="topbar">
   <div class="topbar-left">
-    <span class="app-name">Chat</span>
+    <span class="app-name" title={brandingStore.value.tagline}>
+      {#if brandingStore.value.logo_url}<img src={brandingStore.value.logo_url} alt="" width="24" height="24" />{/if}
+      {brandingStore.value.name}
+    </span>
     <nav class="nav">
       {#each navItems as item}
         <button

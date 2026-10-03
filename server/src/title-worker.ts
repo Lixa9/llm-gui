@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { getConfig } from './config.ts';
+import { getConfig, assertProviderIdentity, providerIdentity } from './config.ts';
 import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
 import { trackBackgroundTask } from './lifecycle.ts';
 import { logger } from './logger.ts';
 import type { ConversationTitleJobRow } from './types.ts';
 
+import { admittedClaim, assertQueueCapacity, AdmissionError } from './work-admission.ts';
+import { boundedJson, isRetryable } from './upstream.ts';
+
 interface TitleRequestSnapshot {
+  provider?: {base_url:string;revision:string};
   model: string;
   title_prompt: string;
   assistant_response: string;
@@ -38,6 +42,8 @@ export async function enqueueTitleJob(
   snapshot: TitleRequestSnapshot,
 ): Promise<void> {
   const now = Date.now();
+  try { await assertQueueCapacity(db); } catch (error) { if (error instanceof AdmissionError) return; throw error; }
+  snapshot = { ...snapshot, provider: snapshot.provider ?? providerIdentity() };
   await db.prepare(`
     INSERT INTO conversation_title_jobs
       (id, generation_id, conversation_id, request_snapshot, status, available_at, created_at, updated_at)
@@ -48,13 +54,13 @@ export async function enqueueTitleJob(
 
 async function claimTitleJob(id: string): Promise<ConversationTitleJobRow | undefined> {
   const now = Date.now();
-  return getDb().prepare(`
+  return admittedClaim('conversation_title_jobs', id, db => db.prepare(`
     UPDATE conversation_title_jobs
     SET status='running', attempt=attempt+1, lease_owner=?, lease_until=?, updated_at=?, last_error=NULL
     WHERE id=? AND available_at<=?
       AND (status='queued' OR (status='running' AND lease_until<?))
     RETURNING *
-  `).get<ConversationTitleJobRow>(WORKER_ID, now + LEASE_MS, now, id, now, now);
+  `).get<ConversationTitleJobRow>(WORKER_ID, now + LEASE_MS, now, id, now, now));
 }
 
 async function finishTitleJob(row: ConversationTitleJobRow, title: string): Promise<boolean> {
@@ -75,10 +81,10 @@ async function finishTitleJob(row: ConversationTitleJobRow, title: string): Prom
   });
 }
 
-async function retryOrFail(row: ConversationTitleJobRow, error: string): Promise<void> {
+async function retryOrFail(row: ConversationTitleJobRow, error: string, retryable = true): Promise<void> {
   const now = Date.now();
   const maxAttempts = getConfig().conversation.generation_max_attempts;
-  if (row.failure_count + 1 < maxAttempts) {
+  if (retryable && row.failure_count + 1 < maxAttempts) {
     const retryAt = now + Math.min(30_000, 1_000 * (2 ** row.failure_count));
     await getDb().prepare(`
       UPDATE conversation_title_jobs
@@ -120,6 +126,7 @@ async function executeTitleJob(row: ConversationTitleJobRow): Promise<void> {
   try {
     if (!snapshot.model || !snapshot.title_prompt || !snapshot.assistant_response) throw new Error('Invalid title job snapshot');
     const cfg = getConfig();
+    assertProviderIdentity(snapshot.provider);
     const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
@@ -134,15 +141,14 @@ async function executeTitleJob(row: ConversationTitleJobRow): Promise<void> {
       }),
       signal: control.controller.signal,
     });
-    if (!response.ok) throw new Error(`title upstream error ${response.status}`);
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const data = await boundedJson(response, 100000) as { choices?: Array<{ message?: { content?: string } }> };
     const title = data.choices?.[0]?.message?.content?.trim().slice(0, 80);
     if (!title) throw new Error('Title upstream returned an empty title');
     await finishTitleJob(row, title);
   } catch (error) {
     if (control.reason !== 'shutdown' && control.reason !== 'superseded') {
       const message = control.reason === 'timed_out' ? 'Title generation timed out' : error instanceof Error ? error.message : String(error);
-      await retryOrFail(row, message);
+      await retryOrFail(row, message, isRetryable(error));
     }
   } finally {
     clearTimeout(timeout);
@@ -152,7 +158,7 @@ async function executeTitleJob(row: ConversationTitleJobRow): Promise<void> {
 }
 
 export async function runTitleJob(id: string): Promise<boolean> {
-  if (!acceptingWork || activeJobs.has(id)) return false;
+  if (!acceptingWork || activeJobs.has(id) || activeJobs.size >= getConfig().rate_limits.global_workers) return false;
   const row = await claimTitleJob(id);
   if (!row) return false;
   await executeTitleJob(row);

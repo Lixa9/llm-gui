@@ -16,12 +16,16 @@ export interface ImageUrlPart {
   type: 'image_url';
   image_url: { url: string };
   _filename?: string;
+  _mime_type?: string;
+  _warning?: string;
 }
 
 export interface FilePart {
   type: 'file';
   file: { url: string };
   _filename?: string;
+  _mime_type?: string;
+  _warning?: string;
 }
 
 export type MessageContentPart = ContentPart | ImageUrlPart | FilePart;
@@ -182,6 +186,9 @@ export interface AppConfig {
   app: {
     name: string;
     base_url: string;
+    tagline: string;
+    logo_url?: string;
+    accent_color?: string;
   };
   openai: {
     base_url: string;
@@ -202,11 +209,17 @@ export interface AppConfig {
     requests_per_minute: number;
     requests_per_hour: number;
     concurrent_streams: number;
+    global_workers: number;
+    workers_per_owner: number;
+    max_queued_jobs: number;
   };
+  attachments: { max_request_bytes: number; max_images: number; max_files: number; max_text_chars: number; processing_workers: number };
   storage: {
     quota: number;
   };
   conversation: {
+    max_output_bytes: number;
+    max_frame_bytes: number;
     auto_title: boolean;
     auto_title_model: string;
     generation_max_duration_ms: number;
@@ -224,6 +237,7 @@ export interface ModelYamlEntry {
   display_name: string;
   allowed_roles: Role[];
   history_mode?: 'full' | 'latest_only';
+  capabilities?: { vision: boolean; native_pdf: boolean; image_detail: 'auto' | 'low' | 'high'; stream_usage?: boolean; max_text_chars?: number };
 }
 
 export interface PromptYamlEntry {

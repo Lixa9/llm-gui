@@ -5,24 +5,16 @@ import type { TxDb } from './db/index.ts';
 import { checkRateLimit } from './ratelimit.ts';
 import { getConfig } from './config.ts';
 import { logger } from './logger.ts';
-import { extractText, renderPdfPages, extractDocImages } from './extract.ts';
+import { FILE_FORMATS, recognizeFormat } from './formats.ts';
+import { findAllowedModel } from './models.ts';
+import { processUpload } from './processing.ts';
 
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);
 
-export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-export const ALLOWED_TEXT_TYPES = new Set([
-  'text/plain', 'text/markdown', 'text/csv', 'text/tab-separated-values', 'text/html', 'text/xml', 'application/json', 'application/yaml', 'text/yaml', 'application/xml',
-  'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.oasis.opendocument.text',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'application/vnd.oasis.opendocument.spreadsheet', 'application/epub+zip',
-]);
-export const MIME_TO_EXT: Record<string, string> = {
-  'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx', 'application/vnd.oasis.opendocument.text': '.odt',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx', 'application/vnd.ms-excel': '.xls', 'application/vnd.oasis.opendocument.spreadsheet': '.ods',
-  'text/html': '.html', 'text/markdown': '.md', 'text/csv': '.csv', 'text/tab-separated-values': '.tsv', 'application/json': '.json',
-  'application/yaml': '.yaml', 'text/yaml': '.yaml', 'application/xml': '.xml', 'text/xml': '.xml', 'text/plain': '.txt', 'application/epub+zip': '.epub',
-};
+export const ALLOWED_IMAGE_TYPES = new Set(FILE_FORMATS.filter(f => f.kind === 'image').map(f => f.mime));
+export const ALLOWED_TEXT_TYPES = new Set(FILE_FORMATS.filter(f => f.kind !== 'image').map(f => f.mime));
+export const MIME_TO_EXT = Object.fromEntries(FILE_FORMATS.map(f => [f.mime, '.' + f.extensions[0]]));
 const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
 const TEXT_MAX_SIZE = 50 * 1024 * 1024;
 
@@ -53,9 +45,10 @@ uploadsRouter.post('/', async (c) => {
   try { formData = await c.req.formData(); } catch { return c.json({ error: 'Expected multipart/form-data' }, 400); }
   const file = formData.get('file');
   if (!file || !(file instanceof File)) return c.json({ error: 'No file provided' }, 400);
-  const isImage = ALLOWED_IMAGE_TYPES.has(file.type);
-  const isTextFile = ALLOWED_TEXT_TYPES.has(file.type);
-  if (!isImage && !isTextFile) return c.json({ error: 'Unsupported file type.' }, 415);
+  let format;
+  try { format = recognizeFormat(file.name, file.type); } catch { return c.json({ error: 'Unsupported file format.' }, 415); }
+  const mime = format.mime;
+  const isImage = format.kind === 'image';
   const maxSize = isImage ? IMAGE_MAX_SIZE : TEXT_MAX_SIZE;
   if (file.size > maxSize) return c.json({ error: `File too large (max ${isImage ? '20' : '50'} MB)` }, 413);
 
@@ -72,32 +65,21 @@ uploadsRouter.post('/', async (c) => {
   let derivedImages: DerivedImage[] = [];
   let warning: string | undefined;
 
-  if (isTextFile) {
-    const { isPdf, isDocx, isOdt, isEpub } = classifyMime(file.type);
-    try {
-      if (isPdf) {
-        const result = await renderPdfPages(buf);
-        fileMeta = { format: 'pdf', page_count: result.page_count, served_pages: result.served };
-        derivedImages = result.pages.map(data => ({ data, ext: '.jpg' }));
-        warning = result.warning;
-      } else if (isDocx || isOdt || isEpub) {
-        const [textResult, imageResult] = await Promise.all([
-          extractText(buf, file.type),
-          extractDocImages(buf, isDocx ? 'docx' : isOdt ? 'odt' : 'epub'),
-        ]);
-        extractedText = textResult.text;
-        fileMeta = { ...textResult.meta, embedded_image_count: imageResult.count, served_image_count: imageResult.served };
-        derivedImages = imageResult.images;
-        warning = textResult.warning ?? imageResult.warning;
-      } else {
-        const result = await extractText(buf, file.type);
-        extractedText = result.text;
-        fileMeta = { ...result.meta };
-        warning = result.warning;
-      }
-    } catch (error) {
-      logger.warn('Text extraction failed', { error: String(error) });
-    }
+  try {
+    const selectedModel = typeof formData.get('model') === 'string' ? await findAllowedModel(String(formData.get('model')),user.role) : null;
+    const result = mime==='application/pdf' && selectedModel?.capabilities?.native_pdf && buf.subarray(0,1024).includes(Buffer.from('%PDF-'))
+      ? {text:null,images:[],meta:{format:'pdf',processing_status:'native_only',processing_version:1},warning:'Original PDF will be sent through native PDF input. Choose a native PDF model to use it.'}
+      : await processUpload(buf, mime, file.name);
+    extractedText = result.text;
+    fileMeta = {...result.meta,warning:result.warning ?? null};
+    derivedImages = result.images;
+    warning = result.warning;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Document processing failed';
+    logger.warn('Upload processing failed', { user_sub: user.sub, mime_type: mime });
+    // No successful-looking upload with a placeholder. Originals remain on the
+    // user's device; corrupt/unsupported conversions do not consume storage.
+    return c.json({ error: message }, message.includes('busy') ? 429 : 422);
   }
 
   const storedBytes = buf.byteLength +
@@ -110,12 +92,30 @@ uploadsRouter.post('/', async (c) => {
     await db.prepare(`
       INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size, extracted_text, file_meta, data, derived_images)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)
-    `).run(uploadId, user.sub, sha256, file.name.slice(0, 255), file.type, file.size, extractedText, JSON.stringify(fileMeta), buf, JSON.stringify(derivedImages));
+    `).run(uploadId, user.sub, sha256, file.name.slice(0, 255), mime, file.size, extractedText, JSON.stringify(fileMeta), buf, JSON.stringify(derivedImages));
     return uploadId;
   });
   if (!id) return c.json({ error: 'Storage quota exceeded' }, 507);
-  logger.info('Upload stored', { user_sub: user.sub, id, mime_type: file.type, size: file.size });
-  return c.json({ id, filename: file.name, mime_type: file.type, size: file.size, url: `/api/uploads/${id}`, ...(warning ? { warning } : {}) }, 201);
+  logger.info('Upload stored', { user_sub: user.sub, id, mime_type: mime, size: file.size });
+  return c.json({ id, filename: file.name.slice(0,255), mime_type: mime, size: file.size, url: `/api/uploads/${id}`, kind: isImage ? 'image' : 'file', processing_status: fileMeta.processing_status ?? 'ready', coverage: fileMeta, ...(warning ? { warning } : {}) }, 201);
+});
+
+uploadsRouter.get('/formats', c => c.json(FILE_FORMATS));
+uploadsRouter.get('/:id/metadata', async c => {
+  const row = await getDb().prepare('SELECT id, filename, mime_type, size, file_meta FROM uploads WHERE id=? AND owner_sub=?').get(c.req.param('id'), c.get('user').sub);
+  return row ? c.json({ ...row, coverage: safeParseJson(row.file_meta, {}) }) : c.json({ error: 'Not found' }, 404);
+});
+uploadsRouter.get('/:id/preview', async c => {
+  const row = await getDb().prepare('SELECT derived_images, data, mime_type FROM uploads WHERE id=? AND owner_sub=?').get<{ derived_images: unknown; data: Buffer; mime_type: string }>(c.req.param('id'), c.get('user').sub);
+  const images = safeParseJson<DerivedImage[]>(row?.derived_images, []);
+  const image = images[0];
+  if (!image) {
+    if (row && ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(row.mime_type)) {
+      return new Response(new Uint8Array(row.data), { headers: { 'Content-Type': row.mime_type, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' } });
+    }
+    return c.json({ error: 'Preview unavailable' }, 404);
+  }
+  return new Response(new Uint8Array(Buffer.from(image.data, 'base64')), { headers: { 'Content-Type': image.ext === '.png' ? 'image/png' : 'image/jpeg', 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' } });
 });
 
 uploadsRouter.get('/:id', async (c) => {
@@ -126,7 +126,7 @@ uploadsRouter.get('/:id', async (c) => {
     headers: {
       'Content-Type': row.mime_type,
       'Cache-Control': 'private, max-age=31536000, immutable',
-      'Content-Disposition': `${ALLOWED_IMAGE_TYPES.has(row.mime_type) ? 'inline' : 'attachment'}; filename="${row.filename.replace(/[\x00-\x1f\x7f"\\]/g, '_')}"`,
+      'Content-Disposition': `${['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(row.mime_type) ? 'inline' : 'attachment'}; filename="${row.filename.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
       'X-Content-Type-Options': 'nosniff',
     },
   });
@@ -169,6 +169,8 @@ export async function cleanupUnreferencedUploads(db: UploadDb, ownerSub: string,
     DELETE FROM uploads u
     WHERE u.owner_sub=? AND u.id = ANY(?::uuid[])
       AND NOT EXISTS (SELECT 1 FROM message_uploads mu WHERE mu.upload_id=u.id)
+      AND NOT EXISTS (SELECT 1 FROM draft_uploads du WHERE du.upload_id=u.id)
+      AND NOT EXISTS (SELECT 1 FROM generation_uploads gu WHERE gu.upload_id=u.id)
   `).run(ownerSub, uniqueIds);
 }
 
@@ -181,13 +183,15 @@ export async function purgeOrphanUploads(olderThan = Date.now() - 24 * 60 * 60 *
     DELETE FROM uploads u
     WHERE u.created_at < ?
       AND NOT EXISTS (SELECT 1 FROM message_uploads mu WHERE mu.upload_id=u.id)
+      AND NOT EXISTS (SELECT 1 FROM draft_uploads du WHERE du.upload_id=u.id)
+      AND NOT EXISTS (SELECT 1 FROM generation_uploads gu WHERE gu.upload_id=u.id)
   `).run(olderThan);
 }
 
 uploadsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
-  const attached = await getDb().prepare('SELECT 1 FROM message_uploads WHERE upload_id=? LIMIT 1').get(id);
+  const attached = await getDb().prepare('SELECT 1 FROM message_uploads WHERE upload_id=? UNION ALL SELECT 1 FROM draft_uploads WHERE upload_id=? UNION ALL SELECT 1 FROM generation_uploads WHERE upload_id=? LIMIT 1').get(id,id,id);
   if (attached) return c.json({ error: 'Upload is attached to a message' }, 409);
   await getDb().prepare('DELETE FROM uploads WHERE id=? AND owner_sub=?').run(id, user.sub);
   return c.body(null, 204);

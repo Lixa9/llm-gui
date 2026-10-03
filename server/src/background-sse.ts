@@ -27,7 +27,11 @@ export function createBackgroundSseResponse(
         send(event) {
           if (!connected || closed) return;
           try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            const payload = encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+            if (payload.byteLength > 2 * 1024 * 1024 || (controller.desiredSize ?? 0) < payload.byteLength) {
+              connected = false; closed = true; controller.close(); return;
+            }
+            controller.enqueue(payload);
           } catch {
             connected = false;
           }
@@ -53,7 +57,7 @@ export function createBackgroundSseResponse(
     cancel() {
       connected = false;
     },
-  });
+  }, { highWaterMark: 2 * 1024 * 1024, size: chunk => chunk.byteLength });
 
   return new Response(stream, {
     headers: {

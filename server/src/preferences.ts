@@ -3,7 +3,7 @@ import { requireAuth } from './auth.ts';
 import { getDb } from './db/index.ts';
 import type { UserPrefRow } from './types.ts';
 
-const ALLOWED_PREF_KEYS = new Set(['sound_enabled', 'sound_volume', 'default_model_id', 'default_preset_id', 'theme']);
+const ALLOWED_PREF_KEYS = new Set(['sound_enabled', 'sound_volume', 'default_model_id', 'default_preset_id', 'theme', 'collapsed_folder_ids']);
 const MAX_PREF_VALUE_LEN = 4096;
 export const preferencesRouter = new Hono();
 preferencesRouter.use('*', requireAuth);
@@ -20,6 +20,9 @@ preferencesRouter.put('/:key', async (c) => {
   if (!ALLOWED_PREF_KEYS.has(key)) return c.json({ error: 'Unknown preference key' }, 400);
   const body = await c.req.json() as { value?: unknown };
   if (typeof body.value !== 'string' || body.value.length > MAX_PREF_VALUE_LEN) return c.json({ error: 'Invalid value' }, 400);
+  if (key === 'collapsed_folder_ids') {
+    try { const ids=JSON.parse(body.value); if (!Array.isArray(ids) || ids.length>100 || ids.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/i.test(id))) return c.json({error:'Invalid folders'},400); } catch { return c.json({error:'Invalid folders'},400); }
+  }
   await getDb().prepare(`
     INSERT INTO user_preferences (user_sub, key, value, updated_at) VALUES (?, ?, ?, ?)
     ON CONFLICT(user_sub, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at

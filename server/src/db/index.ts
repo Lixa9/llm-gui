@@ -169,6 +169,10 @@ async function applySchema(db: Db): Promise<void> {
       applied_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
     );
 
+    CREATE TABLE IF NOT EXISTS runtime_configuration (
+      key TEXT PRIMARY KEY, revision TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       sub TEXT PRIMARY KEY,
       email TEXT NOT NULL,
@@ -176,6 +180,17 @@ async function applySchema(db: Db): Promise<void> {
       last_known_role TEXT NOT NULL DEFAULT 'user' CHECK (last_known_role IN ('admin', 'user')),
       role_updated_at BIGINT,
       created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS oidc_groups JSONB;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method TEXT;
+
+    CREATE TABLE IF NOT EXISTS conversation_drafts (
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      conversation_key TEXT NOT NULL,
+      draft JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (user_sub, conversation_key)
     );
 
     CREATE TABLE IF NOT EXISTS user_preferences (
@@ -270,6 +285,7 @@ async function applySchema(db: Db): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_generations_one_active_conversation
       ON chat_generations(conversation_id)
       WHERE status IN ('queued', 'running');
+    ALTER TABLE chat_generations ADD COLUMN IF NOT EXISTS diagnostics JSONB;
     ALTER TABLE chat_generations ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS automations (
@@ -371,6 +387,21 @@ async function applySchema(db: Db): Promise<void> {
       PRIMARY KEY (message_id, upload_id)
     );
     CREATE INDEX IF NOT EXISTS idx_message_uploads_upload ON message_uploads(upload_id);
+
+    CREATE TABLE IF NOT EXISTS generation_uploads (
+      generation_id UUID NOT NULL REFERENCES chat_generations(id) ON DELETE CASCADE,
+      upload_id UUID NOT NULL REFERENCES uploads(id) ON DELETE RESTRICT,
+      PRIMARY KEY (generation_id, upload_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_generation_uploads_upload ON generation_uploads(upload_id);
+
+    CREATE TABLE IF NOT EXISTS draft_uploads (
+      user_sub TEXT NOT NULL, conversation_key TEXT NOT NULL,
+      upload_id UUID NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_sub, conversation_key) REFERENCES conversation_drafts(user_sub, conversation_key) ON DELETE CASCADE,
+      PRIMARY KEY (user_sub, conversation_key, upload_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_draft_uploads_upload ON draft_uploads(upload_id);
 
     CREATE TABLE IF NOT EXISTS sessions (
       id UUID PRIMARY KEY,

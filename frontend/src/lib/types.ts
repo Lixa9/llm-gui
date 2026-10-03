@@ -17,12 +17,15 @@ export interface ImageUrlPart {
   type: 'image_url';
   image_url: { url: string };
   _filename?: string;
+  _warning?: string;
+  _mime_type?: string;
 }
 
 export interface FilePart {
   type: 'file';
   file: { url: string };
   _filename?: string;
+  _warning?: string;
   _mime_type?: string;
 }
 
@@ -35,6 +38,9 @@ export interface UploadResult {
   size: number;
   url: string;
   warning?: string;
+  kind?: 'image' | 'file';
+  processing_status?: 'ready';
+  coverage?: Record<string,unknown>;
 }
 
 export type MessageStatus = 'streaming' | 'done' | 'aborted' | 'timed_out' | 'failed';
@@ -104,6 +110,7 @@ export interface ModelInfo {
   display_name: string;
   allowed_roles: Role[];
   history_mode?: 'full' | 'latest_only';
+  capabilities?: {vision:boolean;native_pdf:boolean;image_detail:'auto'|'low'|'high'};
 }
 
 export interface ModelPreset {
@@ -170,6 +177,7 @@ export interface ChatPayload {
   system_prompt?: string;
   system_prompt_id?: string;
   assistant_message_id?: string;
+  edit_message_id?: string;
   new_user_message: {
     id?: string;
     content: MessageContentPart[];

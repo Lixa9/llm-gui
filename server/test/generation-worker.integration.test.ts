@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { Hono } from 'hono';
+import type { AutomationRow } from '../src/types.ts';
 
 const databaseUrl = process.env.GENERATION_TEST_DATABASE_URL;
 
-test('durable background job lifecycle', { skip: !databaseUrl, timeout: 20_000 }, async () => {
+test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }, async () => {
   const configDir = await mkdtemp(join(tmpdir(), 'llm-generation-test-'));
   let mode: 'complete' | 'slow' | 'idle' = 'complete';
   let nonStreamingCalls = 0;
@@ -64,12 +65,18 @@ conversation:
     writeFile(join(configDir, 'automations.yaml'), 'automations: []\n'),
   ]);
   process.env.CONFIG_DIR = configDir;
+  process.env.LOCAL_AUTH = 'true';
 
   const { loadConfig } = await import('../src/config.ts');
   const { openDatabase, closeDatabase, getDb, generateId, runTransaction } = await import('../src/db/index.ts');
   const { runGeneration, cancelGeneration } = await import('../src/generation-worker.ts');
   const { runTitleJob } = await import('../src/title-worker.ts');
   const { enqueueAutomationRun, runAutomationJob } = await import('../src/automation-runner.ts');
+  const { relayRouter } = await import('../src/relay.ts');
+  const { draftsRouter } = await import('../src/drafts.ts');
+  const { purgeOrphanUploads, uploadsRouter } = await import('../src/uploads.ts');
+  const { resolveCurrentRole } = await import('../src/auth.ts');
+  const { providerIdentity, getConfig } = await import('../src/config.ts');
   const { conversationsRouter } = await import('../src/conversations.ts');
   loadConfig();
   await openDatabase(databaseUrl);
@@ -91,7 +98,7 @@ conversation:
       INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, attempt, lease_owner, lease_until, available_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(assistantId, conversationId, userId, assistantId, owner, JSON.stringify({
-      model: 'test', openai_messages: [{ role: 'user', content: 'prompt' }], title_prompt: 'prompt',
+      provider: providerIdentity(), model: 'test', openai_messages: [{ role: 'user', content: 'prompt' }], title_prompt: 'prompt',
       is_first_exchange: autoTitle, auto_title: autoTitle, auto_title_model: 'test',
     }), status, status === 'running' ? 1 : 0, status === 'running' ? 'dead-worker' : null, status === 'running' ? now - 1 : null);
     return { conversationId, userId, assistantId };
@@ -104,6 +111,12 @@ conversation:
       await db.prepare('SELECT content_text, status FROM messages WHERE id=?').get(normal.assistantId),
       { content_text: 'new answer', status: 'done' },
     );
+    const diagnosticRow = await db.prepare('SELECT diagnostics FROM chat_generations WHERE id=?')
+      .get<{ diagnostics: { provider_status: number; request_bytes: number; output_bytes: number; input: { text_chars: number } } }>(normal.assistantId);
+    assert.equal(diagnosticRow?.diagnostics.provider_status, 200);
+    assert.ok(diagnosticRow!.diagnostics.request_bytes > 0);
+    assert.equal(diagnosticRow?.diagnostics.output_bytes, Buffer.byteLength('new answer'));
+    assert.doesNotMatch(JSON.stringify(diagnosticRow?.diagnostics), /"prompt"|new answer/);
 
     const recovered = await createJob('running', 'old partial');
     assert.equal(await runGeneration(recovered.assistantId), true);
@@ -293,6 +306,82 @@ conversation:
       body: JSON.stringify({ message_id: sourceMessageId }),
     });
     assert.equal(forkResponse.status, 409, await forkResponse.clone().text());
+    // Attachment edits and snapshots use one acceptance transaction.
+    const app=new Hono();app.route('/api/chat',relayRouter);app.route('/api/drafts',draftsRouter);app.route('/api/conversations',conversationsRouter);app.route('/api/uploads',uploadsRouter);
+    const headers={cookie:`session=${sessionToken}`,'content-type':'application/json'};
+    const corruptOffice = new FormData();
+    corruptOffice.set('file', new File(['not an Office document'], 'broken.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }));
+    const corruptResponse = await app.request('/api/uploads', {
+      method: 'POST', headers: { cookie: `session=${sessionToken}` }, body: corruptOffice,
+    });
+    assert.equal(corruptResponse.status, 422, await corruptResponse.clone().text());
+    assert.equal(await db.prepare("SELECT id FROM uploads WHERE owner_sub=? AND filename='broken.docx'").get(owner), undefined);
+    const attachedConversation=generateId(),attachedUser=generateId(),oldAssistant=generateId(),upload=generateId();
+    await db.prepare("INSERT INTO conversations (id,owner_sub,model_id,custom_system_prompt) VALUES (?,?,'test','Keep the original instructions')").run(attachedConversation,owner);
+    await db.prepare("INSERT INTO uploads (id,owner_sub,sha256,filename,mime_type,size,extracted_text,file_meta,data,derived_images,created_at) VALUES (?,?,'hash','notes.txt','text/plain',5,'Document body',?::jsonb,?,'[]'::jsonb,0)").run(upload,owner,JSON.stringify({processing_status:'ready',warning:'Coverage warning'}),Buffer.from('hello'));
+    await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,status,timestamp) VALUES (?,?,'user',?,'Original text','done',1)").run(attachedUser,attachedConversation,JSON.stringify([{type:'text',text:'Original text'},{type:'file',file:{url:`/api/uploads/${upload}`}}]));
+    await db.prepare("INSERT INTO message_uploads (message_id,upload_id) VALUES (?,?)").run(attachedUser,upload);
+    await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,status,timestamp) VALUES (?,?,'assistant','[]','Old answer','done',2)").run(oldAssistant,attachedConversation);
+    const noEdit=await app.request(`/api/conversations/${attachedConversation}/messages/${attachedUser}`,{method:'PATCH',headers,body:JSON.stringify({content:'Patched text'})});
+    assert.equal(noEdit.status,200);
+    assert.equal((await noEdit.json() as {content:unknown[]}).content.length,2,'PATCH must preserve attachments');
+    const rejected=await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',edit_message_id:attachedUser,new_user_message:{content:[{type:'text',text:'x'.repeat(600000)}]}})});
+    assert.equal(rejected.status,400,'aggregate context budget must reject the edit');
+    assert.ok(await db.prepare('SELECT id FROM messages WHERE id=?').get(oldAssistant),'failed edit must keep later history');
+    assert.equal((await db.prepare('SELECT content_text FROM messages WHERE id=?').get<{content_text:string}>(attachedUser))?.content_text,'Patched text');
+    const edited=await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',edit_message_id:attachedUser,new_user_message:{content:[{type:'text',text:'Edited text'}]}})});
+    assert.equal(edited.status,200,await edited.clone().text());
+    const body=await edited.text();assert.match(body,/accepted/);
+    const updated=await db.prepare('SELECT content FROM messages WHERE id=?').get<{content:Array<{type:string}>}>(attachedUser);
+    assert.equal(JSON.parse(String(updated?.content)).length,2);assert.ok(await db.prepare('SELECT id FROM uploads WHERE id=?').get(upload));
+    assert.equal(await db.prepare('SELECT id FROM messages WHERE id=?').get(oldAssistant),undefined);
+    assert.equal((await db.prepare("SELECT count(*)::int AS count FROM generation_uploads gu JOIN chat_generations g ON g.id=gu.generation_id WHERE g.conversation_id=?").get<{count:number}>(attachedConversation))?.count,0,'finished generations release asset pins');
+
+    // An accepted, queued job stores IDs rather than base64/expanded documents.
+    mode='slow';
+    const firstBusy=await createJob(),secondBusy=await createJob();
+    const busyA=runGeneration(firstBusy.assistantId),busyB=runGeneration(secondBusy.assistantId);
+    await new Promise(resolve=>setTimeout(resolve,50));
+    const queued=await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',new_user_message:{content:[{type:'text',text:'Continue'},{type:'file',file:{url:`/api/uploads/${upload}`}}]}})});
+    assert.equal(queued.status,200);const acceptedEvents=await queued.text();assert.match(acceptedEvents,/accepted/);
+    const queueRow=await db.prepare("SELECT id,request_snapshot FROM chat_generations WHERE conversation_id=? AND status='queued'").get<{id:string;request_snapshot:{input_messages:Array<{role:string;content:unknown}>;openai_messages?:unknown}}>(attachedConversation);
+    assert.ok(queueRow);assert.equal(queueRow.request_snapshot.openai_messages,undefined);assert.match(JSON.stringify(queueRow.request_snapshot),/Keep the original instructions/);assert.doesNotMatch(JSON.stringify(queueRow.request_snapshot),/Document body/);
+    assert.ok(await db.prepare('SELECT upload_id FROM generation_uploads WHERE generation_id=?').get(queueRow.id));
+    await cancelGeneration(queueRow.id,owner);assert.equal(await db.prepare('SELECT upload_id FROM generation_uploads WHERE generation_id=?').get(queueRow.id),undefined);
+    await cancelGeneration(firstBusy.assistantId,owner);await cancelGeneration(secondBusy.assistantId,owner);await Promise.all([busyA,busyB]);mode='complete';
+
+    // Drafts pin unattached uploads and remain private to their owner.
+    const draftUpload=generateId();
+    await db.prepare("INSERT INTO uploads (id,owner_sub,sha256,filename,mime_type,size,data,created_at) VALUES (?,?,'hash','draft.txt','text/plain',4,?,0)").run(draftUpload,owner,Buffer.from('text'));
+    await db.prepare("UPDATE uploads SET file_meta='{\"warning\":null}'::jsonb WHERE id=?").run(draftUpload);
+    const savedDraft=await app.request('/api/drafts/new',{method:'PUT',headers,body:JSON.stringify({text:'Unsent text',attachments:[{id:draftUpload}]})});assert.equal(savedDraft.status,204);
+    await purgeOrphanUploads();assert.ok(await db.prepare('SELECT id FROM uploads WHERE id=?').get(draftUpload));
+    const recoveredDraft=await app.request('/api/drafts/new',{headers});const restored=await recoveredDraft.json() as {text:string;attachments:Array<{warning?:string}>};assert.equal(restored.text,'Unsent text');assert.equal(restored.attachments[0].warning,undefined);
+    await app.request('/api/drafts/new',{method:'PUT',headers,body:JSON.stringify({text:'',attachments:[]})});await purgeOrphanUploads();assert.equal(await db.prepare('SELECT id FROM uploads WHERE id=?').get(draftUpload),undefined);
+
+    // Existing sessions read the user's current role instead of their login role.
+    await db.prepare("UPDATE users SET last_known_role='admin' WHERE sub=?").run(owner);assert.equal(await resolveCurrentRole(owner),'admin');
+    await db.prepare("UPDATE users SET last_known_role='user' WHERE sub=?").run(owner);assert.equal(await resolveCurrentRole(owner),'user');
+    const oldRole=await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'missing-model',new_user_message:{content:[{type:'text',text:'hello'}]}})});assert.equal(oldRole.status,400);
+
+    // Provider changes are deterministic errors and never reroute or retry.
+    const pinned=await createJob();
+    await db.prepare("UPDATE chat_generations SET request_snapshot=jsonb_set(request_snapshot,'{provider}',?::jsonb) WHERE id=?").run(JSON.stringify({...providerIdentity(),revision:'previous-provider'}),pinned.assistantId);
+    await runGeneration(pinned.assistantId);assert.equal((await db.prepare('SELECT status FROM chat_generations WHERE id=?').get<{status:string}>(pinned.assistantId))?.status,'failed');
+
+    // Current subscription and role determine delivery eligibility.
+    const sharedId=generateId();
+    await db.prepare("INSERT INTO automations (id,owner_sub,name,type,definition,enabled,visible_to) VALUES (?,NULL,'Shared','scheduled',?::jsonb,true,?::jsonb)").run(sharedId,JSON.stringify({interval:1,unit:'days',model:'test',system_prompt:'Persisted instructions',user_prompt:'Scheduled prompt'}),JSON.stringify(['user']));
+    await db.prepare('INSERT INTO user_automation_subscriptions (user_sub,automation_id,enabled) VALUES (?,?,true)').run(owner,sharedId);
+    const shared=(await db.prepare('SELECT * FROM automations WHERE id=?').get<AutomationRow>(sharedId))!;
+    const sharedRun=await runTransaction(tx=>enqueueAutomationRun(tx,shared,'scheduled'));
+    await db.prepare('UPDATE user_automation_subscriptions SET enabled=false WHERE user_sub=? AND automation_id=?').run(owner,sharedId);
+    await runAutomationJob(sharedRun.id);
+    assert.equal((await db.prepare('SELECT status FROM automation_run_deliveries WHERE run_id=? AND user_sub=?').get<{status:string}>(sharedRun.id,owner))?.status,'skipped');
+    await db.prepare('DELETE FROM automations WHERE id=?').run(sharedId);
+
   } finally {
     upstream.closeAllConnections();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
