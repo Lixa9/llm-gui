@@ -149,6 +149,10 @@ Standard Chat Completions SSE text is stored without wrappers. Refusal, malforme
 
 ## Verification
 
+The browser-facing response stream sends an SSE keep-alive comment every 15 seconds while a generation runs. A disconnected accepted stream recovers through the saved generation status and polling, without submitting another model request. Terminal events end stream consumption immediately, so a later socket failure cannot overwrite the saved result. Provider failures and user cancellation remain distinct from connection interruptions.
+
+Regression checks include a generated 250-page PDF sent to a delayed hardcoded mock, idle keep-alives and their cleanup, browser `error in input stream` recovery for Send and Regenerate, and preservation of saved provider failures. Rendered PDF coverage remains the first 100 pages with an explicit warning.
+
 Checks cover plain-message passthrough and metadata-looking user text; full history and optional instructions; page/image pairing and private-field exclusion; legacy/empty text files; quoted headers; record-safe truncation; workbook row positions and formula notices; container omissions and duplicate entry names; and MIME/native PDF handling.
 
 PostgreSQL-backed integration uses a local mock provider to verify actual request bodies, including fresh uploads, edits, regeneration, follow-up history, interrupted-answer exclusion, old-job rejection, and request-contract fencing. Real converter fixtures exercise Office formats, PDF pages, EPUB/collection images, BMP/TIFF/HEIC/SVG using the production converter environment with current source mounted. Frontend checks cover compilation, existing unit tests, and production build. These checks do not contact a live model provider.

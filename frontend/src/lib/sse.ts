@@ -1,5 +1,13 @@
 import type { ChatPayload, RegenerateChatPayload, SSEEvent } from './types';
 
+/** The saved generation can still finish when its HTTP observer disconnects. */
+export class ChatStreamInterruptedError extends Error {
+  constructor(cause?: unknown) {
+    super('Connection closed before the response completed. Checking the saved response.', { cause });
+    this.name = 'ChatStreamInterruptedError';
+  }
+}
+
 export async function streamChat(
   payload: ChatPayload | RegenerateChatPayload,
   signal: AbortSignal,
@@ -34,7 +42,13 @@ export async function streamChat(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try { chunk = await reader.read(); }
+      catch (cause) {
+        if (signal.aborted) throw cause;
+        throw new ChatStreamInterruptedError(cause);
+      }
+      const { done, value } = chunk;
       if (done) break;
 
       buf += decoder.decode(value, { stream: true });
@@ -52,12 +66,16 @@ export async function streamChat(
           catch { throw new Error('Invalid response frame'); }
           if (event.type === 'done' || event.type === 'cancelled' || event.type === 'error') terminalEvent = true;
           onEvent(event);
+          // The authoritative result is complete; a later socket failure must
+          // not turn a saved answer or provider error into a transport error.
+          if (terminalEvent) return;
         }
       }
     }
   } finally {
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 
-  if (!terminalEvent) throw new Error('Connection closed before the response completed');
+  if (!terminalEvent) throw new ChatStreamInterruptedError();
 }

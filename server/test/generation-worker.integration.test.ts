@@ -10,9 +10,31 @@ import type { AutomationRow } from '../src/types.ts';
 
 const databaseUrl = process.env.GENERATION_TEST_DATABASE_URL;
 
+function pdfWithPages(count: number): Buffer {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Count ${count} /Kids [${Array.from({length: count}, (_, i) => `${4 + i * 2} 0 R`).join(' ')}] >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  for (let i = 0; i < count; i++) {
+    const content = `BT /F1 12 Tf 20 100 Td (PDF fixture page ${i + 1}) Tj ET`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`);
+    objects.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+  }
+  let pdf = '%PDF-1.4\n';
+  const offsets = objects.map((object, i) => {
+    const offset = Buffer.byteLength(pdf);
+    pdf += `${i + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf);
+}
+
 test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }, async () => {
   const configDir = await mkdtemp(join(tmpdir(), 'llm-generation-test-'));
-  let mode: 'complete' | 'slow' | 'idle' = 'complete';
+  let mode: 'complete' | 'slow' | 'idle' | 'delayed' = 'complete';
   let nonStreamingCalls = 0;
   const streamingRequests: any[] = [];
   const upstream = createServer((request, response) => {
@@ -39,6 +61,8 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
         response.end('data: {"choices":[{"delta":{"content":"new answer"}}]}\n\ndata: [DONE]\n\n');
       } else if (mode === 'slow') {
         response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+      } else if (mode === 'delayed') {
+        setTimeout(() => response.end('data: {"choices":[{"delta":{"content":"hardcoded PDF response"}}]}\n\ndata: [DONE]\n\n'), 200);
       }
     });
   });
@@ -61,7 +85,7 @@ conversation:
   generation_idle_timeout_ms: 1000
   generation_max_attempts: 3
 `),
-    writeFile(join(configDir, 'models.yaml'), 'models:\n  - id: test\n    display_name: Test\n    allowed_roles: [admin, user]\n'),
+    writeFile(join(configDir, 'models.yaml'), 'models:\n  - id: test\n    display_name: Test\n    allowed_roles: [admin, user]\n    capabilities: {vision: true}\n'),
     writeFile(join(configDir, 'prompts.yaml'), 'prompts: []\n'),
     writeFile(join(configDir, 'presets.yaml'), 'presets: []\n'),
     writeFile(join(configDir, 'automations.yaml'), 'automations: []\n'),
@@ -343,6 +367,29 @@ conversation:
     });
     assert.equal(corruptResponse.status, 422, await corruptResponse.clone().text());
     assert.equal(await db.prepare("SELECT id FROM uploads WHERE owner_sub=? AND filename='broken.docx'").get(owner), undefined);
+
+    // Real PDF upload, extraction, request expansion, delayed hardcoded mock,
+    // durable worker and browser-facing SSE. Long PDFs still disclose coverage.
+    const pdfForm = new FormData();
+    pdfForm.set('file', new File([new Uint8Array(pdfWithPages(250))], '250-pages.pdf', {type:'application/pdf'}));
+    const pdfUpload = await app.request('/api/uploads', {method:'POST',headers:{cookie:`session=${sessionToken}`},body:pdfForm});
+    assert.equal(pdfUpload.status,201,await pdfUpload.clone().text());
+    const pdf = await pdfUpload.json() as {url:string;coverage:{page_count:number;served_pages:number};warning:string};
+    assert.equal(pdf.coverage.page_count,250);
+    assert.equal(pdf.coverage.served_pages,100);
+    assert.match(pdf.warning,/first 100 of 250 pages/);
+    mode = 'delayed';
+    const pdfChat = await app.request('/api/chat', {method:'POST',headers,body:JSON.stringify({model:'test',new_user_message:{content:[{type:'text',text:'Summarize this PDF'},{type:'file',file:{url:pdf.url}}]}})});
+    assert.equal(pdfChat.status,200);
+    const pdfStream = await pdfChat.text();
+    assert.match(pdfStream,/"type":"accepted"/);
+    assert.match(pdfStream,/"type":"done"/);
+    assert.match(pdfStream,/hardcoded PDF response/);
+    const pdfWire = streamingRequests.at(-1);
+    assert.equal(pdfWire.messages[0].content.filter((part:any)=>part.type==='image_url').length,100);
+    assert.match(JSON.stringify(pdfWire),/PDF fixture page 100/);
+    mode = 'complete';
+
     const attachedConversation=generateId(),attachedUser=generateId(),oldAssistant=generateId(),upload=generateId();
     await db.prepare("INSERT INTO conversations (id,owner_sub,model_id,custom_system_prompt) VALUES (?,?,'test','Keep the original instructions')").run(attachedConversation,owner);
     await db.prepare("INSERT INTO uploads (id,owner_sub,sha256,filename,mime_type,size,extracted_text,file_meta,data,derived_images,created_at) VALUES (?,?,'hash','notes.txt','text/plain',5,'Document body',?::jsonb,?,'[]'::jsonb,0)").run(upload,owner,JSON.stringify({processing_status:'ready',warning:'Coverage warning'}),Buffer.from('hello'));

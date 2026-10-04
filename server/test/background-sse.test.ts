@@ -46,3 +46,56 @@ test('connected clients continue to receive terminal events', async () => {
   assert.match(body, /"type":"delta"/);
   assert.match(body, /"type":"done"/);
 });
+
+test('slow mock replies receive keep-alives until completion, with timer cleanup', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const response = createBackgroundSseResponse({ type: 'accepted' }, async client => {
+    await waiting;
+    client.send({ type: 'done', message: { content: 'hardcoded response' } });
+  }, error => assert.fail(String(error)));
+  assert.equal(response.headers.get('cache-control'), 'no-cache, no-transform');
+  const reader = response.body!.getReader();
+  assert.match(new TextDecoder().decode((await reader.read()).value), /accepted/);
+  t.mock.timers.tick(15_000);
+  assert.equal(new TextDecoder().decode((await reader.read()).value), ': keep-alive\n\n');
+  t.mock.timers.tick(15_000);
+  assert.equal(new TextDecoder().decode((await reader.read()).value), ': keep-alive\n\n');
+  release();
+  await waitForBackgroundTasks(1_000);
+  assert.match(new TextDecoder().decode((await reader.read()).value), /hardcoded response/);
+  assert.equal((await reader.read()).done, true);
+  t.mock.timers.tick(15_000);
+  assert.equal((await reader.read()).done, true);
+});
+
+test('disconnect clears keep-alives while the background task continues', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let completed = false;
+  const response = createBackgroundSseResponse({ type: 'accepted' }, async client => {
+    await waiting;
+    client.send({ type: 'done' });
+    completed = true;
+  }, error => assert.fail(String(error)));
+  const reader = response.body!.getReader();
+  await reader.read();
+  await reader.cancel();
+  t.mock.timers.tick(60_000);
+  release();
+  await waitForBackgroundTasks(1_000);
+  assert.equal(completed, true);
+});
+
+test('unexpected task failures produce an error event before closing', async () => {
+  let caught: unknown;
+  const response = createBackgroundSseResponse({ type: 'accepted' }, async () => {
+    throw new Error('private internal failure');
+  }, error => { caught = error; });
+  const body = await response.text();
+  assert.match(body, /"type":"error"/);
+  assert.doesNotMatch(body, /private internal failure/);
+  assert.equal((caught as Error).message, 'private internal failure');
+});

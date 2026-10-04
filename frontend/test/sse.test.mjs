@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { streamChat } from '../src/lib/sse.ts';
+import { ChatStreamInterruptedError, streamChat } from '../src/lib/sse.ts';
 
 const payload = {
   conversation_id: '4debad6e-b303-4fb3-aafd-fca8e5f210f5',
@@ -86,4 +86,62 @@ test('streamChat bounds unterminated frames and rejects malformed frames', async
   await assert.rejects(streamChat(payload, new AbortController().signal, () => {}), /streaming limit/);
   t.mock.method(globalThis, 'fetch', async () => new Response('data: {invalid}\n\n'));
   await assert.rejects(streamChat(payload, new AbortController().signal, () => {}), /Invalid response frame/);
+});
+
+test('streamChat ignores keep-alives while waiting for a hardcoded mock reply', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    ': keep-alive\n\ndata: {"type":"delta","content":"hardcoded response"}\n\n: keep-alive\n\ndata: {"type":"done"}\n\n',
+  ));
+  const events = [];
+  await streamChat(payload, new AbortController().signal, event => events.push(event));
+  assert.deepEqual(events.map(event => event.type), ['delta', 'done']);
+});
+
+test('browser input stream failures are recoverable transport interruptions', async t => {
+  const cause = new TypeError('error in input stream');
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+    pull(controller) {
+      if (reads++ === 0) controller.enqueue(new TextEncoder().encode('data: {"type":"accepted"}\n\n'));
+      else controller.error(cause);
+    },
+  })));
+  const events = [];
+  await assert.rejects(streamChat(payload, new AbortController().signal, event => events.push(event)), error => {
+    assert.ok(error instanceof ChatStreamInterruptedError);
+    assert.equal(error.cause, cause);
+    assert.doesNotMatch(error.message, /error in input stream/);
+    return true;
+  });
+  assert.deepEqual(events.map(event => event.type), ['accepted']);
+});
+
+test('terminal events finish without waiting for socket close or surfacing a later read error', async t => {
+  for (const event of [{ type: 'done' }, { type: 'cancelled' }, { type: 'error', message: 'Provider rejected input' }]) {
+    let cancelled = false;
+    let reads = 0;
+    t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+        // Leave the socket open, as a mock or proxy may do after a terminal event.
+      },
+      cancel() { cancelled = true; },
+    })));
+    const events = [];
+    await streamChat(payload, new AbortController().signal, value => events.push(value));
+    assert.deepEqual(events, [event]);
+    assert.equal(cancelled, true);
+  }
+});
+
+test('user cancellation remains an abort rather than a recoverable interruption', async t => {
+  const abort = new DOMException('Cancelled', 'AbortError');
+  const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+    pull(stream) {
+      controller.abort();
+      stream.error(abort);
+    },
+  })));
+  await assert.rejects(streamChat(payload, controller.signal, () => {}), error => error === abort);
 });
