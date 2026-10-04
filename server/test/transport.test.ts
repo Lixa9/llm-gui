@@ -94,7 +94,7 @@ test('provider serialization uses native PDF file_data and supported image MIME 
   assert.deepEqual(native, [
     { type: 'file', file: { filename: 'report.pdf', file_data: 'data:application/pdf;base64,JVBERi0xLjc=' } },
   ]);
-  row = { ...row, mime_type: 'image/tiff', derived_images: [{ data: 'AAAA', ext: '.png' }] } as typeof row;
+  row = { ...row, file_meta: {processing_status:'ready'}, mime_type: 'image/tiff', derived_images: [{ data: 'AAAA', ext: '.png' }] } as typeof row;
   const converted = (await resolveContentParts(
     [{ type: 'image_url', image_url: { url } }],
     'owner',

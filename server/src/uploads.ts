@@ -6,8 +6,8 @@ import { checkRateLimit } from './ratelimit.ts';
 import { getConfig } from './config.ts';
 import { logger } from './logger.ts';
 import { FILE_FORMATS, recognizeFormat } from './formats.ts';
-import { findAllowedModel } from './models.ts';
 import { processUpload } from './processing.ts';
+import { publicFileMeta } from './content-blocks.ts';
 
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);
@@ -66,10 +66,7 @@ uploadsRouter.post('/', async (c) => {
   let warning: string | undefined;
 
   try {
-    const selectedModel = typeof formData.get('model') === 'string' ? await findAllowedModel(String(formData.get('model')),user.role) : null;
-    const result = mime==='application/pdf' && selectedModel?.capabilities?.native_pdf && buf.subarray(0,1024).includes(Buffer.from('%PDF-'))
-      ? {text:null,images:[],meta:{format:'pdf',processing_status:'native_only',processing_version:1},warning:'Original PDF will be sent through native PDF input. Choose a native PDF model to use it.'}
-      : await processUpload(buf, mime, file.name);
+    const result = await processUpload(buf, mime, file.name);
     extractedText = result.text;
     fileMeta = {...result.meta,warning:result.warning ?? null};
     derivedImages = result.images;
@@ -97,13 +94,15 @@ uploadsRouter.post('/', async (c) => {
   });
   if (!id) return c.json({ error: 'Storage quota exceeded' }, 507);
   logger.info('Upload stored', { user_sub: user.sub, id, mime_type: mime, size: file.size });
-  return c.json({ id, filename: file.name.slice(0,255), mime_type: mime, size: file.size, url: `/api/uploads/${id}`, kind: isImage ? 'image' : 'file', processing_status: fileMeta.processing_status ?? 'ready', coverage: fileMeta, ...(warning ? { warning } : {}) }, 201);
+  return c.json({ id, filename: file.name.slice(0,255), mime_type: mime, size: file.size, url: `/api/uploads/${id}`, kind: isImage ? 'image' : 'file', processing_status: fileMeta.processing_status ?? 'ready', coverage: publicFileMeta(fileMeta), ...(warning ? { warning } : {}) }, 201);
 });
 
 uploadsRouter.get('/formats', c => c.json(FILE_FORMATS));
 uploadsRouter.get('/:id/metadata', async c => {
   const row = await getDb().prepare('SELECT id, filename, mime_type, size, file_meta FROM uploads WHERE id=? AND owner_sub=?').get(c.req.param('id'), c.get('user').sub);
-  return row ? c.json({ ...row, coverage: safeParseJson(row.file_meta, {}) }) : c.json({ error: 'Not found' }, 404);
+  if (!row) return c.json({ error: 'Not found' }, 404);
+  const coverage = publicFileMeta(safeParseJson<Record<string, unknown>>(row.file_meta, {}));
+  return c.json({ ...row, file_meta: coverage, coverage });
 });
 uploadsRouter.get('/:id/preview', async c => {
   const row = await getDb().prepare('SELECT derived_images, data, mime_type FROM uploads WHERE id=? AND owner_sub=?').get<{ derived_images: unknown; data: Buffer; mime_type: string }>(c.req.param('id'), c.get('user').sub);

@@ -81,6 +81,8 @@ test(
         const result = await processFile(bytes, recognizeFormat(name).mime, name);
         if (name !== 'workbook.ods') assert.ok(result.images.length > 0, name);
         assert.match(result.text!, /fixture text|Legacy workbook content/, name);
+        if (name.startsWith('document.')) assert.equal(result.blocks?.[0].part, 'Converted page 1');
+        if (name.startsWith('deck.')) assert.equal(result.blocks?.[0].part, 'Slide 1');
       }
       const sheet = await processFile(xls, recognizeFormat('workbook.xls').mime, 'workbook.xls');
       assert.match(sheet.text!, /Legacy workbook content/);
@@ -100,13 +102,62 @@ test(
         );
       zip.updateFile(relPath, Buffer.from(rels));
       const notes = await processFile(zip.toBuffer(), recognizeFormat('notes.pptx').mime, 'notes.pptx');
-      assert.match(notes.text!, /Speaker notes, slide 1/);
+      assert.ok(notes.blocks?.some(block=>block.type==='text' && block.part==='Slide 1 — speaker notes' && /Speaker note fixture/.test(block.text)));
       assert.match(notes.text!, /Speaker note fixture/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   },
 );
+
+test('PDF pages retain paired text/images and switch between normalized and native transport', async () => {
+  const mupdf = (await import('mupdf')).default;
+  const { resolveMessageContent } = await import('../src/attachment-transport.ts');
+  const document = new mupdf.PDFDocument();
+  const font = new mupdf.Font('Helvetica');
+  const fontObject = document.addSimpleFont(font);
+  try {
+    for (let index = 0; index < 2; index++) {
+      const page = document.addPage([0,0,200,100],0,{Font:{F1:fontObject}},`BT /F1 12 Tf 10 50 Td (Page ${index + 1} fixture text) Tj ET`);
+      try { document.insertPage(-1,page); } finally { page.destroy(); }
+    }
+    const buffer = document.saveToBuffer();
+    let bytes: Buffer;
+    try { bytes = Buffer.from(buffer.asUint8Array()); } finally { buffer.destroy(); }
+    const result = await processFile(bytes,'application/pdf','report.pdf');
+    assert.deepEqual(result.blocks?.map(block=>[block.type,block.part]), [
+      ['text','Page 1'],['image','Page 1'],['text','Page 2'],['image','Page 2'],
+    ]);
+    const row = {filename:'report.pdf',mime_type:'application/pdf',data:bytes,extracted_text:result.text,file_meta:result.meta,derived_images:result.images};
+    const db = {prepare:()=>({get:async()=>row})} as unknown as ReturnType<typeof import('../src/db/index.ts').getDb>;
+    const model = {id:'test',display_name:'Test',allowed_roles:['user' as const],capabilities:{vision:true,native_pdf:false,image_detail:'auto' as const}};
+    const content = [{type:'file' as const,file:{url:'/api/uploads/12345678-1234-1234-1234-123456789abc'}}];
+    const normalized = await resolveMessageContent(content,'owner',model,db) as Array<{type:string;text?:string}>;
+    assert.deepEqual(normalized.map(part=>part.type),['text','text','image_url','text','image_url']);
+    assert.match(normalized[1].text!,/Page 1 fixture text/);
+    assert.match(normalized[3].text!,/Page 2 fixture text/);
+    const native = await resolveMessageContent(content,'owner',{...model,capabilities:{...model.capabilities,native_pdf:true}},db) as unknown[];
+    assert.deepEqual(native,[{type:'text',text:''},{type:'file',file:{filename:'report.pdf',file_data:`data:application/pdf;base64,${bytes.toString('base64')}`}}]);
+  } finally {
+    fontObject.destroy(); font.destroy(); document.destroy();
+  }
+});
+
+test('EPUB chapter order associates embedded images and collection image references stay distinct', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>';
+  const zip = new AdmZip();
+  zip.addFile('META-INF/container.xml',Buffer.from('<container><rootfile full-path="OPS/book.opf"/></container>'));
+  zip.addFile('OPS/book.opf',Buffer.from('<package><manifest><item id="one" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="image" href="image.svg" media-type="image/svg+xml"/></manifest><spine><itemref idref="one"/></spine></package>'));
+  zip.addFile('OPS/chapter.xhtml',Buffer.from('<html><body><p>Chapter content</p><img src="image.svg"/></body></html>'));
+  zip.addFile('OPS/image.svg',Buffer.from(svg));
+  const book = await processFile(zip.toBuffer(),'application/epub+zip','book.epub');
+  assert.deepEqual(book.blocks?.map(block=>[block.type,block.part]),[['text','Chapter 1'],['image','Chapter 1 — image 1']]);
+  const collection = new AdmZip();
+  collection.addFile('first.svg',Buffer.from(svg));
+  collection.addFile('second.svg',Buffer.from(svg));
+  const result = await processFile(collection.toBuffer(),'application/zip','images.zip');
+  assert.deepEqual(result.blocks?.filter(block=>block.type==='image').map(block=>[block.entry,block.type==='image' && block.image_index]),[['first.svg',0],['second.svg',1]]);
+});
 
 test(
   'raster converters normalize BMP, TIFF, HEIC and safe SVG into PNG',

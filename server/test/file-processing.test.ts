@@ -68,6 +68,8 @@ test('ZIP, TAR, TAR.GZ, and GZ include supported entries with explicit omissions
   assert.match(result.text!, /src\/app.py/);
   assert.match(result.text!, /hello/);
   assert.match(result.warning!, /2 of 3/);
+  assert.ok(result.blocks?.some(block => block.entry === 'src/app.py' && block.type === 'text' && block.text.includes('hello')));
+  assert.ok(result.blocks?.some(block => block.entry === 'nested.zip' && block.notices?.includes('Nested containers are not expanded')));
   const tarFile = tar('notes.txt', Buffer.from('tar content'));
   assert.match((await processFile(tarFile, 'application/x-tar', 'bundle.tar')).text!, /tar content/);
   assert.match(
@@ -130,6 +132,9 @@ test('EML decodes MIME text and text attachments with useful headers', async () 
   const eml =
     'From: Alice <alice@example.test>\r\nTo: Bob <bob@example.test>\r\nSubject: Hello\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nMail body\r\n--x\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=notes.txt\r\nContent-Transfer-Encoding: base64\r\n\r\nYXR0YWNoZWQgdGV4dA==\r\n--x--';
   const result = await processFile(Buffer.from(eml), 'message/rfc822', 'mail.eml');
+  assert.ok(result.blocks?.some(block => block.type === 'text' && block.part === 'Email headers'));
+  assert.ok(result.blocks?.some(block => block.type === 'text' && block.part === 'Email body' && block.text.includes('Mail body')));
+  assert.ok(result.blocks?.some(block => block.type === 'text' && block.entry === 'notes.txt' && block.text === 'attached text'));
   assert.match(result.text!, /Subject: Hello/);
   assert.match(result.text!, /Mail body/);
   assert.match(result.text!, /attached text/);
@@ -165,13 +170,14 @@ test('TAR supports PAX and GNU long names while rejecting path overrides that es
   assert.throws(() => tarEntries(Buffer.concat([unsafe, tar('safe.txt', Buffer.from('content'))])), /unsafe/);
 });
 
-test('JSONL keeps record numbers and exposes invalid records as raw source', async () => {
+test('JSONL preserves source records and blank lines, exposing invalid source locations', async () => {
   const result = await processFile(
     Buffer.from('{"ok":1}\nnot-json\n\n{"ok":2}'),
     'application/x-ndjson',
     'events.jsonl',
   );
-  assert.match(result.text!, /\[Record 3\] {"ok":2}/);
+  assert.equal(result.text, '{"ok":1}\nnot-json\n\n{"ok":2}');
+  assert.match(result.warning!, /source lines 2/);
   assert.equal(result.meta.invalid_records, 1);
   assert.equal(result.meta.served_rows, 3);
   assert.match(result.warning!, /invalid JSON/);
@@ -186,4 +192,35 @@ test('Office formats verify signatures and package contents before invoking conv
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'document.bin',
   ), /signature/);
+});
+
+test('workbook sections retain empty row positions and disclose missing formula results', async () => {
+  const bytes = zipped({
+    'xl/workbook.xml': '<workbook><sheets><sheet name="Data" r:id="r1"/></sheets></workbook>',
+    'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="r1" Target="worksheets/sheet1.xml"/></Relationships>',
+    'xl/worksheets/sheet1.xml': '<worksheet><sheetData><row><c r="A1"><v>1</v></c></row><row><c r="A3"><v>3</v></c><c r="B3"><f>A1+1</f></c></row></sheetData></worksheet>',
+  });
+  const result = await processFile(bytes, recognizeFormat('data.xlsx').mime, 'data.xlsx');
+  const sheet = result.blocks?.find(block => block.type === 'text' && block.part === 'Sheet: Data');
+  assert.equal(sheet?.type === 'text' && sheet.text, '1,\n,\n3,');
+  assert.match(result.warning!, /1 formula cells have no cached result/);
+});
+
+test('duplicate TAR entry names retain separate contents and occurrence labels', async () => {
+  const bytes = Buffer.concat([
+    tar('same.txt', Buffer.from('first')).subarray(0, 1024),
+    tar('same.txt', Buffer.from('second')),
+  ]);
+  const result = await processFile(bytes, 'application/x-tar', 'duplicate.tar');
+  assert.deepEqual(result.blocks?.filter(block => block.type === 'text').map(block => [block.entry,block.type === 'text' && block.text]), [
+    ['same.txt','first'], ['same.txt (occurrence 2)','second'],
+  ]);
+});
+
+test('plain text truncation preserves Unicode and does not insert notices into the payload', async () => {
+  const source = 'x'.repeat(999999) + '😀';
+  const result = await processFile(Buffer.from(source), 'text/plain', 'large.txt');
+  assert.equal(result.text, 'x'.repeat(999999));
+  assert.equal(result.blocks?.[0].type === 'text' && result.blocks[0].text, result.text);
+  assert.match(result.warning!, /truncated/);
 });

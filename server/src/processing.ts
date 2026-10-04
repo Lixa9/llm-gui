@@ -8,12 +8,23 @@ export interface DerivedImage {
   data: string;
   ext: string;
   label?: string;
+  frame_count?: number;
 }
+export interface BlockLocation {
+  part?: string;
+  entry?: string;
+  notices?: string[];
+}
+export type AttachmentBlock = BlockLocation & (
+  | { type: 'text'; text: string; format?: 'csv' | 'jsonl' }
+  | { type: 'image'; image_index: number }
+);
 export interface ProcessedFile {
   text: string | null;
   meta: Record<string, unknown>;
   images: DerivedImage[];
   warning?: string;
+  blocks?: AttachmentBlock[];
 }
 let active = 0;
 /** A child process keeps synchronous native/XML/archive work off the HTTP loop. */

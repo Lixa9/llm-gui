@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth.ts';
 import { getDb, safeParseJson } from './db/index.ts';
+import { publicFileMeta } from './content-blocks.ts';
 
 export const draftsRouter = new Hono();
 draftsRouter.use('*', requireAuth);
@@ -39,7 +40,7 @@ draftsRouter.get('/:key', async (c) => {
         c.get('user').sub,
       );
     if (upload) {
-      const coverage = safeParseJson<Record<string, unknown>>(upload.file_meta, {});
+      const coverage = publicFileMeta(safeParseJson<Record<string, unknown>>(upload.file_meta, {}));
       attachments.push({
         id: upload.id,
         filename: upload.filename,

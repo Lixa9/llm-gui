@@ -109,7 +109,6 @@ export interface ModelInfo {
   id: string;
   display_name: string;
   allowed_roles: Role[];
-  history_mode?: 'full' | 'latest_only';
   capabilities?: {vision:boolean;native_pdf:boolean;image_detail:'auto'|'low'|'high'};
 }
 

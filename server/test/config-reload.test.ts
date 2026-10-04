@@ -89,3 +89,15 @@ test('invalid collection roots, model capabilities, duplicates, and references n
   await writeFile(join(configDir,'presets.yaml'),'presets:\n  - {name: Wrong, base_model_id: missing, allowed_roles: [admin]}\n');
   assert.equal(await reloadConfig({reconcile:async()=>assert.fail(),invalidateCaches:async()=>{}}),false);
 });
+
+
+test('latest_only is rejected and legacy full configuration is normalized away', async () => {
+  await writeConfigs('Full history');
+  await writeFile(join(configDir, 'models.yaml'), 'models:\n  - {id: test, display_name: Test, history_mode: full}\n');
+  loadConfig();
+  assert.equal('history_mode' in getConfig().models![0], false);
+  await writeFile(join(configDir, 'models.yaml'), 'models:\n  - {id: test, display_name: Test, history_mode: latest_only}\n');
+  assert.throws(() => loadConfig(), /latest_only is no longer supported/);
+  assert.equal(await reloadConfig({reconcile:async()=>assert.fail('obsolete history mode activated'),invalidateCaches:async()=>{}}), false);
+  assert.equal(getConfig().app.name, 'Full history');
+});

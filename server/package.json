@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",
-    "test": "node --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts test/file-processing.test.ts test/transport.test.ts test/processing.test.ts",
+    "test": "node --test test/automation-definition.test.ts test/background-sse.test.ts test/config-reload.test.ts test/file-processing.test.ts test/transport.test.ts test/conversation-transport.test.ts test/processing.test.ts",
     "test:integration": "node test/integration-runner.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",

@@ -90,6 +90,10 @@
 
 
 
+    {#if isFullMessage && message.role === 'assistant' && ['aborted', 'timed_out', 'failed'].includes((message as Message).status ?? '')}
+      <p class="incomplete-notice">This incomplete response will not be included in subsequent requests.</p>
+    {/if}
+
     <MessageContent
       role={message.role}
       {content}
@@ -153,6 +157,7 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  .incomplete-notice { font-size: 12px; color: var(--text-muted); margin: 4px 0 8px; }
   .msg-role { font-size: 13px; font-weight: 600; }
   .msg-time { font-size: 11px; color: var(--text-muted); }
 

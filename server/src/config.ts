@@ -100,14 +100,15 @@ const configSchema = z.object({
 const roles = z.array(roleSchema).min(1).default(['admin', 'user']);
 const modelSchema = z.object({
   id: z.string().trim().min(1).max(300), display_name: z.string().min(1).max(200), allowed_roles: roles,
-  history_mode: z.enum(['full', 'latest_only']).optional(),
+  history_mode: z.literal('full', {errorMap: () => ({message: 'history_mode: latest_only is no longer supported. Remove history_mode; every backend receives full history.'})}).optional(),
   capabilities: z.object({
     vision: z.boolean().default(false), native_pdf: z.boolean().default(false),
     image_detail: z.enum(['auto', 'low', 'high']).default('auto'),
     stream_usage: z.boolean().default(false),
     max_text_chars: z.number().int().min(1000).optional(),
   }).default({}),
-}).refine(model=>!model.capabilities.native_pdf || model.capabilities.vision,{message:'Native PDF models must enable vision'});
+}).refine(model=>!model.capabilities.native_pdf || model.capabilities.vision,{message:'Native PDF models must enable vision'})
+  .transform(({history_mode: _historyMode, ...model}) => model);
 const promptSchema = z.object({ name: z.string().min(1).max(200), content: z.string().max(100000), allowed_roles: roles });
 const presetSchema = z.object({ name: z.string().min(1).max(200), base_model_id: z.string().min(1), system_prompt: z.string().max(100000).optional(), allowed_roles: roles });
 const automationSchema = scheduledDefinitionSchema.extend({ name: z.string().min(1).max(200), allowed_roles: roles });
@@ -117,7 +118,8 @@ function uniqueEntries<T extends Record<string, unknown>>(entries: T[], key: key
 }
 
 export function configurationRevision(config=getConfig()):string {
-  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+  // A new request contract must also fence replicas running the previous code.
+  return createHash('sha256').update('conversation-transport-v2\0').update(JSON.stringify(config)).digest('hex');
 }
 export async function runtimeConfigurationIsCurrent():Promise<boolean>{
   const {getDb}=await import('./db/index.ts');

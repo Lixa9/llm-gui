@@ -1,5 +1,7 @@
-import { extname } from 'path';
+import { extname, posix } from 'path';
 import { decodeText } from './formats.ts';
+import { limitBlocks, textPrefix } from './content-blocks.ts';
+import type { AttachmentBlock } from './processing.ts';
 
 const MAX_ARCHIVE_ENTRIES = 2_000;
 const MAX_ARCHIVE_EXPANDED_BYTES = 64 * 1024 * 1024;
@@ -93,12 +95,14 @@ export interface FileMeta {
   embedded_image_count?: number;
   served_image_count?: number;
   truncated?: boolean;
+  epub_image_locations?: Record<string, string[]>;
 }
 
 export interface ExtractionResult {
   text: string | null;
   meta: FileMeta;
   warning?: string;
+  blocks?: AttachmentBlock[];
 }
 
 const TEXT_CAP = 1_000_000;
@@ -108,7 +112,7 @@ const DOC_IMAGE_CAP = 20;
 function truncate(text: string): { text: string; warning?: string } {
   if (text.length <= TEXT_CAP) return { text };
   return {
-    text: text.slice(0, TEXT_CAP) + '\n\n[Content truncated at 1,000,000 characters]',
+    text: textPrefix(text, TEXT_CAP),
     warning: 'Content truncated at 1,000,000 characters',
   };
 }
@@ -150,14 +154,14 @@ export async function extractText(bytes: Buffer, mimeType: string): Promise<Extr
 async function extractPlain(bytes: Buffer): Promise<ExtractionResult> {
   let raw = decodeText(bytes);
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  const { text, warning } = truncate(raw.trim() ? raw : '[File appears empty or has no extractable text]');
+  const { text, warning } = truncate(raw);
   return { text, meta: { format: 'plain', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
   let raw = decodeText(bytes);
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  const extracted = stripHtml(raw) || '[File appears empty or has no extractable text]';
+  const extracted = stripHtml(raw);
   const { text, warning } = truncate(extracted);
   return { text, meta: { format: 'html', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
@@ -229,10 +233,12 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
 
   if (format === 'ods') {
     const entry=zip.getEntry('content.xml');if(!entry)throw new Error('ODS has no content.xml');
-    const xml=entry.getData().toString('utf8'),sheetNames:string[]=[],sections:string[]=[];
+    const xml=entry.getData().toString('utf8'),sheetNames:string[]=[],blocks:AttachmentBlock[]=[];
+    const warnings: string[] = [];
     const attr=(tag:string,key:string)=>decodeEntities(tag.match(new RegExp(`${key}=["']([^"']*)["']`))?.[1] ?? '');
     for(const table of xml.matchAll(/<table:table\b([^>]*)>([\s\S]*?)<\/table:table>/g)){
       const name=attr(table[1],'table:name');sheetNames.push(name);const rows:string[]=[];
+      let emptyRows = 0;
       for(const row of table[2].matchAll(/<table:table-row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/table:table-row>)/g)){
         const cells:string[]=[];
         for(const cell of (row[2] ?? '').matchAll(/<table:(?:table-cell|covered-table-cell)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/table:table-cell>)/g)){
@@ -244,16 +250,18 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
           if(cells.length+repeat>256)throw new Error('Spreadsheet exceeds 256 columns');
           for(let i=0;i<repeat;i++)cells.push(/[,\n"]/.test(value)?`"${value.replace(/"/g,'""')}"`:value);
         }
-        if(!cells.some(Boolean))continue;
         const repeat=Number(attr(row[1],'table:number-rows-repeated') || '1');
-        if(!Number.isSafeInteger(repeat) || repeat<1 || rows.length+repeat>10000)throw new Error('Spreadsheet exceeds 10,000 rows');
+        if(!Number.isSafeInteger(repeat) || repeat<1)throw new Error('Invalid repeated spreadsheet row');
+        if(!cells.some(Boolean)){ emptyRows += repeat; continue; }
+        if(rows.length+emptyRows+repeat>10000)throw new Error('Spreadsheet exceeds 10,000 rows');
+        while(emptyRows > 0){ rows.push(''); emptyRows--; }
         while(cells.at(-1)==='')cells.pop();
         for(let i=0;i<repeat;i++)rows.push(cells.join(','));
       }
-      if(rows.length)sections.push(`=== Sheet: ${name} ===\n${rows.join('\n')}`);
+      blocks.push({type:'text', text:rows.join('\n'), format:'csv', part:`Sheet: ${name}`});
+      if(/table:formula=/.test(table[2]))warnings.push('Formula results are taken from stored values; formulas are not recalculated.');
     }
-    const result=truncate(sections.join('\n\n') || '[Workbook has no readable cells]');
-    return {text:result.text,meta:{format:'ods',sheet_names:sheetNames,truncated:!!result.warning},warning:result.warning};
+    return spreadsheetResult(blocks, sheetNames, 'ods', warnings);
   }
 
   // XLSX: xl/workbook.xml (sheet list), xl/sharedStrings.xml (string table), xl/worksheets/sheet*.xml
@@ -327,13 +335,14 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
   for(const token of parseXml(stylesXml))if(token.tag?.name==='numFmt' && !token.tag.isEnd)formats.set(Number(token.tag.attributes.numFmtId),decodeEntities(token.tag.attributes.formatCode ?? ''));
   const cellStyles=(stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1].match(/<xf\b[^>]*>/g) ?? []).map(tag=>Number(tag.match(/numFmtId=["'](\d+)["']/)?.[1] ?? 0));
   const date1904=/date1904=["'](?:1|true)["']/.test(workbookXml);
-  const sections: string[] = [];
+  const blocks: AttachmentBlock[] = [];
+  let formulas = 0, missingFormulaValues = 0;
   for (const { name, rId } of sheetRels) {
     const target = relMap.get(rId);
-    if (!target) continue;
+    if (!target) { blocks.push({type:'text',text:'',part:`Sheet: ${name}`,notices:['Sheet relationship is missing.']}); continue; }
     const wsPath = target.startsWith('/') ? target.slice(1) : target.startsWith('xl/') ? target : `xl/${target}`;
     const wsEntry = zip.getEntry(wsPath);
-    if (!wsEntry) continue;
+    if (!wsEntry) { blocks.push({type:'text',text:'',part:`Sheet: ${name}`,notices:['Sheet data is missing.']}); continue; }
     const wsXml = wsEntry.getData().toString('utf-8');
 
     // Collect cell addresses and values to build a 2D grid
@@ -344,6 +353,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
     let currentCellRef = '';
     let currentCellType = '';
     let currentStyle=0;
+    let hasFormula = false;
     let inV = false;
     let currentVal = '';
 
@@ -354,6 +364,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
           const col = colIndex(match[1]);
           const row = parseInt(match[2], 10) - 1;
           if (row >= 10000 || col >= 256 || cellMap.size >= 100000) throw new Error('Spreadsheet exceeds 10,000 rows, 256 columns, or 100,000 cells');
+          if (hasFormula) { formulas++; if (!currentVal) missingFormulaValues++; }
           let val = '';
           if (currentCellType === 's') {
             const idx = parseInt(currentVal, 10);
@@ -379,6 +390,7 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
             currentCellRef = attributes['r'] || '';
             currentCellType = attributes['t'] || '';
             currentStyle=Number(attributes.s ?? 0);
+            hasFormula = false;
             currentVal = '';
             if (selfClosing) {
               commitCell();
@@ -386,6 +398,8 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
           } else {
             commitCell();
           }
+        } else if (tagName === 'f' && !isEnd) {
+          hasFormula = true;
         } else if (tagName === 'v' || (tagName === 't' && currentCellType === 'inlineStr')) {
           inV = !isEnd;
         }
@@ -402,14 +416,27 @@ async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<Extr
         const v = cellMap.get(`${r}:${c}`) ?? '';
         cells.push(/[,\n"]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
       }
-      if (cells.some(c => c !== '')) rows.push(cells.join(','));
+      if (cellMap.size) rows.push(cells.join(','));
     }
-    if (rows.length) sections.push(`=== Sheet: ${name} ===\n${rows.join('\n')}`);
+    blocks.push({type:'text',text:rows.join('\n'),format:'csv',part:`Sheet: ${name}`});
   }
 
-  const raw = sections.join('\n\n').trim() || '[File appears empty or has no extractable text]';
-  const { text, warning } = truncate(raw);
-  return { text, meta: { format: 'xlsx', sheet_names: sheetNames, ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+  const warnings = formulas ? ['Formula results are taken from stored values; formulas are not recalculated.'] : [];
+  if (missingFormulaValues) warnings.push(`${missingFormulaValues} formula cells have no cached result.`);
+  return spreadsheetResult(blocks, sheetNames, 'xlsx', warnings);
+}
+
+function spreadsheetResult(blocks: AttachmentBlock[], names: string[], format: string, warnings: string[]): ExtractionResult {
+  const limited = limitBlocks(blocks, TEXT_CAP);
+  if (limited.truncated) warnings.push('Text truncated at 1,000,000 characters.');
+  if (!blocks.some(block => block.type === 'text' && block.text)) warnings.push('Workbook has no readable cells.');
+  const warning = [...new Set(warnings)].join('; ') || undefined;
+  return {
+    text: limited.blocks.map(block => block.type === 'text' ? block.text : '').join('\n\n'),
+    blocks: limited.blocks,
+    meta: {format, sheet_names:names, ...(limited.truncated && {truncated:true})},
+    warning,
+  };
 }
 
 function decodeEntities(value:string):string {
@@ -486,24 +513,38 @@ async function extractEpub(bytes: Buffer): Promise<ExtractionResult> {
   }
 
   // Extract text from spine HTML files in order
-  const textParts: string[] = [];
-  for (const idref of spineIds) {
+  const textParts: string[] = [], blocks: AttachmentBlock[] = [];
+  const imageLocations: Record<string,string[]> = Object.create(null);
+  let missingChapters = 0, externalImages = 0;
+  for (const [index, idref] of spineIds.entries()) {
     const item = manifest.get(idref);
-    if (!item) continue;
-    const entryPath = opfBase + item.href;
+    if (!item) { missingChapters++; continue; }
+    const entryPath = posix.normalize(opfBase + item.href);
     const entry = zip.getEntry(entryPath) ?? zip.getEntry(item.href);
-    if (!entry) continue;
+    if (!entry) { missingChapters++; continue; }
     const html = entry.getData().toString('utf-8');
     const text = stripHtml(html);
+    const part = `Chapter ${index + 1}`;
     if (text) textParts.push(text);
+    blocks.push({type:'text',text,part});
+    for (const token of parseXml(html)) {
+      if (!token.tag || token.tag.isEnd || !['img','image'].includes(token.tag.name)) continue;
+      const src = token.tag.attributes.src ?? token.tag.attributes.href ?? token.tag.attributes['xlink:href'];
+      if (!src) continue;
+      if (/^(?:[a-z]+:|\/)/i.test(src)) { externalImages++; continue; }
+      const path = posix.normalize(posix.join(posix.dirname(entryPath),decodeEntities(src).split('#')[0]));
+      if (!imageLocations[path]) imageLocations[path] = [];
+      if (!imageLocations[path].includes(part)) imageLocations[path].push(part);
+    }
   }
 
   const raw = textParts.join('\n\n').trim() || '[File appears empty or has no extractable text]';
   const { text, warning } = truncate(raw);
-  return { text, meta: { format: 'epub', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
+  const notices = [warning, missingChapters ? `${missingChapters} chapter sources are missing.` : '', externalImages ? `${externalImages} external or inline image references were omitted.` : ''].filter(Boolean).join('; ') || undefined;
+  return { text, blocks, meta: { format: 'epub', epub_image_locations:imageLocations, ...(warning && { truncated: true }) }, warning:notices };
 }
 
-export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: number; served: number; pages: string[]; text: string; warning?: string }> {
+export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: number; served: number; pages: string[]; page_texts: string[]; text: string; warning?: string }> {
   const mupdf = (await import('mupdf')).default;
   const doc = mupdf.Document.openDocument(new Uint8Array(bytes), 'application/pdf');
   const pages: string[] = [], text: string[] = [];
@@ -519,7 +560,7 @@ export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: numbe
         const scale = Math.min(150 / 72, 3000 / Math.max(x1-x0, y1-y0));
         if ((x1-x0)*scale*(y1-y0)*scale > 9000000) throw new Error('PDF page exceeds pixel limit');
         const structured = page.toStructuredText();
-        try { text.push(`=== Page ${i+1} ===\n${structured.asText()}`); } finally { structured.destroy(); }
+        try { text.push(structured.asText()); } finally { structured.destroy(); }
         const pixmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
         try {
           const data = Buffer.from(pixmap.asJPEG(85));
@@ -530,20 +571,21 @@ export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: numbe
         if (text.reduce((n,t) => n+t.length, 0) > TEXT_CAP) break;
       } finally { page.destroy(); }
     }
-    return { page_count, served: pages.length, pages, text: truncate(text.join('\n\n')).text,
-      warning: pages.length < page_count ? `Showing first ${pages.length} of ${page_count} pages` : undefined };
+    const truncated = truncate(text.join('\n\n'));
+    return { page_count, served: pages.length, pages, page_texts: text, text: truncated.text,
+      warning: [pages.length < page_count ? `Showing first ${pages.length} of ${page_count} pages` : '', truncated.warning].filter(Boolean).join('; ') || undefined };
   } finally { doc.destroy(); }
 }
 
 export async function extractDocImages(
   bytes: Buffer,
   format: 'docx' | 'odt' | 'epub',
-): Promise<{ count: number; served: number; images: { data: string; ext: string }[]; warning?: string }> {
+): Promise<{ count: number; served: number; images: { data: string; ext: string; path?: string }[]; warning?: string }> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
   assertArchiveBudget(zip);
 
-  let imageEntries: { data: Buffer; ext: string }[];
+  let imageEntries: { data: Buffer; ext: string; path?: string }[];
 
   if (format === 'epub') {
     // Discover images via OPF manifest (handles any directory layout)
@@ -559,7 +601,7 @@ export async function extractDocImages(
     const opfBase = opfPath?.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
     const opfXml = opfPath ? (zip.getEntry(opfPath)?.getData().toString('utf-8') ?? '') : '';
 
-    const imageEntriesList: { data: Buffer; ext: string }[] = [];
+    const imageEntriesList: { data: Buffer; ext: string; path?: string }[] = [];
     if (opfXml) {
       const opfTokens = parseXml(opfXml);
       for (const token of opfTokens) {
@@ -567,10 +609,11 @@ export async function extractDocImages(
           const href = token.tag.attributes['href'];
           const mediaType = token.tag.attributes['media-type'] || '';
           if (href && mediaType.startsWith('image/')) {
-            const entry = zip.getEntry(opfBase + href) ?? zip.getEntry(href);
+            const imagePath = posix.normalize(opfBase + href);
+            const entry = zip.getEntry(imagePath) ?? zip.getEntry(href);
             if (entry) {
               const ext = extname(href) || '.bin';
-              imageEntriesList.push({ data: entry.getData(), ext });
+              imageEntriesList.push({ data: entry.getData(), ext, path:imagePath });
             }
           }
         }
@@ -588,10 +631,10 @@ export async function extractDocImages(
   if (count === 0) return { count: 0, served: 0, images: [] };
 
   const served = Math.min(count, DOC_IMAGE_CAP);
-  const images: { data: string; ext: string }[] = [];
+  const images: { data: string; ext: string; path?: string }[] = [];
   for (let i = 0; i < served; i++) {
-    const { data, ext } = imageEntries[i];
-    images.push({ data: data.toString('base64'), ext });
+    const { data, ext, path } = imageEntries[i];
+    images.push({ data: data.toString('base64'), ext, ...(path ? {path} : {}) });
   }
 
   return {

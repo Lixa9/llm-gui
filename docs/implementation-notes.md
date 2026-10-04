@@ -1,5 +1,7 @@
 # Review implementation — 3 October 2026
 
+The conversation transport was subsequently simplified on 4 October 2026. See [the current specification](conversation-transport.md) for full-history replay, readable attachment headers, section-aware extraction, and upgrade requirements. The validation and implementation details below describe the initial 3 October release unless amended.
+
 This implements the scope selected from [the complete review](project-review.md): Tier 1 and Tier 2 formats, ZIP/TAR/TAR.GZ/GZ from Tier 3, all P1 findings, the attachment fixes D1–D11, private conversation drafts, persistent folder expansion, and optional deployment branding. The original review remains a record of the pre-change implementation.
 
 ## Supported inputs and transport

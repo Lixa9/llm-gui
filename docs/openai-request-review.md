@@ -1,5 +1,7 @@
 # Conversation and attachment transport review
 
+This is a historical review. The implemented request contract is documented in [the current conversation transport specification](conversation-transport.md).
+
 Reviewed 3 October 2026. Scope: browser uploads, persisted conversation history, request construction, durable generation workers, and current official OpenAI documentation. This is a source review and implementation plan; no inference calls or runtime changes were made. The deployed backend and its capabilities were not probed.
 
 ## Recommendation

@@ -8,7 +8,7 @@ import { enqueueTitleJob } from './title-worker.ts';
 import type { BackgroundSseClient } from './background-sse.ts';
 import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow, ModelYamlEntry } from './types.ts';
 
-import { resolveContentParts, assertRequestBudget } from './attachment-transport.ts';
+import { resolveMessageContent, assertRequestBudget } from './attachment-transport.ts';
 import { resolveCurrentRole } from './auth.ts';
 import { findAllowedModel } from './models.ts';
 import { admittedClaim } from './work-admission.ts';
@@ -17,10 +17,9 @@ import { checkUpstreamResponse, parseCompletionFrame, isRetryable, UpstreamError
 interface GenerationSnapshot {
   provider?: { base_url: string; revision: string };
   model: string;
-  openai_messages?: unknown[];
   input_messages?: Array<{role:string;content:string|MessageContentPart[]}>;
   model_entry?: ModelYamlEntry;
-  history_mode?: 'full' | 'latest_only';
+  transport_version?: number;
   title_prompt: string;
   is_first_exchange: boolean;
   auto_title: boolean;
@@ -243,22 +242,20 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
 
   try {
     assertProviderIdentity(snapshot.provider);
-    let input=snapshot.openai_messages;
-    if(snapshot.input_messages && snapshot.model_entry){
-      input=[];
-      for(const message of snapshot.input_messages){
-        input.push({role:message.role,content:typeof message.content==='string'?message.content:await resolveContentParts(message.content,row.owner_sub,snapshot.model_entry)});
-        assertRequestBudget(input,snapshot.model_entry);
-      }
+    if (snapshot.transport_version !== 2 || !snapshot.input_messages || !snapshot.model_entry)
+      throw new UpstreamError('This queued request uses the previous conversation format. Resubmit it to send full history.');
+    const input: unknown[] = [];
+    for (const message of snapshot.input_messages) {
+      input.push({role:message.role,content:typeof message.content === 'string' ? message.content : await resolveMessageContent(message.content,row.owner_sub,snapshot.model_entry,getDb(),message.role)});
+      assertRequestBudget(input,snapshot.model_entry);
     }
-    if(!input)throw new UpstreamError('Invalid generation snapshot');
     const currentRole=await resolveCurrentRole(row.owner_sub);
     const currentModel=currentRole ? await findAllowedModel(snapshot.model,currentRole) : undefined;
     if(!currentModel)throw new UpstreamError('Model access changed before this request could run');
     inputBudget=assertRequestBudget(input,snapshot.model_entry ?? currentModel);
     assertProviderIdentity(snapshot.provider);
     if(!await runtimeConfigurationIsCurrent())throw new UpstreamError('Configuration is updating. The request will be retried.',true);
-    const requestBody=JSON.stringify({ model: snapshot.model, messages: input, stream: true, ...(snapshot.model_entry?.capabilities?.stream_usage ? {stream_options:{include_usage:true}} : {}), ...(snapshot.history_mode === 'latest_only' ? { session_id: row.conversation_id } : {}) });
+    const requestBody=JSON.stringify({ model: snapshot.model, messages: input, stream: true, ...(snapshot.model_entry?.capabilities?.stream_usage ? {stream_options:{include_usage:true}} : {}) });
     requestBytes=Buffer.byteLength(requestBody);
     const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',

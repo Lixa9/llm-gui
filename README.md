@@ -22,7 +22,7 @@ Uploaded bytes and extracted derivatives are stored in PostgreSQL, so the applic
 
 Sessions use random opaque bearer tokens. Only a SHA-256 token hash is stored in PostgreSQL, with expiry and revocation checked on every request. No signing secret is placed in configuration or generated per instance.
 
-The relay builds history from the canonical conversation in PostgreSQL. It does not estimate or retain token usage, and it does not trim context. Normal models receive full history; an optional `history_mode: latest_only` sends the current system prompt, if set, and the latest user message, with the conversation ID as `session_id` for an upstream agent that owns its own session context.
+The relay builds full history from the canonical conversation in PostgreSQL for every backend, including custom agents. Plain user and assistant text is sent as strings; no message IDs, timestamps, manifests, or extra instructions are injected. A system prompt is included only when configured. Attachments use standard image/file inputs or extracted text with readable filename and section headers. Interrupted replies remain visible but are excluded from replay. The server retains provider-reported numeric token usage in diagnostics; it does not estimate tokens or silently trim context. See the [conversation transport specification](docs/conversation-transport.md).
 
 ## Quick start
 
@@ -170,10 +170,9 @@ models:
   - id: "external-agent"
     display_name: "External agent"
     allowed_roles: [admin, user]
-    history_mode: latest_only
 ```
 
-The server discovers models from the upstream `/models` endpoint and applies YAML settings to matching IDs. Discovered models not listed in YAML default to admin-only. A successful discovery response determines the available IDs; adding a model to YAML does not make the upstream serve it. If discovery fails, the server falls back to its cached list or the YAML list. Model discovery is cached for 60 seconds. `history_mode` is either `full` (the default) or `latest_only`.
+The server discovers models from the upstream `/models` endpoint and applies YAML settings to matching IDs. Discovered models not listed in YAML default to admin-only. A successful discovery response determines the available IDs; adding a model to YAML does not make the upstream serve it. If discovery fails, the server falls back to its cached list or the YAML list. Model discovery is cached for 60 seconds. Every backend receives full history. Remove `history_mode` from model configuration: `latest_only` is rejected; legacy `full` is accepted and normalized away. External agents must treat the supplied transcript as authoritative rather than append it to their own conversation history.
 
 Shared prompts, presets, and automations are matched by name during reconciliation. Changes update the shared definition, and removing a definition from YAML soft-deletes it. Personal definitions are managed in the UI and are not overwritten by YAML reconciliation.
 
@@ -203,11 +202,11 @@ PDF fallback includes extracted text and page images. Word and presentation file
 
 Archive entries are read in memory with path, expanded-size, count, text, and image limits. Up to 50 supported files and 20 images are included per collection; nested archives/email containers are omitted. EML includes headers, its text body, and supported attachments. Coverage controls on sent attachments show included/omitted content, and originals remain downloadable. Failed processing returns HTTP 422 instead of a successful placeholder.
 
-Set `capabilities.vision: true` only for models/routes that accept image inputs. Native PDF requires both `vision: true` and `native_pdf: true`; this sends the original through Chat Completions `file.file_data` and bypasses local rendering at upload when that model is selected. A native-only PDF cannot be switched to a fallback model without reuploading. Capability defaults are conservative (`false`). Private application URLs never go to the provider. The complete replayed request is bounded by configured bytes, image/file counts, and text characters. Character budgets are operational limits, not exact token estimates.
+Set `capabilities.vision: true` only for models/routes that accept image inputs. Native PDF requires both `vision: true` and `native_pdf: true`; this sends the original through Chat Completions `file.file_data`. New PDF uploads are normalized independently of the selected model, so the same upload can be used with native or rendered PDF input. Older native-only uploads still require reuploading to use a fallback model. Capability defaults are conservative (`false`). Private application URLs never go to the provider. The complete replayed request is bounded by configured bytes, image/file counts, and text characters. Character budgets are operational limits, not exact token estimates.
 
 Draft text and ready attachments are stored privately in PostgreSQL per conversation (including a new-conversation draft), with serialized autosaves. Accepted messages clear their drafts; rejected messages retain them. Drafts and running jobs pin their uploads against orphan cleanup. Folder expansion preferences persist per user. Branding uses the optional `app` fields above; logo paths must be same-origin assets served by the deployment.
 
-See [implementation notes](docs/implementation-notes.md) for issue mapping, limits, upgrade behavior, and validation.
+See the [conversation transport specification](docs/conversation-transport.md) and [implementation notes](docs/implementation-notes.md) for issue mapping, limits, upgrade behavior, and validation.
 
 Automations use a positive integer interval in `hours`, `days`, or `weeks`. Users can create and enable personal automations, run them manually, and inspect their latest 50 runs. Shared automations come from YAML and require users to opt in through subscriptions. Successful runs create conversations for the owner or eligible subscribers and retain their effective system prompt. Unsubscribe, visibility/role narrowing, disabling, or deletion prevents pending deliveries. Only one queued/running job is allowed per automation; manual triggers use user rate limits, and all generation types share database-backed worker and queue admission. The scheduler checks for due work every 30 seconds and schedules the next run relative to the current time. Automations call the upstream API with their configured prompts; any browsing or tools must be supplied by the upstream.
 

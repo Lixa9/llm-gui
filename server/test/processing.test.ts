@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const configDir = await mkdtemp(join(tmpdir(), 'llm-processing-test-'));
+const previousTempDir = process.env.TMPDIR;
+const processingTmp = join(configDir, 'processors');
+await mkdir(processingTmp);
+process.env.TMPDIR = processingTmp;
 process.env.CONFIG_DIR = configDir;
 await writeFile(
   join(configDir, 'config.yaml'),
@@ -15,7 +19,11 @@ for (const key of ['models', 'prompts', 'presets', 'automations'])
 const { loadConfig } = await import('../src/config.ts');
 loadConfig();
 const { processUpload } = await import('../src/processing.ts');
-test.after(() => rm(configDir, { recursive: true, force: true }));
+test.after(async () => {
+  if (previousTempDir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = previousTempDir;
+  await rm(configDir, { recursive: true, force: true });
+});
 
 test(
   'isolated processing returns content, bounds concurrent admission, and cleans workspaces',

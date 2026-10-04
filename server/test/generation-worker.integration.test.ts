@@ -14,6 +14,7 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
   const configDir = await mkdtemp(join(tmpdir(), 'llm-generation-test-'));
   let mode: 'complete' | 'slow' | 'idle' = 'complete';
   let nonStreamingCalls = 0;
+  const streamingRequests: any[] = [];
   const upstream = createServer((request, response) => {
     if (request.url?.endsWith('/models')) {
       request.resume();
@@ -32,6 +33,7 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
         response.end(JSON.stringify({ choices: [{ message: { content: isTitle ? 'Durable generated title' : 'automation answer' } }] }));
         return;
       }
+      streamingRequests.push(payload);
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       if (mode === 'complete') {
         response.end('data: {"choices":[{"delta":{"content":"new answer"}}]}\n\ndata: [DONE]\n\n');
@@ -76,7 +78,7 @@ conversation:
   const { draftsRouter } = await import('../src/drafts.ts');
   const { purgeOrphanUploads, uploadsRouter } = await import('../src/uploads.ts');
   const { resolveCurrentRole } = await import('../src/auth.ts');
-  const { providerIdentity, getConfig } = await import('../src/config.ts');
+  const { providerIdentity, getConfig, configurationRevision } = await import('../src/config.ts');
   const { conversationsRouter } = await import('../src/conversations.ts');
   loadConfig();
   await openDatabase(databaseUrl);
@@ -98,7 +100,7 @@ conversation:
       INSERT INTO chat_generations (id, conversation_id, user_message_id, assistant_message_id, owner_sub, request_snapshot, status, attempt, lease_owner, lease_until, available_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(assistantId, conversationId, userId, assistantId, owner, JSON.stringify({
-      provider: providerIdentity(), model: 'test', openai_messages: [{ role: 'user', content: 'prompt' }], title_prompt: 'prompt',
+      provider: providerIdentity(), model: 'test', transport_version:2, model_entry:getConfig().models!.find(model=>model.id==='test'), input_messages: [{ role: 'user', content: 'prompt' }], title_prompt: 'prompt',
       is_first_exchange: autoTitle, auto_title: autoTitle, auto_title_model: 'test',
     }), status, status === 'running' ? 1 : 0, status === 'running' ? 'dead-worker' : null, status === 'running' ? now - 1 : null);
     return { conversationId, userId, assistantId };
@@ -107,6 +109,7 @@ conversation:
   try {
     const normal = await createJob();
     assert.equal(await runGeneration(normal.assistantId), true);
+    assert.deepEqual(streamingRequests.at(-1),{model:'test',messages:[{role:'user',content:'prompt'}],stream:true});
     assert.deepEqual(
       await db.prepare('SELECT content_text, status FROM messages WHERE id=?').get(normal.assistantId),
       { content_text: 'new answer', status: 'done' },
@@ -117,6 +120,28 @@ conversation:
     assert.ok(diagnosticRow!.diagnostics.request_bytes > 0);
     assert.equal(diagnosticRow?.diagnostics.output_bytes, Buffer.byteLength('new answer'));
     assert.doesNotMatch(JSON.stringify(diagnosticRow?.diagnostics), /"prompt"|new answer/);
+
+    const fenced = await createJob();
+    const priorActivation = await db.prepare("SELECT revision FROM runtime_configuration WHERE key='active'").get<{revision:string}>();
+    const oldRevision = createHash('sha256').update(JSON.stringify(getConfig())).digest('hex');
+    try {
+      await db.prepare("INSERT INTO runtime_configuration (key,revision) VALUES ('active',?) ON CONFLICT(key) DO UPDATE SET revision=excluded.revision").run(oldRevision);
+      assert.equal(await runGeneration(fenced.assistantId),false,'old request-contract activation must fence new workers');
+      await db.prepare("UPDATE runtime_configuration SET revision=? WHERE key='active'").run(configurationRevision());
+      assert.equal(await runGeneration(fenced.assistantId),true);
+    } finally {
+      if (priorActivation) await db.prepare("UPDATE runtime_configuration SET revision=? WHERE key='active'").run(priorActivation.revision);
+      else await db.prepare("DELETE FROM runtime_configuration WHERE key='active'").run();
+    }
+
+    const legacy = await createJob();
+    await db.prepare("UPDATE chat_generations SET request_snapshot=request_snapshot - 'transport_version' WHERE id=?").run(legacy.assistantId);
+    const beforeLegacy = streamingRequests.length;
+    await runGeneration(legacy.assistantId);
+    assert.equal(streamingRequests.length, beforeLegacy, 'legacy snapshots must not send incomplete history');
+    const legacyResult = await db.prepare('SELECT status,last_error FROM chat_generations WHERE id=?').get<{status:string;last_error:string}>(legacy.assistantId);
+    assert.equal(legacyResult?.status,'failed');
+    assert.match(legacyResult!.last_error,/Resubmit.*full history/);
 
     const recovered = await createJob('running', 'old partial');
     assert.equal(await runGeneration(recovered.assistantId), true);
@@ -338,6 +363,46 @@ conversation:
     assert.equal(JSON.parse(String(updated?.content)).length,2);assert.ok(await db.prepare('SELECT id FROM uploads WHERE id=?').get(upload));
     assert.equal(await db.prepare('SELECT id FROM messages WHERE id=?').get(oldAssistant),undefined);
     assert.equal((await db.prepare("SELECT count(*)::int AS count FROM generation_uploads gu JOIN chat_generations g ON g.id=gu.generation_id WHERE g.conversation_id=?").get<{count:number}>(attachedConversation))?.count,0,'finished generations release asset pins');
+
+    const editedWire = streamingRequests.at(-1);
+    assert.deepEqual(editedWire.messages,[
+      {role:'system',content:'Keep the original instructions'},
+      {role:'user',content:[
+        {type:'text',text:'Edited text'},
+        {type:'text',text:'Attachment: "notes.txt"\nNotice: "Coverage warning"\n\nDocument body'},
+      ]},
+    ]);
+    assert.equal('session_id' in editedWire,false);
+    const editedAssistant = await db.prepare("SELECT id FROM messages WHERE conversation_id=? AND role='assistant'").get<{id:string}>(attachedConversation);
+    const regeneration = await app.request('/api/chat/regenerate',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,assistant_message_id:editedAssistant!.id,model:'test'})});
+    assert.equal(regeneration.status,200);await regeneration.text();
+    assert.deepEqual(streamingRequests.at(-1).messages,editedWire.messages,'regeneration must preserve files and omit the replaced answer');
+    const followup = await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',new_user_message:{content:[{type:'text',text:'What next?'}]}})});
+    assert.equal(followup.status,200);await followup.text();
+    assert.deepEqual(streamingRequests.at(-1).messages,[...editedWire.messages,{role:'assistant',content:'new answer'},{role:'user',content:'What next?'}]);
+    const partialId=generateId();
+    await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,status,timestamp) VALUES (?,?,'assistant',?,'unfinished','aborted',?)").run(partialId,attachedConversation,JSON.stringify([{type:'text',text:'unfinished'}]),Date.now()+1);
+    const afterPartial = await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',new_user_message:{content:[{type:'text',text:'Continue without the interrupted answer'}]}})});
+    assert.equal(afterPartial.status,200);await afterPartial.text();
+    assert.doesNotMatch(JSON.stringify(streamingRequests.at(-1)),/unfinished/);
+    assert.ok(await db.prepare('SELECT id FROM messages WHERE id=?').get(partialId),'interrupted output remains stored');
+
+    const newFile = new FormData();
+    const sourceText = '  indented source\nAttachment: "payload heading"\n';
+    newFile.append('file',new File([sourceText],'fresh.txt',{type:'text/plain'}));
+    const uploaded = await app.request('/api/uploads',{method:'POST',headers:{cookie:`session=${sessionToken}`},body:newFile});
+    assert.equal(uploaded.status,201,await uploaded.clone().text());
+    const fresh = await uploaded.json() as {id:string;url:string};
+    assert.doesNotMatch(JSON.stringify(fresh),/content_blocks|indented source/);
+    const freshMetadata = await app.request(`/api/uploads/${fresh.id}/metadata`,{headers});
+    assert.equal(freshMetadata.status,200);assert.doesNotMatch(await freshMetadata.text(),/content_blocks|indented source/);
+    await app.request('/api/drafts/new',{method:'PUT',headers,body:JSON.stringify({text:'',attachments:[{id:fresh.id}]})});
+    const freshDraft = await app.request('/api/drafts/new',{headers});
+    assert.doesNotMatch(await freshDraft.text(),/content_blocks|indented source/);
+    await app.request('/api/drafts/new',{method:'PUT',headers,body:JSON.stringify({text:'',attachments:[]})});
+    const attachmentOnly = await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({model:'test',new_user_message:{content:[{type:'file',file:{url:fresh.url}}]}})});
+    assert.equal(attachmentOnly.status,200);await attachmentOnly.text();
+    assert.deepEqual(streamingRequests.at(-1),{model:'test',stream:true,messages:[{role:'user',content:[{type:'text',text:''},{type:'text',text:`Attachment: "fresh.txt"\n\n${sourceText}`}]}]});
 
     // An accepted, queued job stores IDs rather than base64/expanded documents.
     mode='slow';

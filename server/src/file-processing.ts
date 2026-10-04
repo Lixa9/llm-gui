@@ -10,7 +10,8 @@ import AdmZip from 'adm-zip';
 import { simpleParser } from 'mailparser';
 import { FILE_FORMATS, recognizeFormat, decodeText } from './formats.ts';
 import { extractText, renderPdfPages, extractDocImages, assertArchiveBudget, stripHtml } from './extract.ts';
-import type { ProcessedFile, DerivedImage } from './processing.ts';
+import type { ProcessedFile, DerivedImage, AttachmentBlock } from './processing.ts';
+import { limitBlocks, textPrefix } from './content-blocks.ts';
 
 const exec = promisify(execFile);
 const MAX_EXPANDED = 64 * 1024 * 1024;
@@ -27,18 +28,27 @@ export function safeArchivePath(path: string): boolean {
   );
 }
 function capResult(result: ProcessedFile): ProcessedFile {
-  if (result.text && result.text.length > TEXT_CAP) {
-    result.text = result.text.slice(0, TEXT_CAP) + '\n[Text truncated at 1,000,000 characters]';
+  const blocks = result.blocks ?? [
+    ...(result.text !== null ? [{type:'text' as const,text:result.text}] : []),
+    ...result.images.map((image, image_index) => ({type:'image' as const,image_index,part:image.label})),
+  ];
+  const limited = limitBlocks(blocks, TEXT_CAP);
+  if (limited.truncated && !result.images.length && !limited.blocks.some(block => block.type === 'text' && block.text))
+    throw new Error('The document text limit excludes all usable content. Reduce the file size.');
+  result.blocks = limited.blocks;
+  if (limited.truncated || (result.text?.length ?? 0) > TEXT_CAP) {
     result.warning = [result.warning, 'Text truncated at 1,000,000 characters'].filter(Boolean).join('; ');
     result.meta.truncated = true;
   }
+  if (result.text && result.text.length > TEXT_CAP) result.text = textPrefix(result.text, TEXT_CAP);
   const bytes = result.images.reduce((sum, image) => sum + Buffer.byteLength(image.data, 'base64'), 0);
   if (bytes > 24 * 1024 * 1024) throw new Error('Document images exceed the 24 MB derivative limit');
   result.meta = {
     ...result.meta,
     served_image_count: result.images.length,
     processing_status: 'ready',
-    processing_version: 1,
+    processing_version: 2,
+    content_blocks: result.blocks,
     warning: result.warning ?? null,
   };
   return result;
@@ -111,7 +121,7 @@ export async function rasterImage(bytes: Buffer, mime: string, label?: string): 
         {
           data: Buffer.from(renderer.render().asPng()).toString('base64'),
           ext: '.png',
-          label: label ?? 'SVG image',
+          ...(label ? {label} : {}),
         },
       ];
     }
@@ -160,7 +170,8 @@ export async function rasterImage(bytes: Buffer, mime: string, label?: string): 
       images.push({
         data: data.toString('base64'),
         ext: '.png',
-        label: label ? `${label}, frame ${i + 1}` : `Frame ${i + 1} of ${count}`,
+        ...(count > 1 ? {label: label ? `${label}, frame ${i + 1}` : `Frame ${i + 1}`} : label ? {label} : {}),
+        frame_count: count,
       });
     }
     return images;
@@ -265,7 +276,7 @@ function xmlText(xml: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'");
 }
-function presentationNotes(bytes: Buffer): string {
+function presentationNotes(bytes: Buffer): AttachmentBlock[] {
   const zip = new AdmZip(bytes);
   assertArchiveBudget(zip);
   const presentation = zip.getEntry('ppt/presentation.xml')?.getData().toString('utf8');
@@ -287,10 +298,9 @@ function presentationNotes(bytes: Buffer): string {
       const noteTarget = (rel.match(/<Relationship\b[^>]+/g) ?? []).find((t) => /\/notesSlide["']/.test(t));
       const note = noteTarget && attributes(noteTarget, 'Target')?.match(/notesSlide\d+\.xml/)?.[0];
       const body = note ? zip.getEntry(`ppt/notesSlides/${note}`)?.getData().toString('utf8') : '';
-      return body ? `=== Speaker notes, slide ${i + 1} ===\n${xmlText(body)}` : '';
+      return {type:'text' as const,part:`Slide ${i + 1} — speaker notes`,text:body ? xmlText(body) : ''};
     })
-    .filter(Boolean)
-    .join('\n\n');
+    .filter(block => !!block.text);
 }
 interface ArchiveEntry {
   name: string;
@@ -403,61 +413,57 @@ async function collection(
   format: string,
   allowEmpty = false,
 ): Promise<ProcessedFile> {
-  const sections: string[] = [],
-    images: DerivedImage[] = [];
+  const sections: string[] = [], images: DerivedImage[] = [], blocks: AttachmentBlock[] = [];
   const coverage: Array<{ name: string; status: string; reason?: string }> = [];
-  let served = 0,
-    chars = 0;
+  const occurrences = new Map<string, number>();
+  let served = 0, chars = 0;
+  function omit(name: string, entry: string, reason: string, status = 'omitted') {
+    coverage.push({name,status,reason});
+    blocks.push({type:'text',text:'',entry,notices:[reason]});
+  }
   for (const entry of entries) {
+    const occurrence = (occurrences.get(entry.name) ?? 0) + 1;
+    occurrences.set(entry.name, occurrence);
+    const entryLabel = occurrence === 1 ? entry.name : `${entry.name} (occurrence ${occurrence})`;
     let recognized;
-    try {
-      recognized = recognizeFormat(entry.name);
-    } catch {
-      coverage.push({ name: entry.name, status: 'omitted', reason: 'Unsupported format' });
-      continue;
-    }
+    try { recognized = recognizeFormat(entry.name); }
+    catch { omit(entry.name,entryLabel,'Unsupported format'); continue; }
     if (recognized.kind === 'archive' || entry.name.toLowerCase().endsWith('.eml')) {
-      coverage.push({ name: entry.name, status: 'omitted', reason: 'Nested containers are not expanded' });
-      continue;
+      omit(entry.name,entryLabel,'Nested containers are not expanded'); continue;
     }
     if (served >= 50 || chars >= TEXT_CAP || images.length >= IMAGE_CAP) {
-      coverage.push({ name: entry.name, status: 'omitted', reason: 'Collection coverage limit reached' });
-      continue;
+      omit(entry.name,entryLabel,'Collection coverage limit reached'); continue;
     }
     try {
       const child = await processFile(entry.bytes, recognized.mime, entry.name);
-      const text = child.text?.slice(0, TEXT_CAP - chars) ?? '';
-      chars += text.length;
-      sections.push(`=== Entry: ${entry.name} ===\n${text}`);
-      const availableImages = IMAGE_CAP - images.length;
-      images.push(
-        ...child.images
-          .slice(0, availableImages)
-          .map((image) => ({ ...image, label: `${entry.name}: ${image.label ?? 'image'}` })),
-      );
-      const partial =
-        !!child.warning || (child.text?.length ?? 0) > text.length || child.images.length > availableImages;
-      coverage.push({
-        name: entry.name,
-        status: partial ? 'partial' : 'included',
-        ...(partial ? { reason: child.warning ?? 'Content limit reached' } : {}),
-      });
+      const offset = images.length;
+      const availableImages = IMAGE_CAP - offset;
+      const selectedImages = child.images.slice(0,availableImages);
+      const childBlocks = limitBlocks(child.blocks ?? [], TEXT_CAP - chars);
+      chars += childBlocks.blocks.reduce((sum,block) => sum + (block.type === 'text' ? block.text.length : 0),0);
+      const notices = [child.warning,childBlocks.truncated ? 'Collection text limit reached' : '',child.images.length > availableImages ? 'Collection image limit reached' : ''].filter((notice): notice is string => !!notice);
+      for (const block of childBlocks.blocks) {
+        if (block.type === 'image' && block.image_index >= selectedImages.length) continue;
+        blocks.push({...block,entry:entryLabel,notices:[...new Set([...(block.notices ?? []),...notices])],
+          ...(block.type === 'image' ? {image_index:block.image_index + offset} : {})});
+      }
+      sections.push(`=== Entry: ${entryLabel} ===\n${childBlocks.blocks.filter(block => block.type === 'text').map(block => block.text).join('\n\n')}`);
+      images.push(...selectedImages);
+      coverage.push({name:entry.name,status:notices.length ? 'partial':'included',...(notices.length ? {reason:notices.join('; ')} : {})});
       served++;
     } catch (error) {
-      coverage.push({ name: entry.name, status: 'failed', reason: (error as Error).message });
+      omit(entry.name,entryLabel,(error as Error).message,'failed');
     }
   }
   if (!served && !allowEmpty) throw new Error('Container has no supported, readable entries');
-  const omitted = coverage.filter((entry) => entry.status !== 'included');
+  const omitted = coverage.filter(entry => entry.status !== 'included');
   return {
-    text: sections.join('\n\n'),
-    images,
-    meta: { format, entries: coverage, entry_count: entries.length, served_entries: served },
-    warning: omitted.length
-      ? `${omitted.length} of ${entries.length} entries were omitted, partial, or unreadable; see coverage details`
-      : undefined,
+    text:sections.join('\n\n'),images,blocks,
+    meta:{format,entries:coverage,entry_count:entries.length,served_entries:served},
+    warning:omitted.length ? `${omitted.length} of ${entries.length} entries were omitted, partial, or unreadable.` : undefined,
   };
 }
+
 export async function processFile(bytes: Buffer, mime: string, filename: string): Promise<ProcessedFile> {
   const format = recognizeFormat(filename, mime);
   mime = format.mime;
@@ -465,21 +471,17 @@ export async function processFile(bytes: Buffer, mime: string, filename: string)
   if (format.kind === 'archive') return capResult(await archive(bytes, format.mime, filename));
   if (format.kind === 'image') {
     const images = await rasterImage(bytes, format.mime);
-    const multiFrame = format.mime === 'image/tiff' || format.mime === 'image/gif';
+    const count = images[0]?.frame_count ?? images.length;
     return capResult({
-      text: null,
-      images,
-      meta: { format: 'image', source_mime: format.mime, served_images: images.length },
-      warning: multiFrame
-        ? format.mime === 'image/gif'
-          ? 'Only the first GIF frame is included'
-          : 'TIFF includes up to the first 20 frames'
-        : undefined,
+      text:null, images,
+      meta:{format:'image',source_mime:format.mime,served_images:images.length},
+      warning:count > images.length ? `Only the first ${images.length} of ${count} frames are included.` : undefined,
     });
   }
   if (mime === 'message/rfc822') {
     const mail = await simpleParser(bytes, { skipHtmlToText: true, skipTextToHtml: true });
-    const header = `From: ${mail.from?.text ?? ''}\nTo: ${Array.isArray(mail.to) ? mail.to.map((a) => a.text).join(', ') : (mail.to?.text ?? '')}\nSubject: ${mail.subject ?? ''}\nDate: ${mail.date?.toISOString() ?? ''}\n\n${mail.text ?? stripHtml(mail.html || '')}`;
+    const header = `From: ${mail.from?.text ?? ''}\nTo: ${Array.isArray(mail.to) ? mail.to.map(a => a.text).join(', ') : (mail.to?.text ?? '')}\nSubject: ${mail.subject ?? ''}\nDate: ${mail.date?.toISOString() ?? ''}`;
+    const body = mail.text ?? stripHtml(mail.html || '');
     const result = mail.attachments.length
       ? await collection(
           mail.attachments.map((a) => ({ name: a.filename ?? 'attachment.txt', bytes: a.content })),
@@ -487,15 +489,18 @@ export async function processFile(bytes: Buffer, mime: string, filename: string)
           true,
         )
       : { text: '', images: [], meta: { format: 'email' } };
-    result.text = `${header}\n\n${result.text ?? ''}`;
+    result.blocks = [{type:'text',part:'Email headers',text:header},{type:'text',part:'Email body',text:body},...(result.blocks ?? [])];
+    result.text = `${header}\n\n${body}\n\n${result.text ?? ''}`;
     return capResult(result);
   }
   if (mime === 'application/pdf') {
     if (!bytes.subarray(0, 1024).includes(Buffer.from('%PDF-'))) throw new Error('Invalid PDF signature');
     const pdf = await renderPdfPages(bytes);
+    if (!pdf.served) throw new Error('PDF has no readable pages');
     return capResult({
       text: pdf.text,
       meta: { format: 'pdf', page_count: pdf.page_count, served_pages: pdf.served },
+      blocks: pdf.pages.flatMap((_,i) => [{type:'text' as const,part:`Page ${i + 1}`,text:pdf.page_texts[i] ?? ''},{type:'image' as const,part:`Page ${i + 1}`,image_index:i}]),
       images: pdf.pages.map((data, i) => ({
         data,
         ext: '.jpg',
@@ -512,16 +517,28 @@ export async function processFile(bytes: Buffer, mime: string, filename: string)
       'converted.pdf',
     );
     pdf.meta = { ...pdf.meta, format: ext.slice(1), conversion: 'PDF', visual_layout: true };
-    if (ext === '.pptx') pdf.text = `${pdf.text ?? ''}\n\n${presentationNotes(bytes)}`;
+    const presentation = ['.ppt','.pptx','.odp'].includes(ext);
+    pdf.blocks = pdf.blocks?.map(block => ({...block,part:block.part?.replace(/^Page /,presentation ? 'Slide ' : 'Converted page ')}));
+    if (ext === '.pptx') {
+      const notes = presentationNotes(bytes);
+      const ordered: AttachmentBlock[] = [];
+      for (const block of pdf.blocks ?? []) {
+        ordered.push(block);
+        if (block.type === 'image') ordered.push(...notes.filter(note => note.part === `${block.part} — speaker notes`));
+      }
+      const unpaired = notes.filter(note => !ordered.includes(note));
+      pdf.blocks = [...ordered,...unpaired];
+      pdf.text = `${pdf.text ?? ''}\n\n${notes.map(note => note.type === 'text' ? `=== ${note.part} ===\n${note.text}` : '').join('\n\n')}`;
+      if (unpaired.length) pdf.warning = [pdf.warning,'Some speaker notes refer to slides omitted from the rendered content.'].filter(Boolean).join('; ');
+    }
+    if (ext === '.ppt' || ext === '.odp') pdf.warning = [pdf.warning,'Speaker notes are not extracted for this presentation format.'].filter(Boolean).join('; ');
     return capResult(pdf);
   }
   if (ext === '.xls') {
     const converted = await convertOffice(bytes, filename, 'xlsx');
-    return processFile(
-      converted,
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'converted.xlsx',
-    );
+    const result = await processFile(converted,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','converted.xlsx');
+    result.meta = {...result.meta,format:'xls',conversion:'XLSX'};
+    return result;
   }
   if (mime === 'application/x-ndjson') {
     const raw = decodeText(bytes),
@@ -529,60 +546,81 @@ export async function processFile(bytes: Buffer, mime: string, filename: string)
     let used = 0,
       invalid = 0,
       total = 0;
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) continue;
+    const invalidLines: number[] = [];
+    let sourceLine = 0, servedRecords = 0, limitReached = false;
+    for (const line of raw.split(/(?<=\n)/)) {
+      sourceLine++;
+      if (!line.trim()) { if(!limitReached && used + line.length <= TEXT_CAP) { lines.push(line); used += line.length; } else { limitReached = true; } continue; }
       total++;
-      if (used + line.length > TEXT_CAP || lines.length >= 50000) continue;
+      if (limitReached || used + line.length > TEXT_CAP || servedRecords >= 50000) { limitReached = true; continue; }
       try {
         JSON.parse(line);
       } catch {
         invalid++;
+        if (invalidLines.length < 20) invalidLines.push(sourceLine);
       }
-      lines.push(`[Record ${total}] ${line}`);
+      lines.push(line);
       used += line.length;
+      servedRecords++;
     }
-    const partial = total > lines.length;
+    const partial = total > servedRecords || limitReached;
+    if (total && !servedRecords) throw new Error('The document text limit excludes every JSONL record. Reduce the record size.');
     return capResult({
-      text: lines.join('\n'),
+      text: lines.join(''),
+      blocks:[{type:'text',text:lines.join(''),format:'jsonl'}],
       images: [],
       meta: {
         format: 'jsonl',
         row_count: total,
-        served_rows: lines.length,
+        served_rows: servedRecords,
         invalid_records: invalid,
         truncated: partial,
       },
       warning:
         [
-          partial ? `${lines.length} of ${total} records included` : '',
-          invalid ? `${invalid} included records contain invalid JSON; retained as source text` : '',
+          partial ? total > servedRecords ? `${servedRecords} of ${total} records included` : 'Source text exceeded the document text limit.' : '',
+          invalid ? `${invalid} included records contain invalid JSON at source lines ${invalidLines.join(', ')}${invalid > invalidLines.length ? ', …' : ''}; retained as source text` : '',
         ]
           .filter(Boolean)
           .join('; ') || undefined,
     });
   }
+  if (mime === 'text/csv' || mime === 'text/tab-separated-values') {
+    const text = decodeText(bytes);
+    return capResult({text,images:[],meta:{format:mime === 'text/csv' ? 'csv' : 'tsv'},blocks:[{type:'text',text,format:'csv'}]});
+  }
   const result = await extractText(bytes, mime);
-  const images: DerivedImage[] = [];
+  const images: DerivedImage[] = [], imageBlocks: AttachmentBlock[] = [];
   let imageWarning: string | undefined;
   if (ext === '.epub') {
     const embedded = await extractDocImages(bytes, 'epub');
     for (const image of embedded.images) {
       try {
-        images.push(
-          ...(await rasterImage(
-            Buffer.from(image.data, 'base64'),
-            recognizeFormat(`embedded${image.ext}`).mime,
-          )),
-        );
-      } catch {
-        imageWarning = 'Some embedded images could not be converted';
-      }
+        const converted = await rasterImage(Buffer.from(image.data,'base64'),recognizeFormat(`embedded${image.ext}`).mime);
+        const locations = image.path ? result.meta.epub_image_locations?.[image.path] : undefined;
+        for (const convertedImage of converted) {
+          const image_index = images.length;
+          images.push(convertedImage);
+          for (const chapter of locations?.length ? locations : ['']) {
+            imageBlocks.push({type:'image',image_index,part:chapter ? `${chapter} — image ${image_index + 1}` : `Embedded image ${image_index + 1}`});
+          }
+        }
+      } catch { imageWarning = 'Some embedded images could not be converted'; }
     }
-    imageWarning = [embedded.warning, imageWarning].filter(Boolean).join('; ') || undefined;
+    const unavailableImages = Object.keys(result.meta.epub_image_locations ?? {}).some(path => !embedded.images.some(image=>image.path===path));
+    imageWarning = [embedded.warning,imageWarning,unavailableImages ? 'Some referenced images are missing or outside the supported image coverage.' : ''].filter(Boolean).join('; ') || undefined;
   }
+  const blocks: AttachmentBlock[] = [];
+  for (const block of result.blocks ?? [{type:'text' as const,text:result.text ?? ''}]) {
+    blocks.push(block);
+    blocks.push(...imageBlocks.filter(image=>image.part?.startsWith(`${block.part} — image `)));
+  }
+  blocks.push(...imageBlocks.filter(image=>!blocks.includes(image)));
+
   return capResult({
     text: result.text,
     meta: { ...result.meta },
+    blocks,
     images,
     warning: [result.warning, imageWarning].filter(Boolean).join('; ') || undefined,
   });

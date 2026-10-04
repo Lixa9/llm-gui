@@ -7,7 +7,7 @@ import { acquireStream, closeStream } from './ratelimit.ts';
 import { fetchModels } from './models.ts';
 import { logger } from './logger.ts';
 import type { ConversationRow, MessageContentPart, MessageRow, ModelYamlEntry, SessionPayload } from './types.ts';
-import { InputError, contentPartSchema, canonicalizeAttachments, resolveContentParts, assertRequestBudget } from './attachment-transport.ts';
+import { InputError, contentPartSchema, canonicalizeAttachments, resolveMessageContent, assertRequestBudget } from './attachment-transport.ts';
 import { AdmissionError, assertQueueCapacity } from './work-admission.ts';
 import { attachUploadsToMessage, cleanupUnreferencedUploads } from './uploads.ts';
 import { createBackgroundSseResponse } from './background-sse.ts';
@@ -42,23 +42,27 @@ function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { cont
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);
 
-async function buildOpenaiMessages(stored: MessageRow[], latest: MessageContentPart[], prompt: string, model: ModelYamlEntry, owner: string, db: TxDb): Promise<unknown[]> {
+export async function buildOpenaiMessages(stored: MessageRow[], latest: MessageContentPart[], prompt: string, model: ModelYamlEntry, owner: string, db: TxDb): Promise<unknown[]> {
   const messages: unknown[] = [], manifest: Array<{role:string;content:string|MessageContentPart[]}> = [];
-  if (prompt) {manifest.push({role:'system',content:prompt});}
-  if (prompt) messages.push({ role: 'system', content: prompt });
-  if (model.history_mode !== 'latest_only') {
-    for (const message of stored) {
-      const content=safeParseJson<MessageContentPart[]>(message.content,[]);
-      manifest.push({role:message.role,content});
-      messages.push({ role: message.role, content: await resolveContentParts(content, owner, model, db) });
-      assertRequestBudget(messages,model);
-    }
+  if (prompt) {
+    manifest.push({role:'system',content:prompt});
+    messages.push({role:'system',content:prompt});
+  }
+  for (const message of stored) {
+    // Interrupted output remains visible, but is not a completed assistant turn.
+    if ((message.status !== null && message.status !== 'done') || !['user','assistant'].includes(message.role)) continue;
+    let content = safeParseJson<MessageContentPart[]>(message.content,[]);
+    if (!content.length && message.content_text) content = [{type:'text',text:message.content_text}];
+    const wireContent = await resolveMessageContent(content,owner,model,db,message.role);
+    manifest.push({role:message.role,content});
+    messages.push({role:message.role,content:wireContent});
+    assertRequestBudget(messages,model);
   }
   manifest.push({role:'user',content:latest});
   const attachmentCount=manifest.reduce((sum,m)=>sum+(typeof m.content==='string'?0:m.content.filter(p=>p.type!=='text').length),0);
   if(attachmentCount>getConfig().attachments.max_files)throw new InputError('Conversation exceeds the attachment count limit');
-  messages.push({ role: 'user', content: await resolveContentParts(latest, owner, model, db) });
-  assertRequestBudget(messages, model);
+  messages.push({role:'user',content:await resolveMessageContent(latest,owner,model,db)});
+  assertRequestBudget(messages,model);
   return manifest;
 }
 async function effectivePrompt(conv: ConversationRow, supplied: string | undefined, db: TxDb): Promise<string> {
@@ -121,7 +125,6 @@ function generationSnapshot(
   cfg: ReturnType<typeof getConfig>,
   model: string,
   openaiMessages: unknown[],
-  historyMode: 'full' | 'latest_only' | undefined,
   titlePrompt: string,
   isFirstExchange: boolean,
 ) {
@@ -129,8 +132,7 @@ function generationSnapshot(
     model,
     provider: providerIdentity(cfg),
     input_messages: openaiMessages,
-    attachment_manifest_version: 1,
-    history_mode: historyMode,
+    transport_version: 2,
     title_prompt: titlePrompt,
     is_first_exchange: isFirstExchange,
     auto_title: cfg.conversation.auto_title,
@@ -190,7 +192,7 @@ relayRouter.post('/', async c => {
       await db.prepare('UPDATE conversations SET custom_system_prompt=?, model_id=? WHERE id=?').run(prompt,body.model,convId);
       await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,model,status,timestamp) VALUES (?,?,'assistant','[]','',?,'streaming',?)").run(assistantMsgId,convId,body.model,Math.max(Date.now(),timestamp+1));
       await db.prepare("INSERT INTO chat_generations (id,conversation_id,user_message_id,assistant_message_id,owner_sub,request_snapshot,status,rate_lease_id,available_at) VALUES (?,?,?,?,?,?,'queued',?,?)")
-        .run(assistantMsgId,convId,userId,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,model.history_mode,contentPartsToText(content),retained.every(m=>m.role!=='user'))),rl.leaseId!,Date.now());
+        .run(assistantMsgId,convId,userId,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,contentPartsToText(content),retained.every(m=>m.role!=='user'))),rl.leaseId!,Date.now());
       await pinGenerationUploads(db,assistantMsgId,upstream,model);
       return { message:(await db.prepare('SELECT * FROM messages WHERE id=?').get<MessageRow>(userId))!,content };
     });
@@ -226,7 +228,7 @@ relayRouter.post('/regenerate', async c => {
       await removeTail(db,conv.id,stored[index],user.sub);
       await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text,model,status,timestamp) VALUES (?,?,'assistant','[]','',?,'streaming',?)").run(assistantMsgId,conv.id,body.model,Math.max(Date.now(),message.timestamp+1));
       await db.prepare("INSERT INTO chat_generations (id,conversation_id,user_message_id,assistant_message_id,owner_sub,request_snapshot,status,rate_lease_id,available_at) VALUES (?,?,?,?,?,?,'queued',?,?)")
-        .run(assistantMsgId,conv.id,message.id,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,model.history_mode,contentPartsToText(content),false)),rl.leaseId!,Date.now());
+        .run(assistantMsgId,conv.id,message.id,assistantMsgId,user.sub,JSON.stringify(generationSnapshot(cfg,body.model,upstream,contentPartsToText(content),false)),rl.leaseId!,Date.now());
       await pinGenerationUploads(db,assistantMsgId,upstream,model);
       return message;
     });
