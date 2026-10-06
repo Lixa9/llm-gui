@@ -30,8 +30,10 @@ rate_limits:
   concurrent_streams: 4
 
 conversation:
-  auto_title: true
-  auto_title_model: "qwen3.5-0.8b"
+  auto_title: false
+  # Set an upstream model ID before enabling automatic titles.
+  # auto_title_model: "your-title-model-id"
+  auto_title_prompt: "Return a 4-6 word title for this conversation. No punctuation, no quotes."
   # Durable generations are restarted after a lost worker lease. The duration
   # limits bound each attempt; max_attempts applies to upstream failures, not
   # worker-loss recovery.

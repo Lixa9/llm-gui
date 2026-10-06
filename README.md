@@ -53,7 +53,7 @@ Edit [config/config.yaml](config/config.yaml) before starting:
 - Replace the example OIDC issuer and client ID, set `oidc.client_secret` to `"${OIDC_CLIENT_SECRET}"`, and add `OIDC_CLIENT_SECRET` to `.env`. Register `<app.base_url>/api/auth/callback` as the provider's redirect URI. Configure the group claim and scopes needed by your provider.
 - For a temporary local test instead, set `LOCAL_AUTH=true` in `.env`; you can remove the `oidc` block. The fixed credentials are `admin` / `admin`. Keep this account disabled on exposed deployments.
 
-Update [config/models.yaml](config/models.yaml) with IDs offered by your upstream and the roles allowed to use them. Also update `conversation.auto_title_model` and the model IDs in presets and automations, or disable automatic titles and empty any unused definitions.
+Update [config/models.yaml](config/models.yaml) with IDs offered by your upstream and the roles allowed to use them. Automatic titles are disabled by default; to enable them, explicitly configure `conversation.auto_title_model` and set `conversation.auto_title: true`. Also update the model IDs in presets and automations, or empty any unused definitions.
 
 Start the stack:
 
@@ -130,8 +130,11 @@ storage:
 conversation:
   max_output_bytes: 1000000
   max_frame_bytes: 1000000
-  auto_title: true
-  auto_title_model: "qwen3.5-0.8b"
+  auto_title: false
+  # Set a model ID served by your upstream before enabling automatic titles.
+  # auto_title_model: "your-title-model-id"
+  auto_title_prompt: >-
+    Return a 4-6 word title for this conversation. No punctuation, no quotes.
   # Limits apply to each generation attempt.
   generation_max_duration_ms: 1800000
   generation_idle_timeout_ms: 120000
@@ -139,6 +142,10 @@ conversation:
   # not consume this budget.
   generation_max_attempts: 3
 ```
+
+Automatic titles run after the first successfully completed chat response. There is no default title model and no fallback to the chat model. Enabling `auto_title` without a nonempty `auto_title_model` fails configuration validation at startup; an invalid reload retains the previous configuration. With a nonempty `models.yaml` registry, the title model must be listed there. Listing a model does not install it or make the upstream serve it: if the provider rejects the title request, the title job records the error without failing the completed chat response or switching models.
+
+`auto_title_prompt` is the title request's system prompt, separate from the chat's system prompt. It defaults to the instructions shown above and accepts up to 10,000 characters; blank values are rejected. The first user message and assistant response form the title context, limited to 2,000 characters. Title requests allow 20 output tokens, and titles are limited to 80 characters. Model and prompt are snapshotted when the chat request is accepted, so configuration reloads do not alter queued title jobs or retries. Older jobs without a saved title system prompt retain the previous default instructions; older generations without a title model fail their title job explicitly. Manually renamed chats are never overwritten.
 
 Chat requests are committed as durable PostgreSQL jobs before the server sends
 the `accepted` event. Closing the tab, navigating away, losing the client

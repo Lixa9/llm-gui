@@ -4,16 +4,10 @@ import { generateId, getDb, runTransaction, safeParseJson, type TxDb } from './d
 import { trackBackgroundTask } from './lifecycle.ts';
 import { logger } from './logger.ts';
 import type { ConversationTitleJobRow } from './types.ts';
+import { buildTitleRequest, type TitleRequestSnapshot } from './title-request.ts';
 
 import { admittedClaim, assertQueueCapacity, AdmissionError } from './work-admission.ts';
-import { boundedJson, isRetryable } from './upstream.ts';
-
-interface TitleRequestSnapshot {
-  provider?: {base_url:string;revision:string};
-  model: string;
-  title_prompt: string;
-  assistant_response: string;
-}
+import { boundedJson, isRetryable, UpstreamError } from './upstream.ts';
 
 interface RunningTitleControl {
   controller: AbortController;
@@ -124,21 +118,13 @@ async function executeTitleJob(row: ConversationTitleJobRow): Promise<void> {
   }, HEARTBEAT_MS);
 
   try {
-    if (!snapshot.model || !snapshot.title_prompt || !snapshot.assistant_response) throw new Error('Invalid title job snapshot');
+    const request = buildTitleRequest(snapshot);
     const cfg = getConfig();
     assertProviderIdentity(snapshot.provider);
     const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: snapshot.model,
-        stream: false,
-        max_tokens: 20,
-        messages: [
-          { role: 'system', content: 'Return a 4-6 word title for this conversation. No punctuation, no quotes.' },
-          { role: 'user', content: `${snapshot.title_prompt}\n\n${snapshot.assistant_response}`.slice(0, 2000) },
-        ],
-      }),
+      body: JSON.stringify(request),
       signal: control.controller.signal,
     });
     const data = await boundedJson(response, 100000) as { choices?: Array<{ message?: { content?: string } }> };
@@ -147,7 +133,9 @@ async function executeTitleJob(row: ConversationTitleJobRow): Promise<void> {
     await finishTitleJob(row, title);
   } catch (error) {
     if (control.reason !== 'shutdown' && control.reason !== 'superseded') {
-      const message = control.reason === 'timed_out' ? 'Title generation timed out' : error instanceof Error ? error.message : String(error);
+      const message = control.reason === 'timed_out' ? 'Title generation timed out'
+        : error instanceof UpstreamError ? `Auto-title model "${snapshot.model}": ${error.message}`
+        : error instanceof Error ? error.message : String(error);
       await retryOrFail(row, message, isRetryable(error));
     }
   } finally {

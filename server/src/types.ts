@@ -221,7 +221,8 @@ export interface AppConfig {
     max_output_bytes: number;
     max_frame_bytes: number;
     auto_title: boolean;
-    auto_title_model: string;
+    auto_title_model?: string;
+    auto_title_prompt: string;
     generation_max_duration_ms: number;
     generation_idle_timeout_ms: number;
     generation_max_attempts: number;

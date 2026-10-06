@@ -4,6 +4,7 @@ import { load as parseYaml } from 'js-yaml';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { scheduledDefinitionSchema } from './automation-definition.ts';
+import { DEFAULT_AUTO_TITLE_PROMPT } from './title-request.ts';
 import type { AppConfig } from './types.ts';
 import { logger } from './logger.ts';
 
@@ -89,11 +90,20 @@ const configSchema = z.object({
   conversation: z.object({
     max_output_bytes: z.number().int().min(1024).max(10000000).default(1000000),
     max_frame_bytes: z.number().int().min(1024).max(10000000).default(1000000),
-    auto_title: z.boolean().default(true),
-    auto_title_model: z.string().default('qwen3.5-0.8b'),
+    auto_title: z.boolean().default(false),
+    auto_title_model: z.string().trim().min(1).max(300).optional(),
+    auto_title_prompt: z.string().trim().min(1).max(10000).default(DEFAULT_AUTO_TITLE_PROMPT),
     generation_max_duration_ms: z.number().int().min(1_000).max(24 * 60 * 60 * 1000).default(30 * 60 * 1000),
     generation_idle_timeout_ms: z.number().int().min(1_000).max(60 * 60 * 1000).default(2 * 60 * 1000),
     generation_max_attempts: z.number().int().min(1).max(20).default(3),
+  }).superRefine((conversation, context) => {
+    if (conversation.auto_title && !conversation.auto_title_model) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['auto_title_model'],
+        message: 'conversation.auto_title_model is required when conversation.auto_title is true. Configure an upstream model explicitly or disable auto-title.',
+      });
+    }
   }).default({}),
 });
 
@@ -155,6 +165,12 @@ const DEFAULT_CONFIGS: Record<string, string> = {
     'storage:',
     '  # Per-user upload quota; use values such as "10G". 0 means unlimited.',
     '  quota: "0"',
+    '',
+    'conversation:',
+    '  auto_title: false',
+    '  # Set an upstream model ID before enabling automatic titles.',
+    '  # auto_title_model: "your-title-model-id"',
+    `  auto_title_prompt: ${JSON.stringify(DEFAULT_AUTO_TITLE_PROMPT)}`,
     '',
   ].join('\n'),
   'models.yaml': 'models: []\n',
@@ -267,6 +283,9 @@ function readConfig(): AppConfig {
   };
   if (candidate.models.length) {
     const known = new Map(candidate.models.map(model => [model.id, model]));
+    if (candidate.conversation.auto_title && !known.has(candidate.conversation.auto_title_model!)) {
+      throw new Error(`conversation.auto_title_model references an unconfigured model: ${candidate.conversation.auto_title_model}`);
+    }
     for (const entry of [...candidate.presets.map(preset => ({ name:preset.name, model:preset.base_model_id, roles:preset.allowed_roles })), ...candidate.automations.map(automation => ({ name:automation.name, model:automation.model, roles:automation.allowed_roles }))]) {
       const model = known.get(entry.model);
       if (!model) throw new Error(`${entry.name} references an unconfigured model: ${entry.model}`);

@@ -36,6 +36,7 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
   const configDir = await mkdtemp(join(tmpdir(), 'llm-generation-test-'));
   let mode: 'complete' | 'slow' | 'idle' | 'delayed' = 'complete';
   let nonStreamingCalls = 0;
+  const nonStreamingRequests: any[] = [];
   const streamingRequests: any[] = [];
   const upstream = createServer((request, response) => {
     if (request.url?.endsWith('/models')) {
@@ -47,10 +48,16 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
     const chunks: Buffer[] = [];
     request.on('data', chunk => chunks.push(Buffer.from(chunk)));
     request.on('end', () => {
-      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { stream?: boolean; messages?: Array<{ content?: string }> };
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { model?: string; stream?: boolean; max_tokens?: number; messages?: Array<{ content?: string }> };
       if (payload.stream === false) {
         nonStreamingCalls += 1;
-        const isTitle = payload.messages?.[0]?.content?.startsWith('Return a 4-6 word title');
+        nonStreamingRequests.push(payload);
+        const isTitle = payload.max_tokens === 20;
+        if (isTitle && payload.model === 'unavailable-title-model') {
+          response.writeHead(404, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: 'Model not found' } }));
+          return;
+        }
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ choices: [{ message: { content: isTitle ? 'Durable generated title' : 'automation answer' } }] }));
         return;
@@ -210,11 +217,33 @@ conversation:
 
     mode = 'complete';
     const titled = await createJob('queued', '', true);
+    await db.prepare("UPDATE chat_generations SET request_snapshot=request_snapshot || ?::jsonb WHERE id=?")
+      .run(JSON.stringify({ auto_title_model: 'custom-title-model', auto_title_prompt: 'Write a concise German title. Return only the title.' }), titled.assistantId);
     await runGeneration(titled.assistantId);
-    const titleJob = await db.prepare('SELECT id FROM conversation_title_jobs WHERE generation_id=?').get<{ id: string }>(titled.assistantId);
+    const titleJob = await db.prepare('SELECT id, request_snapshot FROM conversation_title_jobs WHERE generation_id=?')
+      .get<{ id: string; request_snapshot: { model: string; system_prompt: string } }>(titled.assistantId);
     assert(titleJob);
-    const titleClaims = await Promise.all([runTitleJob(titleJob.id), runTitleJob(titleJob.id)]);
+    assert.equal(titleJob.request_snapshot.model, 'custom-title-model');
+    assert.equal(titleJob.request_snapshot.system_prompt, 'Write a concise German title. Return only the title.');
+    const beforeTitleSettings = { ...getConfig().conversation };
+    let titleClaims: boolean[];
+    try {
+      getConfig().conversation.auto_title_model = 'changed-title-model';
+      getConfig().conversation.auto_title_prompt = 'Changed title instructions';
+      titleClaims = await Promise.all([runTitleJob(titleJob.id), runTitleJob(titleJob.id)]);
+    } finally {
+      getConfig().conversation = beforeTitleSettings;
+    }
     assert.equal(titleClaims.filter(Boolean).length, 1);
+    assert.deepEqual(nonStreamingRequests.at(-1), {
+      model: 'custom-title-model',
+      stream: false,
+      max_tokens: 20,
+      messages: [
+        { role: 'system', content: 'Write a concise German title. Return only the title.' },
+        { role: 'user', content: 'prompt\n\nnew answer' },
+      ],
+    });
     assert.deepEqual(
       await db.prepare('SELECT title, title_auto FROM conversations WHERE id=?').get(titled.conversationId),
       { title: 'Durable generated title', title_auto: true },
@@ -234,6 +263,37 @@ conversation:
       await db.prepare('SELECT status FROM conversation_title_jobs WHERE id=?').get(skippedTitleJob.id),
       { status: 'skipped' },
     );
+    assert.equal(nonStreamingRequests.at(-1).messages[0].content, 'Return a 4-6 word title for this conversation. No punctuation, no quotes.');
+
+    const missingTitleModel = await createJob('queued', '', true);
+    await db.prepare("UPDATE chat_generations SET request_snapshot=request_snapshot - 'auto_title_model' WHERE id=?").run(missingTitleModel.assistantId);
+    await runGeneration(missingTitleModel.assistantId);
+    const missingModelTitleJob = await db.prepare('SELECT id FROM conversation_title_jobs WHERE generation_id=?').get<{ id: string }>(missingTitleModel.assistantId);
+    assert(missingModelTitleJob);
+    const beforeMissingModel = nonStreamingCalls;
+    await runTitleJob(missingModelTitleJob.id);
+    assert.equal(nonStreamingCalls, beforeMissingModel);
+    const missingModelFailure = await db.prepare('SELECT status, last_error FROM conversation_title_jobs WHERE id=?').get<{ status: string; last_error: string }>(missingModelTitleJob.id);
+    assert.equal(missingModelFailure?.status, 'failed');
+    assert.match(missingModelFailure!.last_error, /Auto-title requires an explicit model.*auto_title_model/);
+    assert.deepEqual(await db.prepare('SELECT status FROM chat_generations WHERE id=?').get(missingTitleModel.assistantId), { status: 'done' });
+
+    const unavailableTitleModel = await createJob('queued', '', true);
+    await db.prepare("UPDATE chat_generations SET request_snapshot=request_snapshot || ?::jsonb WHERE id=?")
+      .run(JSON.stringify({ auto_title_model: 'unavailable-title-model' }), unavailableTitleModel.assistantId);
+    await runGeneration(unavailableTitleModel.assistantId);
+    const unavailableModelTitleJob = await db.prepare('SELECT id FROM conversation_title_jobs WHERE generation_id=?').get<{ id: string }>(unavailableTitleModel.assistantId);
+    assert(unavailableModelTitleJob);
+    const beforeUnavailableModel = nonStreamingCalls;
+    await runTitleJob(unavailableModelTitleJob.id);
+    await runTitleJob(unavailableModelTitleJob.id);
+    assert.equal(nonStreamingCalls, beforeUnavailableModel + 1);
+    assert.equal(nonStreamingRequests.at(-1).model, 'unavailable-title-model');
+    const unavailableModelFailure = await db.prepare('SELECT status, last_error FROM conversation_title_jobs WHERE id=?').get<{ status: string; last_error: string }>(unavailableModelTitleJob.id);
+    assert.equal(unavailableModelFailure?.status, 'failed');
+    assert.match(unavailableModelFailure!.last_error, /Auto-title model "unavailable-title-model": Provider returned HTTP 404/);
+    assert.deepEqual(await db.prepare('SELECT title, title_auto FROM conversations WHERE id=?').get(unavailableTitleModel.conversationId), { title: 'New conversation', title_auto: false });
+    assert.deepEqual(await db.prepare('SELECT status FROM chat_generations WHERE id=?').get(unavailableTitleModel.assistantId), { status: 'done' });
 
     const automationId = generateId();
     await db.prepare(`
@@ -456,10 +516,22 @@ conversation:
     const firstBusy=await createJob(),secondBusy=await createJob();
     const busyA=runGeneration(firstBusy.assistantId),busyB=runGeneration(secondBusy.assistantId);
     await new Promise(resolve=>setTimeout(resolve,50));
-    const queued=await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',new_user_message:{content:[{type:'text',text:'Continue'},{type:'file',file:{url:`/api/uploads/${upload}`}}]}})});
+    const beforeQueuedTitleSettings = { ...getConfig().conversation };
+    let queued: Response;
+    try {
+      getConfig().conversation.auto_title = true;
+      getConfig().conversation.auto_title_model = 'configured-title-model';
+      getConfig().conversation.auto_title_prompt = 'Configured title instructions';
+      queued = await app.request('/api/chat',{method:'POST',headers,body:JSON.stringify({conversation_id:attachedConversation,model:'test',new_user_message:{content:[{type:'text',text:'Continue'},{type:'file',file:{url:`/api/uploads/${upload}`}}]}})});
+    } finally {
+      getConfig().conversation = beforeQueuedTitleSettings;
+    }
     assert.equal(queued.status,200);const acceptedEvents=await queued.text();assert.match(acceptedEvents,/accepted/);
-    const queueRow=await db.prepare("SELECT id,request_snapshot FROM chat_generations WHERE conversation_id=? AND status='queued'").get<{id:string;request_snapshot:{input_messages:Array<{role:string;content:unknown}>;openai_messages?:unknown}}>(attachedConversation);
+    const queueRow=await db.prepare("SELECT id,request_snapshot FROM chat_generations WHERE conversation_id=? AND status='queued'").get<{id:string;request_snapshot:{input_messages:Array<{role:string;content:unknown}>;openai_messages?:unknown;auto_title:boolean;auto_title_model:string;auto_title_prompt:string}}>(attachedConversation);
     assert.ok(queueRow);assert.equal(queueRow.request_snapshot.openai_messages,undefined);assert.match(JSON.stringify(queueRow.request_snapshot),/Keep the original instructions/);assert.doesNotMatch(JSON.stringify(queueRow.request_snapshot),/Document body/);
+    assert.equal(queueRow.request_snapshot.auto_title, true);
+    assert.equal(queueRow.request_snapshot.auto_title_model, 'configured-title-model');
+    assert.equal(queueRow.request_snapshot.auto_title_prompt, 'Configured title instructions');
     assert.ok(await db.prepare('SELECT upload_id FROM generation_uploads WHERE generation_id=?').get(queueRow.id));
     await cancelGeneration(queueRow.id,owner);assert.equal(await db.prepare('SELECT upload_id FROM generation_uploads WHERE generation_id=?').get(queueRow.id),undefined);
     await cancelGeneration(firstBusy.assistantId,owner);await cancelGeneration(secondBusy.assistantId,owner);await Promise.all([busyA,busyB]);mode='complete';

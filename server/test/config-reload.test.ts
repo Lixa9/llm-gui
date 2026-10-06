@@ -8,10 +8,11 @@ const configDir = await mkdtemp(join(tmpdir(), 'llm-gui-config-'));
 process.env.CONFIG_DIR = configDir;
 
 const { getConfig, loadConfig, reloadConfig } = await import('../src/config.ts');
+const { DEFAULT_AUTO_TITLE_PROMPT } = await import('../src/title-request.ts');
 
-async function writeConfigs(appName: string): Promise<void> {
+async function writeConfigs(appName: string, conversationYaml = ''): Promise<void> {
   await Promise.all([
-    writeFile(join(configDir, 'config.yaml'), `app:\n  name: ${JSON.stringify(appName)}\n  base_url: http://localhost:3000\nopenai:\n  base_url: ''\nstorage:\n  quota: '0'\n`),
+    writeFile(join(configDir, 'config.yaml'), `app:\n  name: ${JSON.stringify(appName)}\n  base_url: http://localhost:3000\nopenai:\n  base_url: ''\nstorage:\n  quota: '0'\n${conversationYaml}`),
     writeFile(join(configDir, 'models.yaml'), 'models: []\n'),
     writeFile(join(configDir, 'prompts.yaml'), `prompts:\n  - name: ${JSON.stringify(`${appName} prompt`)}\n    content: test\n    allowed_roles: [user]\n`),
     writeFile(join(configDir, 'presets.yaml'), 'presets: []\n'),
@@ -75,6 +76,73 @@ test('reload requests are serialized', async () => {
 
   assert.deepEqual(results, [true, true]);
   assert.equal(maxActive, 1);
+});
+
+test('auto-title defaults to disabled without assuming an installed model', async () => {
+  await writeConfigs('No title model');
+  loadConfig();
+  assert.equal(getConfig().conversation.auto_title, false);
+  assert.equal(getConfig().conversation.auto_title_model, undefined);
+  assert.equal(getConfig().conversation.auto_title_prompt, DEFAULT_AUTO_TITLE_PROMPT);
+});
+
+test('enabled auto-title requires an explicit nonempty model', async () => {
+  for (const modelYaml of ['', '  auto_title_model: ""\n', '  auto_title_model: "   "\n', '  auto_title_model: null\n', '  auto_title_model: 123\n', `  auto_title_model: ${JSON.stringify('x'.repeat(301))}\n`]) {
+    await writeConfigs('Invalid title model', `conversation:\n  auto_title: true\n${modelYaml}`);
+    assert.throws(() => loadConfig(), /auto_title_model/);
+  }
+  await writeConfigs('Unset title model environment', 'conversation:\n  auto_title: true\n  auto_title_model: "${LLM_GUI_TEST_UNSET_TITLE_MODEL}"\n');
+  const previousValue = process.env.LLM_GUI_TEST_UNSET_TITLE_MODEL;
+  delete process.env.LLM_GUI_TEST_UNSET_TITLE_MODEL;
+  try {
+    assert.throws(() => loadConfig(), /auto_title_model/);
+  } finally {
+    if (previousValue !== undefined) process.env.LLM_GUI_TEST_UNSET_TITLE_MODEL = previousValue;
+  }
+});
+
+test('auto-title accepts an explicit model and custom multiline system prompt', async () => {
+  await writeConfigs('Custom titles', 'conversation:\n  auto_title: true\n  auto_title_model: " custom-title-model "\n  auto_title_prompt: |\n    Write a concise German title.\n    Return only the title.\n');
+  loadConfig();
+  assert.equal(getConfig().conversation.auto_title_model, 'custom-title-model');
+  assert.equal(getConfig().conversation.auto_title_prompt, 'Write a concise German title.\nReturn only the title.');
+});
+
+test('auto-title validates model references when a registry is configured', async () => {
+  await writeConfigs('Title registry', 'conversation:\n  auto_title: true\n  auto_title_model: title-model\n');
+  await writeFile(join(configDir, 'models.yaml'), 'models:\n  - {id: chat-model, display_name: Chat}\n');
+  assert.throws(() => loadConfig(), /auto_title_model references an unconfigured model: title-model/);
+  await writeFile(join(configDir, 'models.yaml'), 'models:\n  - {id: title-model, display_name: Titles, allowed_roles: [admin]}\n');
+  loadConfig();
+  assert.equal(getConfig().conversation.auto_title_model, 'title-model');
+});
+
+test('invalid auto-title settings never replace the active configuration', async () => {
+  const stableYaml = 'conversation:\n  auto_title: true\n  auto_title_model: stable-title-model\n  auto_title_prompt: Stable title instructions\n';
+  for (const invalidYaml of [
+    'conversation:\n  auto_title: true\n',
+    'conversation:\n  auto_title: true\n  auto_title_model: ""\n',
+    'conversation:\n  auto_title: true\n  auto_title_model: next-model\n  auto_title_prompt: "   "\n',
+    'conversation:\n  auto_title: true\n  auto_title_model: next-model\n  auto_title_prompt: null\n',
+    `conversation:\n  auto_title: true\n  auto_title_model: next-model\n  auto_title_prompt: ${JSON.stringify('x'.repeat(10001))}\n`,
+  ]) {
+    await writeConfigs('Stable titles', stableYaml);
+    loadConfig();
+    await writeConfigs('Invalid titles', invalidYaml);
+    assert.throws(() => loadConfig(), /auto_title_model|auto_title_prompt/);
+    assert.equal(await reloadConfig({ reconcile: async () => assert.fail('invalid titles activated'), invalidateCaches: async () => {} }), false);
+    assert.equal(getConfig().conversation.auto_title_model, 'stable-title-model');
+    assert.equal(getConfig().conversation.auto_title_prompt, 'Stable title instructions');
+  }
+});
+
+test('auto-title model and prompt reload together', async () => {
+  await writeConfigs('Original titles', 'conversation:\n  auto_title: true\n  auto_title_model: original-model\n');
+  loadConfig();
+  await writeConfigs('New titles', 'conversation:\n  auto_title: true\n  auto_title_model: new-model\n  auto_title_prompt: New title instructions\n');
+  assert.equal(await reloadConfig({ reconcile: async () => {}, invalidateCaches: async () => {} }), true);
+  assert.equal(getConfig().conversation.auto_title_model, 'new-model');
+  assert.equal(getConfig().conversation.auto_title_prompt, 'New title instructions');
 });
 
 test('invalid collection roots, model capabilities, duplicates, and references never activate', async () => {

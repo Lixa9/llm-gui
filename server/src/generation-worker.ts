@@ -23,7 +23,8 @@ interface GenerationSnapshot {
   title_prompt: string;
   is_first_exchange: boolean;
   auto_title: boolean;
-  auto_title_model: string;
+  auto_title_model?: string;
+  auto_title_prompt?: string;
 }
 
 interface RunningControl {
@@ -123,7 +124,8 @@ async function finalizeGeneration(
     `).run(status, error, Date.now(), Date.now(), row.id);
     if (status === 'done' && snapshot?.is_first_exchange && snapshot.auto_title && fullText) {
       await enqueueTitleJob(db, row.id, row.conversation_id, {
-        model: snapshot.auto_title_model || snapshot.model,
+        model: snapshot.auto_title_model,
+        system_prompt: snapshot.auto_title_prompt,
         title_prompt: snapshot.title_prompt,
         assistant_response: fullText,
         provider: snapshot.provider,

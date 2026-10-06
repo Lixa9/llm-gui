@@ -137,6 +137,7 @@ function generationSnapshot(
     is_first_exchange: isFirstExchange,
     auto_title: cfg.conversation.auto_title,
     auto_title_model: cfg.conversation.auto_title_model,
+    auto_title_prompt: cfg.conversation.auto_title_prompt,
   };
 }
 
