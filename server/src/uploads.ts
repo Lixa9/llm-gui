@@ -12,9 +12,6 @@ import { publicFileMeta } from './content-blocks.ts';
 export const uploadsRouter = new Hono();
 uploadsRouter.use('*', requireAuth);
 
-export const ALLOWED_IMAGE_TYPES = new Set(FILE_FORMATS.filter(f => f.kind === 'image').map(f => f.mime));
-export const ALLOWED_TEXT_TYPES = new Set(FILE_FORMATS.filter(f => f.kind !== 'image').map(f => f.mime));
-export const MIME_TO_EXT = Object.fromEntries(FILE_FORMATS.map(f => [f.mime, '.' + f.extensions[0]]));
 const IMAGE_MAX_SIZE = 20 * 1024 * 1024;
 const TEXT_MAX_SIZE = 50 * 1024 * 1024;
 
@@ -29,10 +26,6 @@ async function storageUsage(ownerSub: string, db: ReturnType<typeof getDb> | TxD
     FROM uploads WHERE owner_sub=?
   `).get<{ bytes: number }>(ownerSub);
   return row?.bytes ?? 0;
-}
-
-export function classifyMime(mime: string) {
-  return { isPdf: mime === 'application/pdf', isDocx: mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', isOdt: mime === 'application/vnd.oasis.opendocument.text', isEpub: mime === 'application/epub+zip' };
 }
 
 interface DerivedImage { data: string; ext: string; }
@@ -171,10 +164,6 @@ export async function cleanupUnreferencedUploads(db: UploadDb, ownerSub: string,
       AND NOT EXISTS (SELECT 1 FROM draft_uploads du WHERE du.upload_id=u.id)
       AND NOT EXISTS (SELECT 1 FROM generation_uploads gu WHERE gu.upload_id=u.id)
   `).run(ownerSub, uniqueIds);
-}
-
-export async function deleteAllUploadsForUser(ownerSub: string): Promise<void> {
-  await getDb().prepare('DELETE FROM uploads WHERE owner_sub=?').run(ownerSub);
 }
 
 export async function purgeOrphanUploads(olderThan = Date.now() - 24 * 60 * 60 * 1000): Promise<void> {

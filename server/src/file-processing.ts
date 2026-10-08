@@ -9,7 +9,7 @@ import { gunzipSync } from 'node:zlib';
 import AdmZip from 'adm-zip';
 import { simpleParser } from 'mailparser';
 import { FILE_FORMATS, recognizeFormat, decodeText } from './formats.ts';
-import { extractText, renderPdfPages, extractDocImages, assertArchiveBudget, stripHtml } from './extract.ts';
+import { extractText, renderPdfPages, extractEpubImages, assertArchiveBudget, stripHtml } from './extract.ts';
 import type { ProcessedFile, DerivedImage, AttachmentBlock } from './processing.ts';
 import { limitBlocks, textPrefix } from './content-blocks.ts';
 
@@ -593,7 +593,7 @@ export async function processFile(bytes: Buffer, mime: string, filename: string)
   const images: DerivedImage[] = [], imageBlocks: AttachmentBlock[] = [];
   let imageWarning: string | undefined;
   if (ext === '.epub') {
-    const embedded = await extractDocImages(bytes, 'epub');
+    const embedded = await extractEpubImages(bytes);
     for (const image of embedded.images) {
       try {
         const converted = await rasterImage(Buffer.from(image.data,'base64'),recognizeFormat(`embedded${image.ext}`).mime);

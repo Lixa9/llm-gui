@@ -39,19 +39,10 @@ export class Db {
   }
 
   async withAdvisoryLock<T>(key: string, fn: (db: TxDb) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
-      const result = await fn(new TxDb(client));
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    return this.transaction(async db => {
+      await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(key);
+      return fn(db);
+    });
   }
 
   async close(): Promise<void> {

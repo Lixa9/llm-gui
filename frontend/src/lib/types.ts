@@ -166,7 +166,6 @@ export type SSEEvent =
   | { type: 'delta'; content: string }
   | { type: 'done'; message: Message | null }
   | { type: 'cancelled'; message: Message | null }
-  | { type: 'title'; title: string }
   | { type: 'error'; message: string };
 
 // API request/response types

@@ -37,7 +37,4 @@ export const draftsStore = {
     void task.catch((error) => toast(`Draft could not be saved: ${(error as Error).message}`, 'error'));
     return task;
   },
-  clearCache() {
-    cache.clear();
-  },
 };

@@ -74,7 +74,6 @@ function createPreferencesStore() {
   }
 
   return {
-    get prefs() { return prefs; },
     get soundEnabled() { return soundEnabled; },
     get soundVolume() { return soundVolume; },
     get defaultModelId() { return defaultModelId; },

@@ -4,7 +4,7 @@ import AdmZip from 'adm-zip';
 import { gzipSync } from 'node:zlib';
 import { recognizeFormat, decodeText } from '../src/formats.ts';
 import { processFile, safeArchivePath, tarEntries, validateOfficeInput } from '../src/file-processing.ts';
-import { extractText } from '../src/extract.ts';
+import { extractText, extractEpubImages } from '../src/extract.ts';
 
 function zipped(files: Record<string, string | Buffer>): Buffer {
   const zip = new AdmZip();
@@ -54,6 +54,23 @@ test('text encodings preserve BOM-marked UTF16 and reject binary text', () => {
   assert.equal(decodeText(Buffer.from([0xff, 0xfe, 0x48, 0, 0x69, 0])), 'Hi');
   assert.equal(decodeText(Buffer.from([0xfe, 0xff, 0, 0x48, 0, 0x69])), 'Hi');
   assert.throws(() => decodeText(Buffer.from([0, 1, 2])));
+});
+
+test('EPUB image extraction follows the manifest and retains its coverage limit', async () => {
+  const files: Record<string, string | Buffer> = {
+    'META-INF/container.xml': '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>',
+    'OPS/book.opf': `<package><manifest>${Array.from({ length: 21 }, (_, index) => `<item id="image${index}" href="images/image${index}.png" media-type="image/png"/>`).join('')}<item id="missing" href="missing.png" media-type="image/png"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest></package>`,
+    'OPS/chapter.xhtml': '<p>Chapter</p>',
+    'word/media/unused.png': 'not an EPUB image',
+  };
+  for (let index = 0; index < 21; index++) files[`OPS/images/image${index}.png`] = `image ${index}`;
+  const result = await extractEpubImages(zipped(files));
+  assert.equal(result.count, 21);
+  assert.equal(result.served, 20);
+  assert.equal(result.images.length, 20);
+  assert.deepEqual(result.images[0], { data: Buffer.from('image 0').toString('base64'), ext: '.png', path: 'OPS/images/image0.png' });
+  assert.match(result.warning!, /first 20 of 21/);
+  assert.deepEqual(await extractEpubImages(zipped({ 'META-INF/container.xml': '<container/>' })), { count: 0, served: 0, images: [] });
 });
 test('ZIP, TAR, TAR.GZ, and GZ include supported entries with explicit omissions', async () => {
   const result = await processFile(

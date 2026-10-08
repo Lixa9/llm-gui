@@ -107,7 +107,7 @@ export interface ExtractionResult {
 
 const TEXT_CAP = 1_000_000;
 export const PDF_PAGE_CAP = 100;
-const DOC_IMAGE_CAP = 20;
+const EPUB_IMAGE_CAP = 20;
 
 function truncate(text: string): { text: string; warning?: string } {
   if (text.length <= TEXT_CAP) return { text };
@@ -118,20 +118,6 @@ function truncate(text: string): { text: string; warning?: string } {
 }
 
 export async function extractText(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
-  if (mimeType === 'application/pdf') {
-    return { text: null, meta: { format: 'pdf' } };
-  }
-
-  if (
-    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  ) {
-    return extractDocx(bytes);
-  }
-
-  if (mimeType === 'application/vnd.oasis.opendocument.text') {
-    return extractOdt(bytes);
-  }
-
   if (
     mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     mimeType === 'application/vnd.ms-excel' ||
@@ -164,59 +150,6 @@ async function extractHtml(bytes: Buffer): Promise<ExtractionResult> {
   const extracted = stripHtml(raw);
   const { text, warning } = truncate(extracted);
   return { text, meta: { format: 'html', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
-}
-
-async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
-  const AdmZip = (await import('adm-zip')).default;
-  const zip = new AdmZip(bytes);
-  assertArchiveBudget(zip);
-  const entry = zip.getEntry('word/document.xml');
-  if (!entry) throw new Error('DOCX has no word/document.xml');
-  const xml = entry.getData().toString('utf-8');
-
-  const tokens = parseXml(xml);
-  let text = '';
-  let inTextTag = false;
-  for (const token of tokens) {
-    if (token.type === 'tag' && token.tag) {
-      if (token.tag.name === 'w:t' && !token.tag.isEnd) inTextTag = true;
-      if (token.tag.name === 'w:t' && token.tag.isEnd) inTextTag = false;
-      if (token.tag.name === 'w:p' && !token.tag.isEnd) text += '\n';
-      if (token.tag.name === 'w:tc' && token.tag.isEnd) text += '\t';
-      if (token.tag.name === 'w:tr' && token.tag.isEnd) text += '\n';
-    } else if (token.type === 'text' && inTextTag && token.text) {
-      text += token.text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-    }
-  }
-
-  const raw = text.replace(/[ \t]+/g, ' ').trim() || '[File appears empty or has no extractable text]';
-  const { text: truncatedText, warning } = truncate(raw);
-  return { text: truncatedText, meta: { format: 'docx', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
-}
-
-async function extractOdt(bytes: Buffer): Promise<ExtractionResult> {
-  const AdmZip = (await import('adm-zip')).default;
-  const zip = new AdmZip(bytes);
-  assertArchiveBudget(zip);
-  const entry = zip.getEntry('content.xml');
-  if (!entry) throw new Error('ODT file has no content.xml');
-  const xml = entry.getData().toString('utf-8');
-
-  const tokens = parseXml(xml);
-  let text = '';
-  let inP = false;
-  for (const token of tokens) {
-    if (token.type === 'tag' && token.tag) {
-      if (token.tag.name === 'text:p' && !token.tag.isEnd) { inP = true; text += '\n'; }
-      if (token.tag.name === 'text:p' && token.tag.isEnd) inP = false;
-    } else if (token.type === 'text' && inP && token.text) {
-      text += token.text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-    }
-  }
-
-  const raw = text.replace(/[ \t]+/g, ' ').trim() || '[File appears empty or has no extractable text]';
-  const { text: truncatedText, warning } = truncate(raw);
-  return { text: truncatedText, meta: { format: 'odt', ...(warning && { truncated: true }) }, ...(warning && { warning }) };
 }
 
 async function extractSpreadsheet(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
@@ -577,60 +510,47 @@ export async function renderPdfPages(bytes: Buffer): Promise<{ page_count: numbe
   } finally { doc.destroy(); }
 }
 
-export async function extractDocImages(
+export async function extractEpubImages(
   bytes: Buffer,
-  format: 'docx' | 'odt' | 'epub',
 ): Promise<{ count: number; served: number; images: { data: string; ext: string; path?: string }[]; warning?: string }> {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip(bytes);
   assertArchiveBudget(zip);
 
-  let imageEntries: { data: Buffer; ext: string; path?: string }[];
-
-  if (format === 'epub') {
-    // Discover images via OPF manifest (handles any directory layout)
-    const containerXml = zip.getEntry('META-INF/container.xml')?.getData().toString('utf-8') ?? '';
-    const containerTokens = parseXml(containerXml);
-    let opfPath = '';
-    for (const token of containerTokens) {
-      if (token.type === 'tag' && token.tag && token.tag.name === 'rootfile') {
-        opfPath = token.tag.attributes['full-path'] || '';
-        if (opfPath) break;
-      }
+  const containerXml = zip.getEntry('META-INF/container.xml')?.getData().toString('utf-8') ?? '';
+  const containerTokens = parseXml(containerXml);
+  let opfPath = '';
+  for (const token of containerTokens) {
+    if (token.type === 'tag' && token.tag && token.tag.name === 'rootfile') {
+      opfPath = token.tag.attributes['full-path'] || '';
+      if (opfPath) break;
     }
-    const opfBase = opfPath?.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
-    const opfXml = opfPath ? (zip.getEntry(opfPath)?.getData().toString('utf-8') ?? '') : '';
-
-    const imageEntriesList: { data: Buffer; ext: string; path?: string }[] = [];
-    if (opfXml) {
-      const opfTokens = parseXml(opfXml);
-      for (const token of opfTokens) {
-        if (token.type === 'tag' && token.tag && token.tag.name === 'item') {
-          const href = token.tag.attributes['href'];
-          const mediaType = token.tag.attributes['media-type'] || '';
-          if (href && mediaType.startsWith('image/')) {
-            const imagePath = posix.normalize(opfBase + href);
-            const entry = zip.getEntry(imagePath) ?? zip.getEntry(href);
-            if (entry) {
-              const ext = extname(href) || '.bin';
-              imageEntriesList.push({ data: entry.getData(), ext, path:imagePath });
-            }
+  }
+  const opfBase = opfPath?.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+  const opfXml = opfPath ? (zip.getEntry(opfPath)?.getData().toString('utf-8') ?? '') : '';
+  const imageEntries: { data: Buffer; ext: string; path?: string }[] = [];
+  if (opfXml) {
+    const opfTokens = parseXml(opfXml);
+    for (const token of opfTokens) {
+      if (token.type === 'tag' && token.tag && token.tag.name === 'item') {
+        const href = token.tag.attributes['href'];
+        const mediaType = token.tag.attributes['media-type'] || '';
+        if (href && mediaType.startsWith('image/')) {
+          const imagePath = posix.normalize(opfBase + href);
+          const entry = zip.getEntry(imagePath) ?? zip.getEntry(href);
+          if (entry) {
+            const ext = extname(href) || '.bin';
+            imageEntries.push({ data: entry.getData(), ext, path: imagePath });
           }
         }
       }
     }
-    imageEntries = imageEntriesList;
-  } else {
-    const prefix = format === 'docx' ? 'word/media/' : 'Pictures/';
-    imageEntries = zip.getEntries()
-      .filter(e => e.entryName.startsWith(prefix) && !e.isDirectory)
-      .map(e => ({ data: e.getData(), ext: extname(e.entryName) || '.bin' }));
   }
 
   const count = imageEntries.length;
   if (count === 0) return { count: 0, served: 0, images: [] };
 
-  const served = Math.min(count, DOC_IMAGE_CAP);
+  const served = Math.min(count, EPUB_IMAGE_CAP);
   const images: { data: string; ext: string; path?: string }[] = [];
   for (let i = 0; i < served; i++) {
     const { data, ext, path } = imageEntries[i];
@@ -641,6 +561,6 @@ export async function extractDocImages(
     count,
     served,
     images,
-    warning: count > DOC_IMAGE_CAP ? `Showing first ${DOC_IMAGE_CAP} of ${count} embedded images` : undefined,
+    warning: count > EPUB_IMAGE_CAP ? `Showing first ${EPUB_IMAGE_CAP} of ${count} embedded images` : undefined,
   };
 }

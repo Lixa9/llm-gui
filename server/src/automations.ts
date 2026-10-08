@@ -15,12 +15,6 @@ function serializeAutomation(row: AutomationRow) {
   return { ...row, enabled: Boolean(row.enabled), definition: safeParseJson<Record<string, unknown>>(row.definition, {}) };
 }
 
-function visibleTo(row: AutomationRow, role: string): boolean {
-  if (row.owner_sub !== null) return true;
-  const roles = safeParseJson<string[] | null>(row.visible_to, null);
-  return !roles || roles.includes(role);
-}
-
 automationsRouter.get('/', async (c) => {
   const user = c.get('user');
   const rows = await getDb().prepare(`

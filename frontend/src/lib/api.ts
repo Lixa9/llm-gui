@@ -5,9 +5,22 @@ import type {
 } from './types';
 
 class HttpError extends Error {
-  constructor(public status: number, message: string) {
+  status: number;
+
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
+}
+
+async function readResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let message = res.statusText;
+    try { message = (await res.json() as { error: string }).error ?? message; } catch {}
+    throw new HttpError(res.status, message);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
 }
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -20,13 +33,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
-  if (!res.ok) {
-    let msg = res.statusText;
-    try { msg = (await res.json() as { error: string }).error ?? msg; } catch { /* ignore */ }
-    throw new HttpError(res.status, msg);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return readResponse<T>(res);
 }
 
 const get = <T>(path: string) => req<T>('GET', path);
@@ -118,22 +125,16 @@ export const api = {
   },
 
   uploads: {
-    upload: async (file: File, model?: string): Promise<UploadResult> => {
+    upload: async (file: File): Promise<UploadResult> => {
       const form = new FormData();
       form.append('file', file);
-      if(model)form.append('model',model);
       const res = await fetch('/api/uploads', {
         method: 'POST',
         headers: { 'X-Requested-With': 'llm-frontend' },
         body: form,
         credentials: 'same-origin',
       });
-      if (!res.ok) {
-        let msg = res.statusText;
-        try { msg = (await res.json() as { error: string }).error ?? msg; } catch { /* ignore */ }
-        throw new HttpError(res.status, msg);
-      }
-      return res.json() as Promise<UploadResult>;
+      return readResponse<UploadResult>(res);
     },
     formats: () => get<Array<{mime:string;extensions:string[];kind:string}>>('/api/uploads/formats'),
     metadata: (id:string) => get<{coverage:Record<string,unknown>}>(`/api/uploads/${id}/metadata`),

@@ -1,7 +1,6 @@
 <script lang="ts">
   import MessageItem from './MessageItem.svelte';
   import type { Message } from '$lib/types';
-  import type { PendingMessage } from '../../stores/chat.svelte';
   import { chatStore } from '../../stores/chat.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import Spinner from '../ui/Spinner.svelte';

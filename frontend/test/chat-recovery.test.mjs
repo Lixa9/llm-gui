@@ -106,3 +106,145 @@ test('disconnect recovery preserves a provider failure already saved by the job'
   assert.equal(store.streaming, false);
   assert.equal(store.error, 'Provider returned HTTP 400');
 });
+
+function responseWithEvents(events) {
+  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+}
+
+function savedMessages() {
+  return [
+    { id: 'user', conversation_id: conversationId, role: 'user', content: payload.new_user_message.content, timestamp: 1, status: 'done' },
+    { id: 'old', conversation_id: conversationId, role: 'assistant', content: [{ type: 'text', text: 'original answer' }], timestamp: 2, status: 'done' },
+  ];
+}
+
+for (const action of ['send', 'regenerate']) {
+  for (const terminal of ['done', 'cancelled', 'error']) {
+    test(`${action} shares acceptance and ${terminal} handling without changing its endpoint`, async context => {
+      let messages = savedMessages();
+      let acceptedConversation = null;
+      const store = await loadStore(context, { conversations: { messages: async () => messages } });
+      if (action === 'regenerate') await store.loadMessages(conversationId);
+      context.mock.method(globalThis, 'fetch', async (path, options) => {
+        assert.equal(path, action === 'send' ? '/api/chat' : '/api/chat/regenerate');
+        const request = JSON.parse(options.body);
+        const user = action === 'send'
+          ? { ...messages[0], id: request.new_user_message.id }
+          : messages[0];
+        const assistant = { ...messages[1], id: request.assistant_message_id, status: terminal === 'cancelled' ? 'aborted' : terminal === 'error' ? 'failed' : 'done' };
+        messages = [user, assistant];
+        return responseWithEvents([
+          { type: 'accepted', conversation_id: conversationId, assistant_message_id: assistant.id, user_message: user },
+          { type: 'delta', content: 'partial answer' },
+          terminal === 'error' ? { type: 'error', message: 'Provider rejected input' } : { type: terminal, message: assistant },
+        ]);
+      });
+      if (action === 'send') {
+        const result = await store.send(payload, id => { acceptedConversation = id; });
+        assert.deepEqual(result, { accepted: true });
+        assert.equal(acceptedConversation, conversationId);
+      } else {
+        assert.equal(await store.regenerate({ conversation_id: conversationId, assistant_message_id: 'old', model: 'mock' }), undefined);
+      }
+      assert.equal(store.streaming, false);
+      assert.equal(store.pending, null);
+      assert.equal(store.activeGenerationId, null);
+      assert.deepEqual(store.messages, messages);
+      assert.equal(store.error, terminal === 'error' ? 'Provider rejected input' : null);
+    });
+  }
+}
+
+for (const action of ['edit', 'regenerate']) {
+  test(`a rejected ${action} keeps the authoritative history`, async context => {
+    const original = savedMessages();
+    const store = await loadStore(context, { conversations: { messages: async () => original } });
+    await store.loadMessages(conversationId);
+    let accepted = false;
+    context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ error: 'rate limited' }), { status: 429 }));
+    if (action === 'edit') {
+      assert.deepEqual(await store.send({ ...payload, edit_message_id: 'user' }, () => { accepted = true; }), { accepted: false });
+    } else {
+      await store.regenerate({ conversation_id: conversationId, assistant_message_id: 'old', model: 'mock' });
+    }
+    assert.equal(accepted, false);
+    assert.deepEqual(store.messages, original);
+    assert.equal(store.error, 'rate limited');
+    assert.equal(store.streaming, false);
+    assert.equal(store.activeGenerationId, null);
+  });
+}
+
+test('a rejected edit restores the original messages if reconciliation also fails', async context => {
+  const original = savedMessages();
+  let rejectReload = false;
+  const store = await loadStore(context, { conversations: { messages: async () => {
+    if (rejectReload) throw new Error('offline');
+    return original;
+  } } });
+  await store.loadMessages(conversationId);
+  rejectReload = true;
+  context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ error: 'rate limited' }), { status: 429 }));
+  assert.deepEqual(await store.send({ ...payload, edit_message_id: 'user', new_user_message: { content: [{ type: 'text', text: 'edited' }] } }), { accepted: false });
+  assert.deepEqual(store.messages.map(message => message.content), original.map(message => message.content));
+  assert.equal(store.error, 'rate limited');
+  assert.equal(store.streaming, false);
+});
+
+test('leaving a conversation detaches an accepted stream without cancelling its generation', async context => {
+  let messages = [];
+  const store = await loadStore(context, { conversations: { messages: async () => messages } });
+  context.mock.method(globalThis, 'fetch', async (_path, options) => {
+    const request = JSON.parse(options.body);
+    const user = { ...savedMessages()[0], id: request.new_user_message.id };
+    messages = [user];
+    return new Response(new ReadableStream({
+      start(controller) {
+        options.signal.addEventListener('abort', () => controller.error(new DOMException('Detached', 'AbortError')), { once: true });
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'accepted', conversation_id: conversationId, assistant_message_id: request.assistant_message_id, user_message: user })}\n\n`));
+      },
+    }));
+  });
+  const result = await store.send(payload, () => store.setActiveConversation('another-conversation'));
+  assert.deepEqual(result, { accepted: true });
+  assert.equal(store.activeConversationId, 'another-conversation');
+  assert.deepEqual(store.messages, []);
+  assert.equal(store.error, null);
+  assert.equal(store.streaming, false);
+});
+
+test('stop waits for acceptance and uses the authoritative generation ID', async context => {
+  let messages = [];
+  let cancelledId = null;
+  let request;
+  let streamController;
+  const store = await loadStore(context, {
+    conversations: { messages: async () => messages },
+    chat: { cancel: async id => {
+      cancelledId = id;
+      messages = [messages[0], { ...savedMessages()[1], id, status: 'aborted' }];
+      return { id, conversation_id: conversationId, status: 'cancelled', message: messages[1] };
+    } },
+  });
+  context.mock.method(globalThis, 'fetch', async (_path, options) => {
+    request = JSON.parse(options.body);
+    return new Response(new ReadableStream({
+      start(controller) {
+        streamController = controller;
+        options.signal.addEventListener('abort', () => controller.error(new DOMException('Stopped', 'AbortError')), { once: true });
+      },
+    }));
+  });
+  const sending = store.send(payload);
+  const stopping = store.stop();
+  assert.equal(cancelledId, null);
+  const user = { ...savedMessages()[0], id: request.new_user_message.id };
+  messages = [user];
+  streamController.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'accepted', conversation_id: conversationId, assistant_message_id: 'authoritative-generation', user_message: user })}\n\n`));
+  await stopping;
+  assert.deepEqual(await sending, { accepted: true });
+  assert.equal(cancelledId, 'authoritative-generation');
+  assert.equal(store.messages.at(-1).status, 'aborted');
+  assert.equal(store.streaming, false);
+  assert.equal(store.error, null);
+});

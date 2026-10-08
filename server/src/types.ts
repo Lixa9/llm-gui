@@ -55,15 +55,6 @@ export interface ChatGenerationRow {
 }
 
 // DB row types (snake_case)
-export interface UserRow {
-  sub: string;
-  email: string;
-  name: string;
-  last_known_role: Role;
-  role_updated_at: number | null;
-  created_at: number;
-}
-
 export interface UserPrefRow {
   user_sub: string;
   key: string;
@@ -181,76 +172,11 @@ export interface SessionPayload {
   expiresAt: number;
 }
 
-// Config types
-export interface AppConfig {
-  app: {
-    name: string;
-    base_url: string;
-    tagline: string;
-    logo_url?: string;
-    accent_color?: string;
-  };
-  openai: {
-    base_url: string;
-    api_key?: string;
-  };
-  oidc?: {
-    issuer: string;
-    client_id: string;
-    client_secret: string;
-    scopes: string[];
-  };
-  rbac: {
-    group_claim: string;
-    mappings: Array<{ oidc_group: string; role: Role }>;
-    default_role: Role;
-  };
-  rate_limits: {
-    requests_per_minute: number;
-    requests_per_hour: number;
-    concurrent_streams: number;
-    global_workers: number;
-    workers_per_owner: number;
-    max_queued_jobs: number;
-  };
-  attachments: { max_request_bytes: number; max_images: number; max_files: number; max_text_chars: number; processing_workers: number };
-  storage: {
-    quota: number;
-  };
-  conversation: {
-    max_output_bytes: number;
-    max_frame_bytes: number;
-    auto_title: boolean;
-    auto_title_model?: string;
-    auto_title_prompt: string;
-    generation_max_duration_ms: number;
-    generation_idle_timeout_ms: number;
-    generation_max_attempts: number;
-  };
-  models?: ModelYamlEntry[];
-  prompts?: PromptYamlEntry[];
-  automations?: AutomationYamlEntry[];
-  presets?: PresetYamlEntry[];
-}
-
 export interface ModelYamlEntry {
   id: string;
   display_name: string;
   allowed_roles: Role[];
   capabilities?: { vision: boolean; native_pdf: boolean; image_detail: 'auto' | 'low' | 'high'; stream_usage?: boolean; max_text_chars?: number };
-}
-
-export interface PromptYamlEntry {
-  name: string;
-  content: string;
-  allowed_roles?: Role[];
-}
-
-export interface PresetYamlEntry {
-  name: string;
-  base_model_id: string;
-  system_prompt?: string;
-  allowed_roles?: Role[];
 }
 
 export type ScheduleUnit = 'hours' | 'days' | 'weeks';
@@ -261,14 +187,4 @@ export interface ScheduledDefinition {
   model: string;
   system_prompt?: string;
   user_prompt: string;
-}
-
-export interface AutomationYamlEntry {
-  name: string;
-  interval?: number;
-  unit?: ScheduleUnit;
-  allowed_roles?: Role[];
-  model?: string;
-  system_prompt?: string;
-  user_prompt?: string;
 }

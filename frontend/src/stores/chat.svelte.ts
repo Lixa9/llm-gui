@@ -26,7 +26,6 @@ function createChatStore() {
     id: string;
     conversationId: string;
     controller: AbortController;
-    userMessage: Message;
     accepted: boolean;
     stopRequested: boolean;
     generationId: string;
@@ -223,98 +222,12 @@ function createChatStore() {
       messages=[...messages.slice(0,index),{...userMsg,content:[...userMsg.content,...messages[index].content.filter(p=>p.type!=='text')]}];
     } else messages = [...messages, userMsg];
 
-    streaming = true;
-    error = null;
-    const operationId = crypto.randomUUID();
-    const controller = new AbortController();
-    let resolveAccepted!: (accepted: boolean) => void;
-    const acceptedReady = new Promise<boolean>(resolve => { resolveAccepted = resolve; });
-    activeStream = {
-      id: operationId,
-      conversationId: convId,
-      controller,
-      userMessage: userMsg,
-      accepted: false,
-      stopRequested: false,
-      generationId: assistantMessageId,
-      acceptedReady,
-      resolveAccepted,
-    };
-    activeGenerationId = assistantMessageId;
-    pending = { role: 'assistant', content: '', model: payload.model };
-    let terminalEvent = false;
-    let acceptedByServer = false;
-    let interrupted = false;
-
-    try {
-      await streamChat({
-        ...payload,
-        assistant_message_id: assistantMessageId,
-        new_user_message: { ...payload.new_user_message, id: userMessageId },
-      }, controller.signal, (event) => {
-        if (activeStream?.id !== operationId) return;
-        if (event.type === 'accepted') {
-          acceptedByServer = true;
-          activeStream.accepted = true;
-          activeStream.resolveAccepted(true);
-          activeStream.generationId = event.assistant_message_id;
-          activeGenerationId = event.assistant_message_id;
-          messages = messages.map(message => message.id === userMessageId ? event.user_message : message);
-          onAccepted?.(event.conversation_id);
-        } else if (event.type === 'delta') {
-          if (pending) pending.content += event.content;
-        } else if (event.type === 'done') {
-          terminalEvent = true;
-          if (event.message) messages = [...messages, event.message];
-          pending = null;
-          activeGenerationId = null;
-          playCompletionSound(
-            preferencesStore.soundEnabled,
-            preferencesStore.soundVolume,
-          );
-        } else if (event.type === 'cancelled') {
-          terminalEvent = true;
-          if (event.message) upsertMessage(event.message);
-          activeGenerationId = null;
-          pending = null;
-        } else if (event.type === 'title') {
-          conversationsStore.updateTitle(convId, event.title);
-        } else if (event.type === 'error') {
-          terminalEvent = true;
-          error = event.message;
-          pending = null;
-        }
-      });
-    } catch (e) {
-      if (activeConversationId === convId && activeStream?.id === operationId) {
-        if ((e as Error).name === 'AbortError') {
-          if (!activeStream.stopRequested) error = 'Response interrupted while leaving the conversation.';
-        } else if (e instanceof ChatStreamInterruptedError && acceptedByServer) {
-          interrupted = true;
-        } else {
-          error = (e as Error).message;
-        }
-        pending = null;
-      }
-    } finally {
-      const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
-      const operationIsCurrent = activeStream?.id === operationId;
-      resolveAccepted(acceptedByServer);
-      if(payload.edit_message_id && !accepted && activeConversationId===convId) messages=originalMessages;
-      await reconcileMessages(convId, userMsg, accepted);
-      if (operationIsCurrent && activeStream?.id === operationId) {
-        if (!terminalEvent && !controller.signal.aborted && !interrupted) {
-          error ??= 'The connection closed before completion; saved messages were reloaded.';
-        }
-        activeStream = null;
-        streaming = false;
-        pending = null;
-      }
-      if (activeConversationId === convId) syncGenerationState(convId, messages);
-      if (interrupted) await recoverInterruptedStream(assistantMessageId, convId);
-      void conversationsStore.refreshUntilTitle(convId).catch(() => {});
-    }
-    return { accepted: acceptedByServer };
+    return runChatStream({
+      ...payload,
+      conversation_id: convId,
+      assistant_message_id: assistantMessageId,
+      new_user_message: { ...payload.new_user_message, id: userMessageId },
+    }, userMsg, onAccepted, payload.edit_message_id ? originalMessages : undefined);
   }
 
   async function regenerate(payload: RegenerateChatPayload) {
@@ -326,11 +239,19 @@ function createChatStore() {
       error = 'The response cannot be regenerated because its user message is missing.';
       return;
     }
-    // Regeneration replaces this response and everything after it. Remove the
-    // stale tail optimistically; reconciliation restores it if the request is
-    // rejected before the server applies the replacement.
     messages = messages.slice(0, assistantIndex);
+    await runChatStream(payload, retainedUser);
+  }
 
+  async function runChatStream(
+    payload: (ChatPayload | RegenerateChatPayload) & { conversation_id: string },
+    optimisticMessage: Message,
+    onAccepted?: (conversationId: string) => void,
+    rollbackMessages?: Message[],
+  ): Promise<ChatSendResult> {
+    const convId = payload.conversation_id;
+    const sending = 'new_user_message' in payload;
+    const generationId = sending ? payload.assistant_message_id! : '';
     streaming = true;
     error = null;
     const operationId = crypto.randomUUID();
@@ -339,15 +260,15 @@ function createChatStore() {
     const acceptedReady = new Promise<boolean>(resolve => { resolveAccepted = resolve; });
     activeStream = {
       id: operationId,
-      conversationId: payload.conversation_id,
+      conversationId: convId,
       controller,
-      userMessage: retainedUser,
       accepted: false,
       stopRequested: false,
-      generationId: '',
+      generationId,
       acceptedReady,
       resolveAccepted,
     };
+    if (sending) activeGenerationId = generationId;
     pending = { role: 'assistant', content: '', model: payload.model };
     let terminalEvent = false;
     let acceptedByServer = false;
@@ -364,7 +285,8 @@ function createChatStore() {
           activeStream.resolveAccepted(true);
           activeStream.generationId = event.assistant_message_id;
           activeGenerationId = event.assistant_message_id;
-          messages = messages.map(message => message.id === event.user_message.id ? event.user_message : message);
+          messages = messages.map(message => message.id === optimisticMessage.id ? event.user_message : message);
+          onAccepted?.(event.conversation_id);
         } else if (event.type === 'delta') {
           if (pending) pending.content += event.content;
         } else if (event.type === 'done') {
@@ -383,15 +305,15 @@ function createChatStore() {
           error = event.message;
           pending = null;
         }
-      }, '/api/chat/regenerate');
-    } catch (e) {
-      if (activeConversationId === payload.conversation_id && activeStream?.id === operationId) {
-        if ((e as Error).name === 'AbortError') {
+      }, sending ? '/api/chat' : '/api/chat/regenerate');
+    } catch (streamError) {
+      if (activeConversationId === convId && activeStream?.id === operationId) {
+        if ((streamError as Error).name === 'AbortError') {
           if (!activeStream.stopRequested) error = 'Response interrupted while leaving the conversation.';
-        } else if (e instanceof ChatStreamInterruptedError && acceptedByServer) {
+        } else if (streamError instanceof ChatStreamInterruptedError && acceptedByServer) {
           interrupted = true;
         } else {
-          error = (e as Error).message;
+          error = (streamError as Error).message;
         }
         pending = null;
       }
@@ -399,17 +321,21 @@ function createChatStore() {
       const accepted = activeStream?.id === operationId ? activeStream.accepted : false;
       const operationIsCurrent = activeStream?.id === operationId;
       resolveAccepted(acceptedByServer);
-      await reconcileMessages(payload.conversation_id, retainedUser, accepted);
+      if (rollbackMessages && !accepted && activeConversationId === convId) messages = rollbackMessages;
+      await reconcileMessages(convId, optimisticMessage, accepted);
       if (operationIsCurrent && activeStream?.id === operationId) {
-        if (!terminalEvent && !controller.signal.aborted && !interrupted) error ??= 'The connection closed before completion; saved messages were reloaded.';
+        if (!terminalEvent && !controller.signal.aborted && !interrupted) {
+          error ??= 'The connection closed before completion; saved messages were reloaded.';
+        }
         activeStream = null;
         streaming = false;
         pending = null;
       }
-      if (activeConversationId === payload.conversation_id) syncGenerationState(payload.conversation_id, messages);
-      if (interrupted && acceptedGenerationId) await recoverInterruptedStream(acceptedGenerationId, payload.conversation_id);
-      void conversationsStore.refreshUntilTitle(payload.conversation_id).catch(() => {});
+      if (activeConversationId === convId) syncGenerationState(convId, messages);
+      if (interrupted && acceptedGenerationId) await recoverInterruptedStream(acceptedGenerationId, convId);
+      void conversationsStore.refreshUntilTitle(convId).catch(() => {});
     }
+    return { accepted: acceptedByServer };
   }
 
   async function stop() {

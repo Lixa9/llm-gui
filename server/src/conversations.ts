@@ -4,7 +4,7 @@ import { requireAuth } from './auth.ts';
 import { getDb, generateId, runTransaction, safeParseJson } from './db/index.ts';
 import type { TxDb } from './db/index.ts';
 import type { ConversationRow, MessageRow, MessageContentPart } from './types.ts';
-import { attachUploadsToMessage, cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads.ts';
+import { cleanupUnreferencedUploads, uploadIdsForConversation } from './uploads.ts';
 
 export const conversationsRouter = new Hono();
 conversationsRouter.use('*', requireAuth);

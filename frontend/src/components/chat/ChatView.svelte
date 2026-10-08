@@ -99,7 +99,6 @@
 
   function saveConvSettings() {
     if (!conversationId) return;
-    const preset = selectedPresetId ? modelsStore.presets.find(p => p.id === selectedPresetId) : null;
     void conversationsStore.update(conversationId, {
       model_id: selectedModel,
       preset_id: selectedPresetId || null,
@@ -242,7 +241,7 @@
   open={editingMessage !== null}
   message={editingMessage}
   onclose={() => editingMessage = null}
-  onsave={(id, content, role) => {
+  onsave={(id, content) => {
     const msg = chatStore.messages.find(m => m.id === id);
     if (msg) handleEdit(msg, content);
   }}

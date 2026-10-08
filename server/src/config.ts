@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { scheduledDefinitionSchema } from './automation-definition.ts';
 import { DEFAULT_AUTO_TITLE_PROMPT } from './title-request.ts';
-import type { AppConfig } from './types.ts';
 import { logger } from './logger.ts';
 
 const CONFIG_DIR = process.env.CONFIG_DIR ?? '/app/config';
@@ -122,6 +121,14 @@ const modelSchema = z.object({
 const promptSchema = z.object({ name: z.string().min(1).max(200), content: z.string().max(100000), allowed_roles: roles });
 const presetSchema = z.object({ name: z.string().min(1).max(200), base_model_id: z.string().min(1), system_prompt: z.string().max(100000).optional(), allowed_roles: roles });
 const automationSchema = scheduledDefinitionSchema.extend({ name: z.string().min(1).max(200), allowed_roles: roles });
+
+export type AppConfig = z.output<typeof configSchema> & {
+  models: z.output<typeof modelSchema>[];
+  prompts: z.output<typeof promptSchema>[];
+  presets: z.output<typeof presetSchema>[];
+  automations: z.output<typeof automationSchema>[];
+};
+
 function uniqueEntries<T extends Record<string, unknown>>(entries: T[], key: keyof T, label: string): T[] {
   if (new Set(entries.map(e => e[key])).size !== entries.length) throw new Error(`Duplicate ${key.toString()} in ${label}`);
   return entries;

@@ -1,5 +1,5 @@
 import { getConfig, runtimeConfigurationIsCurrent } from './config.ts';
-import { getDb, runTransaction, type TxDb } from './db/index.ts';
+import { runTransaction, type TxDb } from './db/index.ts';
 
 export class AdmissionError extends Error {}
 const activeSql = `

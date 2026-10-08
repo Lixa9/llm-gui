@@ -116,7 +116,7 @@
       const attachment: PendingAttachment = { id: crypto.randomUUID(), localUrl, filename: file.name, mimeType: file.type, kind, status: 'uploading' };
       pendingAttachments = [...pendingAttachments, attachment];
       try {
-        const result = await api.uploads.upload(file, selectedModel);
+        const result = await api.uploads.upload(file);
         if (destroyed || discardedAttachmentIds.has(attachment.id)) {
           discardStoredUpload(result.id);
           continue;

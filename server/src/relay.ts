@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from './auth.ts';
-import { getDb, generateId, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
+import { generateId, runTransaction, safeParseJson, type TxDb } from './db/index.ts';
 import { getConfig, providerIdentity } from './config.ts';
 import { acquireStream, closeStream } from './ratelimit.ts';
 import { fetchModels } from './models.ts';
@@ -34,10 +34,6 @@ const regenerateRequestSchema = z.object({
   model: z.string().trim().min(1).max(300),
   system_prompt: z.string().max(100_000).optional(),
 });
-
-function serializeMessage(row: MessageRow): Omit<MessageRow, 'content'> & { content: MessageContentPart[] } {
-  return { ...row, content: safeParseJson<MessageContentPart[]>(row.content, []) };
-}
 
 export const relayRouter = new Hono();
 relayRouter.use('*', requireAuth);

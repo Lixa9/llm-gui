@@ -103,10 +103,6 @@ function createConversationsStore() {
     }
   }
 
-  function updateTitle(id: string, title: string) {
-    list = list.map(c => c.id === id ? { ...c, title, title_auto: true } : c);
-  }
-
   function setActive(id: string | null) {
     activeId = id;
   }
@@ -168,7 +164,7 @@ function createConversationsStore() {
     get searchResults() { return searchResults; },
     get searching() { return searching; },
     load, create, update, refresh, refreshUntilTitle, rename, pin, move,
-    remove, removeAll, duplicate, fork, search, updateTitle, setActive, setActiveFolder, setDragging,
+    remove, removeAll, duplicate, fork, search, setActive, setActiveFolder, setDragging,
     createFolder, renameFolder, deleteFolder,
   };
 }
