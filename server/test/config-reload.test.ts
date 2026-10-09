@@ -7,7 +7,7 @@ import test from 'node:test';
 const configDir = await mkdtemp(join(tmpdir(), 'llm-gui-config-'));
 process.env.CONFIG_DIR = configDir;
 
-const { getConfig, loadConfig, reloadConfig } = await import('../src/config.ts');
+const { getConfig, loadConfig, reloadConfig, refreshChangedConfiguration } = await import('../src/config.ts');
 const { DEFAULT_AUTO_TITLE_PROMPT } = await import('../src/title-request.ts');
 
 async function writeConfigs(appName: string, conversationYaml = ''): Promise<void> {
@@ -22,6 +22,28 @@ async function writeConfigs(appName: string, conversationYaml = ''): Promise<voi
 
 test.after(async () => {
   await rm(configDir, { recursive: true, force: true });
+});
+
+test('unchanged periodic checks avoid reconciliation and changed checks are coalesced', async () => {
+  await writeConfigs('Before periodic');
+  loadConfig();
+  let reconciliations = 0;
+  const dependencies = { reconcile: async () => { reconciliations++; }, invalidateCaches: async () => {} };
+  await refreshChangedConfiguration(dependencies);
+  assert.equal(reconciliations, 0);
+  await writeConfigs('After periodic');
+  await Promise.all(Array.from({ length: 8 }, () => refreshChangedConfiguration(dependencies)));
+  assert.equal(reconciliations, 1);
+  assert.equal(getConfig().app.name, 'After periodic');
+  await refreshChangedConfiguration(dependencies);
+  assert.equal(reconciliations, 1);
+  await writeFile(join(configDir, 'models.yaml'), '# formatting change only\nmodels: []\n');
+  await refreshChangedConfiguration(dependencies);
+  assert.equal(reconciliations, 1);
+  await writeFile(join(configDir, 'config.yaml'), 'app: [invalid\n');
+  await refreshChangedConfiguration(dependencies);
+  assert.equal(getConfig().app.name, 'After periodic');
+  assert.equal(reconciliations, 1);
 });
 
 test('successful reload reconciles the candidate before committing it', async () => {

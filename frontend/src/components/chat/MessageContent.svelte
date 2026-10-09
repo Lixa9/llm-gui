@@ -1,6 +1,8 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { renderMarkdown } from '$lib/markdown';
+  import { createRenderScheduler } from '$lib/renderScheduler';
+  import { onDestroy, untrack } from 'svelte';
   import type { MessageContentPart, ImageUrlPart, FilePart } from '$lib/types';
   import { fileIcon } from '$lib/fileUtils';
 
@@ -30,7 +32,14 @@ const text = $derived(
       : textParts.map(p => p.text).join('\n'),
   );
 
-  const rendered = $derived(role === 'assistant' ? renderMarkdown(text) : null);
+  let rendered = $state(untrack(() => role === 'assistant' ? renderMarkdown(text) : ''));
+  const render = createRenderScheduler(value => { rendered = renderMarkdown(value); });
+  $effect(() => {
+    const value = text;
+    const active = streaming;
+    if (role === 'assistant') untrack(() => render.update(value, active));
+  });
+  onDestroy(() => render.destroy());
 
   let coverage=$state<{warning?:string;page_count?:number;served_pages?:number;sheet_names?:string[];entries?:Array<{name:string;status:string;reason?:string}>;error?:string}|null>(null);
   async function showCoverage(url:string){try{const result=await api.uploads.metadata(url.split('/').pop()!);coverage=result.coverage;}catch(error){coverage={error:(error as Error).message};}}

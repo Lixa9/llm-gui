@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { compress } from 'hono/compress';
 import { bodyLimit } from 'hono/body-limit';
 import { readFile } from 'fs/promises';
 import { loadConfig, reloadConfig, getConfig, refreshChangedConfiguration, runtimeConfigurationIsCurrent } from './config.ts';
@@ -11,7 +10,7 @@ import { authRouter, purgeExpiredSessions, isLocalAuthEnabled } from './auth.ts'
 import { relayRouter } from './relay.ts';
 import { conversationsRouter } from './conversations.ts';
 import { foldersRouter } from './folders.ts';
-import { modelsRouter } from './models.ts';
+import { modelsRouter, startModelRefresh, stopModelRefresh } from './models.ts';
 import { promptsRouter } from './prompts.ts';
 import { presetsRouter } from './presets.ts';
 import { draftsRouter } from './drafts.ts';
@@ -26,6 +25,7 @@ import { waitForBackgroundTasks } from './lifecycle.ts';
 import { beginGenerationShutdown, initGenerationWorker, releaseGenerationJobs } from './generation-worker.ts';
 import { beginAutomationShutdown, initAutomationWorker, releaseAutomationJobs } from './automation-runner.ts';
 import { beginTitleShutdown, initTitleWorker, releaseTitleJobs } from './title-worker.ts';
+import { responseCompression, requestTiming, startEventLoopMonitoring } from './http-performance.ts';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const STATIC_DIR = process.env.STATIC_DIR ?? './static';
@@ -50,19 +50,8 @@ await reconcileYaml();
 const app = new Hono();
 
 // Compression
-app.use('*', compress());
-
-// Request logger middleware
-app.use('*', async (c, next) => {
-  const start = Date.now();
-  await next();
-  logger.info('request', {
-    method: c.req.method,
-    path: c.req.path,
-    status: c.res.status,
-    ms: Date.now() - start,
-  });
-});
+app.use('*', requestTiming);
+app.use('*', responseCompression);
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const DEFAULT_API_BODY_LIMIT = 2 * 1024 * 1024;
@@ -158,6 +147,8 @@ await initScheduler();
 initGenerationWorker();
 initAutomationWorker();
 initTitleWorker();
+startModelRefresh();
+const stopEventLoopMonitoring = startEventLoopMonitoring();
 
 // Periodic backend connectivity warning
 const BACKEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -226,6 +217,8 @@ async function handleShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   isShuttingDown = true;
+  stopModelRefresh();
+  stopEventLoopMonitoring();
   clearInterval(configRefreshInterval);
   beginGenerationShutdown();
   beginAutomationShutdown();

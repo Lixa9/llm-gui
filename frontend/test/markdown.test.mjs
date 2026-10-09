@@ -28,6 +28,15 @@ function assertNoEventHandlers(root) {
   }
 }
 
+test('cached code highlighting preserves the final HTML and always sanitizes surrounding input', () => {
+  const code = '```js\nconst value = "<script>";\n```';
+  const first = renderMarkdown(code);
+  assert.equal(renderMarkdown(code), first);
+  const fragment = renderedFragment(`${code}\n<img src="x" onerror="ATTACKER()">`);
+  assertNoEventHandlers(fragment);
+  assert.equal(fragment.querySelector('pre code').textContent, 'const value = "<script>";');
+});
+
 test('markdown strips executable elements and event handlers before HTML insertion', () => {
   const fragment = renderedFragment([
     '<script>ATTACKER()</script>',

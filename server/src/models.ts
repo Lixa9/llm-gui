@@ -13,9 +13,14 @@ interface OpenAIModel {
 
 let _cache: { models: ModelYamlEntry[]; at: number } | null = null;
 const CACHE_TTL = 60_000;
+let revision = 0;
+let refresh: Promise<void> | null = null;
+let refreshTimer: NodeJS.Timeout | null = null;
 
 export function invalidateModelCache() {
   _cache = null;
+  revision++;
+  refresh = null;
 }
 
 function parseModels(data: unknown): OpenAIModel[] | null {
@@ -28,53 +33,64 @@ function parseModels(data: unknown): OpenAIModel[] | null {
   return null;
 }
 
-export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
+async function refreshModels(): Promise<void> {
+  if (refresh) return refresh;
   const cfg = getConfig();
-
-  if (!_cache || Date.now() - _cache.at > CACHE_TTL) {
-    if (!cfg.openai.base_url) {
-      _cache = { models: cfg.models ?? [], at: Date.now() };
-    } else {
+  const currentRevision = revision;
+  const previous = _cache;
+  const task = (async () => {
+    let models = previous?.models ?? cfg.models ?? [];
+    if (cfg.openai.base_url) {
       try {
         const res = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/models`, {
           headers: cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {},
           signal: AbortSignal.timeout(10_000),
         });
         if (res.ok) {
-          const raw = await res.json();
-          const list = parseModels(raw);
+          const list = parseModels(await res.json());
           if (list) {
-            const yamlModels = cfg.models ?? [];
-            const yamlById = new Map(yamlModels.map(m => [m.id, m]));
-            const merged: ModelYamlEntry[] = list.map((m: OpenAIModel) => yamlById.get(m.id) ?? {
-              id: m.id,
-              display_name: m.id,
-              allowed_roles: ['admin'],
+            const yamlById = new Map((cfg.models ?? []).map(model => [model.id, model]));
+            models = list.map(model => yamlById.get(model.id) ?? {
+              id: model.id, display_name: model.id, allowed_roles: ['admin'],
             });
-            _cache = { models: merged, at: Date.now() };
-          } else {
-            logger.warn('Unexpected /models response format', { url: cfg.openai.base_url });
-            _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };
-          }
+          } else logger.warn('Unexpected /models response format', { url: cfg.openai.base_url });
         } else {
-          logger.warn('Failed to fetch models from inference engine', {
-            url: cfg.openai.base_url,
-            status: res.status,
-          });
-          _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };
+          await res.body?.cancel();
+          logger.warn('Failed to fetch models from inference engine', { url: cfg.openai.base_url, status: res.status });
         }
-      } catch (e) {
-        logger.error('Error fetching models from inference engine', {
-          url: cfg.openai.base_url,
-          error: (e as Error).message,
-        });
-        _cache = { models: _cache?.models ?? cfg.models ?? [], at: Date.now() };
+      } catch (error) {
+        logger.error('Error fetching models from inference engine', { url: cfg.openai.base_url, error: (error as Error).message });
       }
     }
-  }
+    if (revision === currentRevision && getConfig() === cfg) _cache = { models, at: Date.now() };
+  })();
+  refresh = task;
+  try { await task; }
+  finally { if (refresh === task) refresh = null; }
+}
 
-  const cache = _cache;
-  return cache.models.filter(m => m.allowed_roles.includes(userRole as 'admin' | 'user'));
+export async function fetchModels(userRole: string): Promise<ModelYamlEntry[]> {
+  while (!_cache || Date.now() - _cache.at > CACHE_TTL) {
+    await refreshModels();
+  }
+  return _cache.models.filter(model => model.allowed_roles.includes(userRole as 'admin' | 'user'));
+}
+
+export function startModelRefresh(): void {
+  if (refreshTimer) return;
+  const tick = () => {
+    if (!_cache || Date.now() - _cache.at >= CACHE_TTL - 15_000) {
+      void refreshModels().catch(error => logger.warn('Model refresh failed', { error: String(error) }));
+    }
+  };
+  tick();
+  refreshTimer = setInterval(tick, 5_000);
+  refreshTimer.unref();
+}
+
+export function stopModelRefresh(): void {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
 }
 
 export async function findAllowedModel(modelId: string, userRole: string): Promise<ModelYamlEntry | undefined> {

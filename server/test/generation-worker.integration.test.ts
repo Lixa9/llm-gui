@@ -34,7 +34,7 @@ function pdfWithPages(count: number): Buffer {
 
 test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }, async () => {
   const configDir = await mkdtemp(join(tmpdir(), 'llm-generation-test-'));
-  let mode: 'complete' | 'slow' | 'idle' | 'delayed' = 'complete';
+  let mode: 'complete' | 'slow' | 'idle' | 'delayed' | 'checkpoint' = 'complete';
   let nonStreamingCalls = 0;
   const nonStreamingRequests: any[] = [];
   const streamingRequests: any[] = [];
@@ -70,6 +70,9 @@ test('durable background job lifecycle', { skip: !databaseUrl, timeout: 30_000 }
         response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
       } else if (mode === 'delayed') {
         setTimeout(() => response.end('data: {"choices":[{"delta":{"content":"hardcoded PDF response"}}]}\n\ndata: [DONE]\n\n'), 200);
+      } else if (mode === 'checkpoint') {
+        response.write('data: {"choices":[{"delta":{"content":"first"}}]}\n\n');
+        setTimeout(() => response.end('data: {"choices":[{"delta":{"content":" second"}}]}\n\ndata: [DONE]\n\n'), 50);
       }
     });
   });
@@ -101,7 +104,7 @@ conversation:
   process.env.LOCAL_AUTH = 'true';
 
   const { loadConfig } = await import('../src/config.ts');
-  const { openDatabase, closeDatabase, getDb, generateId, runTransaction } = await import('../src/db/index.ts');
+  const { openDatabase, closeDatabase, getDb, generateId, runTransaction, Db } = await import('../src/db/index.ts');
   const { runGeneration, cancelGeneration } = await import('../src/generation-worker.ts');
   const { runTitleJob } = await import('../src/title-worker.ts');
   const { enqueueAutomationRun, runAutomationJob } = await import('../src/automation-runner.ts');
@@ -151,6 +154,95 @@ conversation:
     assert.ok(diagnosticRow!.diagnostics.request_bytes > 0);
     assert.equal(diagnosticRow?.diagnostics.output_bytes, Buffer.byteLength('new answer'));
     assert.doesNotMatch(JSON.stringify(diagnosticRow?.diagnostics), /"prompt"|new answer/);
+
+    const measured = await db.prepare('SELECT diagnostics FROM chat_generations WHERE id=?')
+      .get<{ diagnostics: { timing: { queue_ms: number; preparation_ms: number; upstream_first_token_ms: number; attempt_ms: number } } }>(normal.assistantId);
+    assert.ok(measured!.diagnostics.timing.queue_ms >= 0);
+    assert.ok(measured!.diagnostics.timing.preparation_ms >= 0);
+    assert.ok(measured!.diagnostics.timing.upstream_first_token_ms >= 0);
+    assert.ok(measured!.diagnostics.timing.attempt_ms >= measured!.diagnostics.timing.preparation_ms);
+
+    const mismatched = await createJob();
+    await runGeneration(mismatched.assistantId, undefined, {
+      input: [{ role: 'user', content: 'must not be sent' }],
+      manifest: [{ role: 'user', content: 'different snapshot' }],
+      model: getConfig().models![0], config: getConfig(),
+    });
+    assert.deepEqual(streamingRequests.at(-1).messages, [{ role: 'user', content: 'prompt' }]);
+
+    const originalPrepare = Db.prototype.prepare;
+    const slowCheckpoint = await createJob();
+    let releaseCheckpoint!: () => void;
+    let enteredCheckpoint!: () => void;
+    const checkpointEntered = new Promise<void>(resolve => { enteredCheckpoint = resolve; });
+    const checkpointReleased = new Promise<void>(resolve => { releaseCheckpoint = resolve; });
+    Db.prototype.prepare = function(sql: string) {
+      const statement = originalPrepare.call(this, sql);
+      if (sql.includes('WITH owned_generation AS')) {
+        const originalRun = statement.run.bind(statement);
+        statement.run = async (...params: unknown[]) => {
+          enteredCheckpoint();
+          await checkpointReleased;
+          return originalRun(...params);
+        };
+      }
+      return statement;
+    };
+    const streamed: string[] = [];
+    let reportSecondDelta!: () => void;
+    const secondDelta = new Promise<void>(resolve => { reportSecondDelta = resolve; });
+    mode = 'checkpoint';
+    const delayedRun = runGeneration(slowCheckpoint.assistantId, { send: event => {
+      const frame = event as { type: string; content: string };
+      if (frame.type === 'delta') {
+        streamed.push(frame.content);
+        if (streamed.length === 2) reportSecondDelta();
+      }
+    } });
+    try {
+      await checkpointEntered;
+      await secondDelta;
+      assert.deepEqual(streamed, ['first', ' second']);
+      assert.equal((await db.prepare('SELECT status FROM chat_generations WHERE id=?').get<{status:string}>(slowCheckpoint.assistantId))?.status, 'running');
+      releaseCheckpoint();
+      await delayedRun;
+      assert.deepEqual(await db.prepare('SELECT content_text,status FROM messages WHERE id=?').get(slowCheckpoint.assistantId), { content_text:'first second',status:'done' });
+    } finally {
+      releaseCheckpoint();
+      Db.prototype.prepare = originalPrepare;
+      await delayedRun;
+      mode = 'complete';
+    }
+
+    const racedCancellation = await createJob();
+    let releaseCancelledCheckpoint!: () => void;
+    let reportCancelledCheckpoint!: () => void;
+    const cancelledCheckpointEntered = new Promise<void>(resolve => { reportCancelledCheckpoint = resolve; });
+    const cancelledCheckpointReleased = new Promise<void>(resolve => { releaseCancelledCheckpoint = resolve; });
+    Db.prototype.prepare = function(sql: string) {
+      const statement = originalPrepare.call(this, sql);
+      if (sql.includes('WITH owned_generation AS')) {
+        const originalRun = statement.run.bind(statement);
+        statement.run = async (...params: unknown[]) => {
+          reportCancelledCheckpoint();
+          await cancelledCheckpointReleased;
+          return originalRun(...params);
+        };
+      }
+      return statement;
+    };
+    const racingRun = runGeneration(racedCancellation.assistantId);
+    try {
+      await cancelledCheckpointEntered;
+      assert.equal((await cancelGeneration(racedCancellation.assistantId, owner))?.status, 'cancelled');
+      releaseCancelledCheckpoint();
+      await racingRun;
+      assert.equal((await db.prepare('SELECT status FROM messages WHERE id=?').get<{status:string}>(racedCancellation.assistantId))?.status, 'aborted');
+    } finally {
+      releaseCancelledCheckpoint();
+      Db.prototype.prepare = originalPrepare;
+      await racingRun;
+    }
 
     const fenced = await createJob();
     const priorActivation = await db.prepare("SELECT revision FROM runtime_configuration WHERE key='active'").get<{revision:string}>();
@@ -418,6 +510,31 @@ conversation:
     // Attachment edits and snapshots use one acceptance transaction.
     const app=new Hono();app.route('/api/chat',relayRouter);app.route('/api/drafts',draftsRouter);app.route('/api/conversations',conversationsRouter);app.route('/api/uploads',uploadsRouter);
     const headers={cookie:`session=${sessionToken}`,'content-type':'application/json'};
+
+    const rawImageId = generateId();
+    await db.prepare("INSERT INTO uploads (id,owner_sub,sha256,filename,mime_type,size,data,derived_images) VALUES (?,?,'hash','legacy.png','image/png',3,?,'null'::jsonb)")
+      .run(rawImageId,owner,Buffer.from([0,0,0]));
+    const { createAttachmentResolver } = await import('../src/attachment-transport.ts');
+    const imageParts = [{type:'image_url' as const,image_url:{url:`/api/uploads/${rawImageId}`}}];
+    const resolveImage = await createAttachmentResolver([{content:imageParts}],owner,getConfig().models![0],db);
+    const imageContent = await resolveImage(imageParts);
+    assert.deepEqual(imageContent,[{type:'text',text:''},{type:'text',text:'Attachment: "legacy.png"\n\n'},{type:'image_url',image_url:{url:'data:image/png;base64,AAAA',detail:'auto'}}]);
+    await db.prepare('DELETE FROM uploads WHERE id=?').run(rawImageId);
+
+    const queueLimits = { ...getConfig().rate_limits };
+    const waitingJob = await createJob();
+    const beforeRejectedChat = await db.prepare('SELECT count(*)::int AS count FROM conversations WHERE owner_sub=?').get<{count:number}>(owner);
+    const callsBeforeRejection = streamingRequests.length;
+    try {
+      getConfig().rate_limits.max_queued_jobs = 1;
+      const fullQueue = await app.request('/api/chat', { method:'POST', headers, body:JSON.stringify({model:'test',new_user_message:{content:[{type:'text',text:'must roll back'}]}}) });
+      assert.equal(fullQueue.status, 429, await fullQueue.clone().text());
+      assert.deepEqual(await db.prepare('SELECT count(*)::int AS count FROM conversations WHERE owner_sub=?').get(owner), beforeRejectedChat);
+      assert.equal(streamingRequests.length, callsBeforeRejection);
+    } finally {
+      Object.assign(getConfig().rate_limits, queueLimits);
+      await cancelGeneration(waitingJob.assistantId, owner);
+    }
     const corruptOffice = new FormData();
     corruptOffice.set('file', new File(['not an Office document'], 'broken.docx', {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

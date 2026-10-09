@@ -64,6 +64,8 @@ docker compose logs -f chat
 
 Open <http://localhost:3000> for the default local deployment. The `/health` endpoint reports whether the web process is running or shutting down; it does not probe PostgreSQL or the upstream API.
 
+Health responses are never compressed. See [performance notes](docs/performance.md) for benchmarks, diagnostics, and the transport-level changes introduced by performance optimizations.
+
 After changing `.env`, run `docker compose up -d` to recreate containers with the new environment. A plain `docker compose restart` does not apply environment changes. For YAML-only changes, use the reload command below.
 
 ## Configuration

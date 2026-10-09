@@ -8,7 +8,11 @@ import { enqueueTitleJob } from './title-worker.ts';
 import type { BackgroundSseClient } from './background-sse.ts';
 import type { ChatGenerationRow, ChatGenerationStatus, MessageContentPart, MessageRow, ModelYamlEntry } from './types.ts';
 
-import { resolveMessageContent, assertRequestBudget } from './attachment-transport.ts';
+import { createAttachmentResolver, createRequestBudget, type RequestBudget } from './attachment-transport.ts';
+import { serializeJson } from './serialization.ts';
+import { createCheckpointWriter } from './checkpoint-writer.ts';
+import { performance } from 'node:perf_hooks';
+import { isDeepStrictEqual } from 'node:util';
 import { resolveCurrentRole } from './auth.ts';
 import { findAllowedModel } from './models.ts';
 import { admittedClaim } from './work-admission.ts';
@@ -30,6 +34,13 @@ interface GenerationSnapshot {
 interface RunningControl {
   controller: AbortController;
   reason: 'cancelled' | 'timed_out' | 'idle_timeout' | 'superseded' | 'shutdown' | null;
+}
+
+interface PreparedGeneration {
+  input: unknown[];
+  config: ReturnType<typeof getConfig>;
+  manifest: unknown[];
+  model: ModelYamlEntry;
 }
 
 export interface GenerationView {
@@ -54,10 +65,6 @@ let scanBusy = false;
 
 function serializeMessage(row: MessageRow) {
   return { ...row, content: safeParseJson<MessageContentPart[]>(row.content, []) };
-}
-
-function contentJson(text: string): string {
-  return JSON.stringify(text ? [{ type: 'text', text }] : []);
 }
 
 function abortControl(control: RunningControl, reason: RunningControl['reason']): void {
@@ -93,12 +100,16 @@ async function claimGeneration(id: string): Promise<ChatGenerationRow | undefine
 
 async function checkpoint(row: ChatGenerationRow, fullText: string): Promise<boolean> {
   const result = await getDb().prepare(`
+    WITH owned_generation AS (
+      SELECT assistant_message_id FROM chat_generations
+      WHERE id=? AND status='running' AND lease_owner=? AND attempt=?
+      FOR UPDATE
+    )
     UPDATE messages m
     SET content=?, content_text=?, status='streaming'
-    FROM chat_generations g
-    WHERE m.id=g.assistant_message_id AND g.id=? AND g.status='running'
-      AND g.lease_owner=? AND g.attempt=?
-  `).run(contentJson(fullText), fullText, row.id, WORKER_ID, row.attempt);
+    FROM owned_generation g
+    WHERE m.id=g.assistant_message_id AND m.status='streaming'
+  `).run(row.id, WORKER_ID, row.attempt, await serializeJson(fullText ? [{ type: 'text', text: fullText }] : []), fullText);
   return result.changes > 0;
 }
 
@@ -109,13 +120,14 @@ async function finalizeGeneration(
   error: string | null,
   snapshot?: GenerationSnapshot,
 ): Promise<MessageRow | undefined> {
+  const serialized = await serializeJson(fullText ? [{ type: 'text', text: fullText }] : []);
   return runTransaction(async db => {
     const current = await db.prepare('SELECT * FROM chat_generations WHERE id=? FOR UPDATE').get<ChatGenerationRow>(row.id);
     if (!current || current.status !== 'running' || current.lease_owner !== WORKER_ID || current.attempt !== row.attempt) return undefined;
     await db.prepare('DELETE FROM generation_uploads WHERE generation_id=?').run(row.id);
     const messageStatus = status;
     await db.prepare('UPDATE messages SET content=?, content_text=?, status=? WHERE id=?')
-      .run(contentJson(fullText), fullText, messageStatus, row.assistant_message_id);
+      .run(serialized, fullText, messageStatus, row.assistant_message_id);
     await db.prepare(`
       UPDATE chat_generations
       SET status=?, last_error=?, lease_owner=NULL, lease_until=NULL, request_snapshot='{}'::jsonb,
@@ -183,19 +195,28 @@ async function generationView(id: string, ownerSub?: string): Promise<Generation
   return { id: row.id, conversation_id: row.conversation_id, assistant_message_id: row.assistant_message_id, status: row.status, attempt: row.attempt, last_error: row.last_error, message };
 }
 
-async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseClient): Promise<void> {
+async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseClient, prepared?: PreparedGeneration): Promise<void> {
   const snapshot = safeParseJson<GenerationSnapshot>(row.request_snapshot, {} as GenerationSnapshot);
   const cfg = getConfig();
   const control: RunningControl = { controller: new AbortController(), reason: null };
   activeJobs.set(row.id, control);
   let fullText = '';
-  let lastCheckpoint = 0;
+  const started = performance.now();
+  let preparedAt: number | null = null;
+  let upstreamAt: number | null = null;
+  let firstTokenAt: number | null = null;
+  let checkpointError: Error | null = null;
+  const checkpoints = createCheckpointWriter(text => checkpoint(row, text), error => {
+    checkpointError = error;
+    if (error.message === 'Generation checkpoint lost its lease') abortControl(control, 'superseded');
+    else control.controller.abort(error);
+  }, CHECKPOINT_MS);
   let outputBytes = 0;
   let finishReason: string | null = null;
   let usage: Record<string, unknown> | undefined;
   let requestId: string | null = null;
   let providerStatus: number | null = null;
-  let inputBudget: ReturnType<typeof assertRequestBudget> | undefined;
+  let inputBudget: RequestBudget | undefined;
   let requestBytes = 0;
   const saveDiagnostics = () => getDb()
     .prepare('UPDATE chat_generations SET diagnostics=?::jsonb WHERE id=? AND lease_owner=? AND attempt=?')
@@ -207,6 +228,12 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
       output_bytes: outputBytes,
       request_bytes: requestBytes,
       input: inputBudget,
+      timing: {
+        queue_ms: Math.max(0, Date.now() - row.created_at - (performance.now() - started)),
+        preparation_ms: preparedAt,
+        upstream_first_token_ms: firstTokenAt !== null && upstreamAt !== null ? firstTokenAt - upstreamAt : null,
+        attempt_ms: performance.now() - started,
+      },
     }), row.id, WORKER_ID, row.attempt)
     .catch(() => logger.warn('Could not store generation diagnostics', { generation_id: row.id }));
   let heartbeatBusy = false;
@@ -246,19 +273,34 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
     assertProviderIdentity(snapshot.provider);
     if (snapshot.transport_version !== 2 || !snapshot.input_messages || !snapshot.model_entry)
       throw new UpstreamError('This queued request uses the previous conversation format. Resubmit it to send full history.');
-    const input: unknown[] = [];
-    for (const message of snapshot.input_messages) {
-      input.push({role:message.role,content:typeof message.content === 'string' ? message.content : await resolveMessageContent(message.content,row.owner_sub,snapshot.model_entry,getDb(),message.role)});
-      assertRequestBudget(input,snapshot.model_entry);
+    const canReuse = prepared?.config === cfg && row.attempt === 1
+      && isDeepStrictEqual(prepared.manifest, snapshot.input_messages)
+      && isDeepStrictEqual(prepared.model, snapshot.model_entry);
+    const input: unknown[] = canReuse ? prepared!.input : [];
+    const budget = createRequestBudget(snapshot.model_entry);
+    if (!input.length) {
+      const resolve = await createAttachmentResolver(snapshot.input_messages, row.owner_sub, snapshot.model_entry, getDb());
+      for (const message of snapshot.input_messages) {
+        const entry = { role: message.role, content: typeof message.content === 'string' ? message.content : await resolve(message.content, message.role) };
+        input.push(entry);
+        await budget.add(entry);
+      }
+    } else {
+      for (const message of input) await budget.add(message);
     }
     const currentRole=await resolveCurrentRole(row.owner_sub);
     const currentModel=currentRole ? await findAllowedModel(snapshot.model,currentRole) : undefined;
     if(!currentModel)throw new UpstreamError('Model access changed before this request could run');
-    inputBudget=assertRequestBudget(input,snapshot.model_entry ?? currentModel);
+    inputBudget=budget.finish();
     assertProviderIdentity(snapshot.provider);
     if(!await runtimeConfigurationIsCurrent())throw new UpstreamError('Configuration is updating. The request will be retried.',true);
-    const requestBody=JSON.stringify({ model: snapshot.model, messages: input, stream: true, ...(snapshot.model_entry?.capabilities?.stream_usage ? {stream_options:{include_usage:true}} : {}) });
+    const requestBody=await serializeJson({ model: snapshot.model, messages: input, stream: true, ...(snapshot.model_entry?.capabilities?.stream_usage ? {stream_options:{include_usage:true}} : {}) });
     requestBytes=Buffer.byteLength(requestBody);
+    if (!await runtimeConfigurationIsCurrent() || cfg !== getConfig())
+      throw new UpstreamError('Configuration is updating. The request will be retried.', true);
+    assertProviderIdentity(snapshot.provider);
+    preparedAt = performance.now() - started;
+    upstreamAt = preparedAt;
     const response = await fetch(`${cfg.openai.base_url.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { ...(cfg.openai.api_key ? { Authorization: `Bearer ${cfg.openai.api_key}` } : {}), 'Content-Type': 'application/json' },
@@ -289,14 +331,12 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
           if (parsed.choices?.[0]?.finish_reason) finishReason = parsed.choices[0].finish_reason;
           const delta = parsed.choices?.[0]?.delta?.content;
           if (delta) {
+            firstTokenAt ??= performance.now() - started;
             outputBytes += Buffer.byteLength(delta);
             if (outputBytes > cfg.conversation.max_output_bytes) throw new UpstreamError('Response exceeds the configured output limit');
             fullText += delta;
             client?.send({ type: 'delta', content: delta });
-            if (Date.now() - lastCheckpoint >= CHECKPOINT_MS) {
-              if (!await checkpoint(row, fullText)) abortControl(control, 'superseded');
-              lastCheckpoint = Date.now();
-            }
+            checkpoints.submit(fullText);
           }
         }
         if (done) break;
@@ -304,6 +344,10 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
       if (done) break;
     }
     if (!done) throw new Error('Upstream stream ended before completion');
+
+    await checkpoints.stop();
+    if (checkpointError) throw checkpointError;
+    if (control.controller.signal.aborted) throw control.controller.signal.reason;
 
     if (finishReason === 'length') throw new UpstreamError('Model response was truncated by its token limit');
     if (!fullText) throw new UpstreamError('Model returned no text response');
@@ -313,6 +357,7 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
       client?.send({ type: 'done', message: serializeMessage(assistant) });
     }
   } catch (error) {
+    await checkpoints.stop();
     await saveDiagnostics();
     const view = await generationView(row.id).catch(() => null);
     if (!view && row.rate_lease_id) {
@@ -335,6 +380,7 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
       }
     }
   } finally {
+    await checkpoints.stop();
     clearInterval(heartbeat);
     clearTimeout(idleTimer!);
     clearTimeout(totalTimer);
@@ -343,11 +389,11 @@ async function executeGeneration(row: ChatGenerationRow, client?: BackgroundSseC
   }
 }
 
-export async function runGeneration(id: string, client?: BackgroundSseClient): Promise<boolean> {
+export async function runGeneration(id: string, client?: BackgroundSseClient, prepared?: PreparedGeneration): Promise<boolean> {
   if (!acceptingWork || activeJobs.has(id) || activeJobs.size >= getConfig().rate_limits.global_workers) return false;
   const row = await claimGeneration(id);
   if (!row) return false;
-  await executeGeneration(row, client);
+  await executeGeneration(row, client, prepared);
   return true;
 }
 

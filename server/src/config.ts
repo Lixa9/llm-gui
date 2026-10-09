@@ -1,4 +1,5 @@
 import { readFileSync, accessSync, constants, writeFileSync, mkdirSync } from 'fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { z } from 'zod';
@@ -141,13 +142,28 @@ export function configurationRevision(config=getConfig()):string {
 export async function runtimeConfigurationIsCurrent():Promise<boolean>{
   const {getDb}=await import('./db/index.ts');
   const row=await getDb().prepare("SELECT revision FROM runtime_configuration WHERE key='active'").get<{revision:string}>();
-  return !row || row.revision===configurationRevision();
+  return !row || row.revision===activeRevision;
 }
 /** All replicas watch the same configuration mount. A shared activation revision
  * fences requests/work on stale replicas until their next successful reload. */
-export async function refreshChangedConfiguration():Promise<void>{
-  try{if(configurationRevision(readConfig())!==configurationRevision())await reloadConfig();}
-  catch(error){logger.warn('Configuration refresh failed; retaining current configuration',{error:String(error)});}
+let refreshInProgress: Promise<void> | null = null;
+export async function refreshChangedConfiguration(dependencies: ReloadConfigDependencies = {}):Promise<void>{
+  if (refreshInProgress) return refreshInProgress;
+  const task = (async () => {
+    try {
+      const source = await readConfigurationSource();
+      if (source !== activeSource) {
+        const candidate = readConfig(source);
+        if (configurationRevision(candidate) !== configurationRevision()) await reloadConfig(dependencies);
+        else activeSource = source;
+      }
+    } catch (error) {
+      logger.warn('Configuration refresh failed; retaining current configuration', { error: String(error) });
+    }
+  })();
+  refreshInProgress = task;
+  try { await task; }
+  finally { if (refreshInProgress === task) refreshInProgress = null; }
 }
 
 /** Credentials never enter durable request snapshots. A changed account/key fails closed. */
@@ -260,27 +276,43 @@ function expandEnv(obj: unknown): unknown {
   return obj;
 }
 
-function loadYaml(name: string): unknown {
-  const path = join(CONFIG_DIR, name);
-  try {
-    const raw = readFileSync(path, 'utf8');
-    return expandEnv(parseYaml(raw) as unknown ?? {});
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw e;
-  }
-}
-
 let _config: AppConfig | null = null;
 let reloadQueue: Promise<void> = Promise.resolve();
+let activeSource = '';
+let loadedSource = '';
+let activeRevision = '';
 
-function readConfig(): AppConfig {
-  scaffoldConfigIfNeeded();
-  const parsed = configSchema.parse(loadYaml('config.yaml'));
-  const models = z.object({models:z.array(modelSchema).default([])}).strict().parse(loadYaml('models.yaml')).models;
-  const prompts = z.object({prompts:z.array(promptSchema).default([])}).strict().parse(loadYaml('prompts.yaml')).prompts;
-  const presets = z.object({presets:z.array(presetSchema).default([])}).strict().parse(loadYaml('presets.yaml')).presets;
-  const automations = z.object({automations:z.array(automationSchema).default([])}).strict().parse(loadYaml('automations.yaml')).automations;
+async function readConfigurationSource(): Promise<string> {
+  const files = await Promise.all(CONFIG_FILES.map(async name => {
+    try { return await readFile(join(CONFIG_DIR, name), 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    }
+  }));
+  return JSON.stringify([files, process.env]);
+}
+
+function readConfig(source?: string): AppConfig {
+  if (source === undefined) {
+    scaffoldConfigIfNeeded();
+    const files = CONFIG_FILES.map(name => {
+      try { return readFileSync(join(CONFIG_DIR, name), 'utf8'); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw error;
+      }
+    });
+    source = JSON.stringify([files, process.env]);
+  }
+  loadedSource = source;
+  const [files] = JSON.parse(source) as [string[]];
+  const yaml = (name: string) => expandEnv(parseYaml(files[CONFIG_FILES.indexOf(name)]) ?? {});
+  const parsed = configSchema.parse(yaml('config.yaml'));
+  const models = z.object({models:z.array(modelSchema).default([])}).strict().parse(yaml('models.yaml')).models;
+  const prompts = z.object({prompts:z.array(promptSchema).default([])}).strict().parse(yaml('prompts.yaml')).prompts;
+  const presets = z.object({presets:z.array(presetSchema).default([])}).strict().parse(yaml('presets.yaml')).presets;
+  const automations = z.object({automations:z.array(automationSchema).default([])}).strict().parse(yaml('automations.yaml')).automations;
   const candidate = {
     ...parsed,
     models: uniqueEntries(models, 'id', 'models'),
@@ -305,6 +337,8 @@ function readConfig(): AppConfig {
 export function loadConfig(): AppConfig {
   const config = readConfig();
   _config = config;
+  activeSource = loadedSource;
+  activeRevision = configurationRevision(config);
   return config;
 }
 
@@ -327,13 +361,16 @@ async function invalidateConfigCaches(): Promise<void> {
 async function performReload(dependencies: ReloadConfigDependencies): Promise<boolean> {
   logger.info('Reloading config (SIGHUP)');
   try {
-    const candidate = readConfig();
+    const source = await readConfigurationSource();
+    const candidate = readConfig(source);
     const reconcile = dependencies.reconcile ?? (async (config: AppConfig) => {
       const module = await import('./reconcile.ts');
       await module.reconcileYaml(config);
     });
     await reconcile(candidate);
     _config = candidate;
+    activeSource = source;
+    activeRevision = configurationRevision(candidate);
     try {
       await (dependencies.invalidateCaches ?? invalidateConfigCaches)();
     } catch (error) {

@@ -7,6 +7,7 @@ import { getConfig } from './config.ts';
 import { logger } from './logger.ts';
 import { FILE_FORMATS, recognizeFormat } from './formats.ts';
 import { processUpload } from './processing.ts';
+import { serializeJson } from './serialization.ts';
 import { publicFileMeta } from './content-blocks.ts';
 
 export const uploadsRouter = new Hono();
@@ -72,17 +73,19 @@ uploadsRouter.post('/', async (c) => {
     return c.json({ error: message }, message.includes('busy') ? 429 : 422);
   }
 
+  const imagesJson = await serializeJson(derivedImages);
+  const metaJson = await serializeJson(fileMeta);
   const storedBytes = buf.byteLength +
     Buffer.byteLength(extractedText ?? '', 'utf8') +
-    Buffer.byteLength(JSON.stringify(derivedImages), 'utf8') +
-    Buffer.byteLength(JSON.stringify(fileMeta), 'utf8');
+    Buffer.byteLength(imagesJson, 'utf8') +
+    Buffer.byteLength(metaJson, 'utf8');
   const id = await getDb().withAdvisoryLock(`storage-quota:${user.sub}`, async db => {
     if (quota > 0 && await storageUsage(user.sub, db) + storedBytes > quota) return null;
     const uploadId = generateId();
     await db.prepare(`
       INSERT INTO uploads (id, owner_sub, sha256, filename, mime_type, size, extracted_text, file_meta, data, derived_images)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)
-    `).run(uploadId, user.sub, sha256, file.name.slice(0, 255), mime, file.size, extractedText, JSON.stringify(fileMeta), buf, JSON.stringify(derivedImages));
+    `).run(uploadId, user.sub, sha256, file.name.slice(0, 255), mime, file.size, extractedText, metaJson, buf, imagesJson);
     return uploadId;
   });
   if (!id) return c.json({ error: 'Storage quota exceeded' }, 507);

@@ -50,11 +50,35 @@ hljs.registerLanguage('ruby', ruby);
 hljs.registerLanguage('rb', ruby);
 hljs.registerLanguage('plaintext', plaintext);
 
+let highlightedBytes = 0;
+const highlightedCode = new Map<string, string>();
+
+function highlight(text: string, language: string): string {
+  const key = `${language}\0${text}`;
+  const cached = highlightedCode.get(key);
+  if (cached !== undefined) {
+    highlightedCode.delete(key);
+    highlightedCode.set(key, cached);
+    return cached;
+  }
+  const html = hljs.highlight(text, { language }).value;
+  if (key.length + html.length <= 256 * 1024) {
+    while (highlightedBytes + key.length + html.length > 256 * 1024 || highlightedCode.size >= 64) {
+      const oldest = highlightedCode.keys().next().value!;
+      highlightedBytes -= oldest.length + highlightedCode.get(oldest)!.length;
+      highlightedCode.delete(oldest);
+    }
+    highlightedCode.set(key, html);
+    highlightedBytes += key.length + html.length;
+  }
+  return html;
+}
+
 marked.use({
   renderer: {
     code({ text, lang }) {
       const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
-      const highlighted = hljs.highlight(text, { language }).value;
+      const highlighted = highlight(text, language);
       const langLabel = language !== 'plaintext' ? `<span class="code-lang">${language}</span>` : '';
       const header = `<div class="code-header">${langLabel}<button class="copy-btn" aria-label="Copy code">Copy</button></div>`;
       return `<div class="code-block">${header}<pre><code class="hljs language-${language}">${highlighted}</code></pre></div>`;
