@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '../ui/Icon.svelte';
   import { onMount } from 'svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import SidebarConversation from './SidebarConversation.svelte';
@@ -99,7 +100,7 @@
 <aside class="sidebar">
   <div class="sidebar-header">
     <button class="new-chat-btn" onclick={newChat}>
-      <span>+</span> New Chat
+      <Icon name="plus" size={14} /> <span>New Chat</span>
     </button>
   </div>
 
@@ -155,7 +156,7 @@
         <input class="new-folder-input" bind:value={newFolderName} placeholder="Folder name" autofocus onkeydown={(e) => { if (e.key === 'Escape') creatingFolder = false; }} />
       </form>
     {:else}
-      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder">📁 New folder</button>
+      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder"><Icon name="folder" size={14} /> <span>New folder</span></button>
     {/if}
     <button
       class="sidebar-footer-btn danger"
@@ -164,7 +165,7 @@
       onclick={deleteAllChats}
       aria-label={confirmingDeleteAll ? 'Confirm delete all chats' : 'Delete all chats'}
       title={confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}
-    >🗑 {confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}</button>
+    ><Icon name="trash" size={14} /> <span>{confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}</span></button>
   </div>
 </aside>
 
@@ -251,10 +252,12 @@
     flex-shrink: 0;
   }
   .sidebar-footer-btn {
+    justify-content: flex-start;
+    gap: 6px;
     width: 100%;
     padding: 5px 8px;
     font-size: 12px;
-    color: #c0c0c0;
+    color: var(--text-secondary);
     background: transparent;
     border: none;
     border-radius: var(--radius-sm);

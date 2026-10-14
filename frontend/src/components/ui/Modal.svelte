@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   interface Props {
     open: boolean;
     onclose: () => void;
@@ -40,7 +41,7 @@
     {#if title}
       <div class="modal-header">
         <span>{title}</span>
-        <button class="modal-close" onclick={onclose} aria-label="Close">✕</button>
+        <button class="modal-close" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
       </div>
     {/if}
     <div class="modal-body">

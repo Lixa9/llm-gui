@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Icon from '../ui/Icon.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import type { MenuItem } from '../ui/ContextMenu.svelte';
   import type { Conversation } from '$lib/types';
@@ -87,15 +88,15 @@
   }
 
   const menuItems = $derived<MenuItem[]>([
-    { label: conversation.pinned ? 'Unpin' : 'Pin', icon: '📌', action: () => conversationsStore.pin(conversation.id, !conversation.pinned) },
-    { label: 'Move to: No folder', icon: '⊘', disabled: conversation.folder_id === null, action: () => conversationsStore.move(conversation.id, null) },
+    { label: conversation.pinned ? 'Unpin' : 'Pin', icon: 'pin', action: () => conversationsStore.pin(conversation.id, !conversation.pinned) },
+    { label: 'Move to: No folder', icon: 'no-folder', disabled: conversation.folder_id === null, action: () => conversationsStore.move(conversation.id, null) },
     ...conversationsStore.folders.map(folder => ({
       label: `Move to: ${folderLabel(folder.id)}`,
-      icon: '📁',
+      icon: 'folder' as const,
       disabled: conversation.folder_id === folder.id,
       action: () => conversationsStore.move(conversation.id, folder.id),
     })),
-    { label: 'Duplicate', icon: '⎘', action: () => conversationsStore.duplicate(conversation.id) },
+    { label: 'Duplicate', icon: 'copy', action: () => conversationsStore.duplicate(conversation.id) },
   ]);
 </script>
 
@@ -124,17 +125,17 @@
     tabindex="0"
     title={conversation.title}
   >
-    <span class="conv-pin" class:visible={conversation.pinned}>📌</span>
+    <span class="conv-pin" class:visible={conversation.pinned}><Icon name="pin" size={12} /></span>
     <span class="conv-title">{truncateTitle(conversation.title)}</span>
     {#if conversation.forked_from_id}
-      <span class="conv-fork-icon" title="Forked conversation">⎇</span>
+      <span class="conv-fork-icon" title="Forked conversation"><Icon name="fork" size={12} /></span>
     {/if}
     <button
       class="conv-action-btn"
       onclick={(e) => { e.stopPropagation(); startRename(); }}
       aria-label="Rename conversation"
       title="Rename conversation"
-    >✏</button>
+    ><Icon name="edit" size={14} /></button>
     <button
       class="conv-action-btn danger"
       class:confirming-delete={confirmingDelete}
@@ -142,8 +143,8 @@
       onclick={(e) => { e.stopPropagation(); deleteConversation(); }}
       aria-label={confirmingDelete ? 'Confirm delete conversation' : 'Delete conversation'}
       title={confirmingDelete ? 'Click again to delete conversation' : 'Delete conversation'}
-    >🗑</button>
-    <button class="conv-menu-btn" onclick={(e) => { e.stopPropagation(); openMenu(e); }} aria-label="More options">⋯</button>
+    ><Icon name="trash" size={14} /></button>
+    <button class="conv-menu-btn" onclick={(e) => { e.stopPropagation(); openMenu(e); }} aria-label="More options"><Icon name="more" size={14} /></button>
   </div>
 {/if}
 

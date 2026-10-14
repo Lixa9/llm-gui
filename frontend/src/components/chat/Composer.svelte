@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '../ui/Icon.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import { draftsStore } from '../../stores/drafts.svelte';
@@ -247,7 +248,7 @@
           <span class="chip-name" title={att.status === 'error' ? att.errorMsg : att.filename}>
             {att.filename}
           </span>
-          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" disabled={streaming || submitting || !draftReady}>✕</button>
+          <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" aria-label="Remove" disabled={streaming || submitting || !draftReady}><Icon name="close" size={12} /></button>
         </div>
       {/each}
     </div>
@@ -266,18 +267,20 @@
         class="icon-btn"
         onclick={() => fileInputEl.click()}
         title="Attach files"
+        aria-label="Attach files"
         disabled={streaming || submitting || !draftReady}
-      >📎</button>
+      ><Icon name="attach" /></button>
       <button
         class="expand-btn"
         onclick={() => expanded = !expanded}
         title={expanded ? 'Collapse' : 'Expand'}
-      >{expanded ? '⤡' : '⤢'}</button>
+        aria-label={expanded ? 'Collapse' : 'Expand'}
+      ><Icon name={expanded ? 'collapse' : 'expand'} /></button>
       {#if streaming}
-        <button class="send-btn stop-btn" onclick={onStop} title="Stop generation">⏹ Stop</button>
+        <button class="send-btn stop-btn" onclick={onStop} title="Stop generation"><Icon name="stop" /> <span>Stop</span></button>
       {:else}
         <button class="send-btn" onclick={() => void send()} disabled={!canSend} title="Send">
-          ↑ Send
+          <Icon name="send" /> <span>Send</span>
         </button>
       {/if}
     </div>
@@ -444,6 +447,7 @@
     border: 1px solid var(--border-subtle, var(--border));
     border-radius: var(--radius-sm);
     font-size: 15px;
+    color: var(--text-secondary);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -461,7 +465,7 @@
     background: transparent;
     border: 1px solid var(--border-subtle, var(--border));
     border-radius: var(--radius-sm);
-    color: #c0c0c0;
+    color: var(--text-secondary);
     font-size: 14px;
     cursor: pointer;
     display: flex;
@@ -473,6 +477,7 @@
   .expand-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); background: var(--bg-hover); }
 
   .send-btn {
+    gap: 6px;
     padding: 9px 16px;
     background: var(--accent);
     color: #fff;

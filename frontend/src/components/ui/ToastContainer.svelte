@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   import { getToasts, dismiss } from './Toast.svelte';
 
   const icons: Record<string, string> = {
@@ -14,7 +15,7 @@
     <div class="toast toast-{t.type}" role="alert">
       <span class="toast-icon">{icons[t.type]}</span>
       <span class="toast-msg">{t.message}</span>
-      <button class="toast-dismiss" onclick={() => dismiss(t.id)}>✕</button>
+      <button class="toast-dismiss" onclick={() => dismiss(t.id)} aria-label="Dismiss notification"><Icon name="close" size={14} /></button>
     </div>
   {/each}
 </div>

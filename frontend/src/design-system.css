@@ -112,6 +112,10 @@ a:hover {
 
 /* --- Buttons (all pill-shaped) --- */
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   cursor: pointer;
   font-family: inherit;
 }

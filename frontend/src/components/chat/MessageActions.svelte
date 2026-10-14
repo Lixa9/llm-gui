@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Message } from '$lib/types';
+  import Icon from '../ui/Icon.svelte';
   import { toast } from '../ui/Toast.svelte';
   import { extractTextFromContent } from '$lib/utils';
 
@@ -21,27 +22,30 @@
 </script>
 
 <div class="msg-actions">
-  <button class="action-btn" onclick={copy} title="Copy">⎘</button>
-  <button class="action-btn" onclick={onEdit} title="Edit">✏</button>
+  <button class="action-btn" onclick={copy} title="Copy" aria-label="Copy"><Icon name="copy" /></button>
+  <button class="action-btn" onclick={onEdit} title="Edit" aria-label="Edit"><Icon name="edit" /></button>
   {#if message.role === 'assistant'}
-    <button class="action-btn" onclick={onRegenerate} disabled={isStreaming} title="Regenerate">↺</button>
+    <button class="action-btn" onclick={onRegenerate} disabled={isStreaming} title="Regenerate" aria-label="Regenerate"><Icon name="regenerate" /></button>
   {/if}
-  <button class="action-btn" onclick={onFork} title="Fork from here">⎇</button>
-  <button class="action-btn danger" onclick={onDelete} title="Delete">🗑</button>
+  <button class="action-btn" onclick={onFork} title="Fork from here" aria-label="Fork from here"><Icon name="fork" /></button>
+  <button class="action-btn danger" onclick={onDelete} title="Delete" aria-label="Delete"><Icon name="trash" /></button>
 </div>
 
 <style>
   .msg-actions {
     display: flex;
     gap: 2px;
-    opacity: 0.5;
+    opacity: 0.75;
     transition: opacity 0.15s;
     margin-top: 4px;
   }
-  :global(.msg-wrapper:hover) .msg-actions { opacity: 1; }
+  :global(.msg-wrapper:hover) .msg-actions,
+  :global(.msg-wrapper:focus-within) .msg-actions { opacity: 1; }
 
   .action-btn {
-    padding: 3px 7px;
+    width: 28px;
+    height: 24px;
+    padding: 3px 5px;
     font-size: 14px;
     color: var(--text-secondary);
     background: var(--bg-elevated);

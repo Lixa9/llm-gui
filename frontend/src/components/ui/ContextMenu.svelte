@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import Icon, { type IconName } from './Icon.svelte';
 
   export interface MenuItem {
     label: string;
-    icon?: string;
+    icon?: IconName;
     action: () => void;
     danger?: boolean;
     disabled?: boolean;
@@ -54,7 +55,7 @@
       role="menuitem"
       onclick={() => { item.action(); onclose(); }}
     >
-      {#if item.icon}<span class="ctx-icon">{item.icon}</span>{/if}
+      {#if item.icon}<span class="ctx-icon"><Icon name={item.icon} /></span>{/if}
       {item.label}
     </button>
   {/each}
@@ -79,6 +80,7 @@
   .ctx-item {
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     gap: 8px;
     width: 100%;
     padding: 7px 10px;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '../ui/Icon.svelte';
   import { onMount } from 'svelte';
   import type { ConversationFolder } from '$lib/types';
   import SidebarConversation from './SidebarConversation.svelte';
@@ -113,14 +114,14 @@
       tabindex="0"
     >
       <span class="folder-arrow">{open ? '▾' : '▸'}</span>
-      <span class="folder-icon">📁</span>
+      <span class="folder-icon"><Icon name="folder" size={14} /></span>
       <span class="folder-name">{folder.name}</span>
       <button
         class="folder-action-btn"
         onclick={(e) => { e.stopPropagation(); startRename(); }}
         aria-label="Rename folder"
         title="Rename folder"
-      >✏</button>
+      ><Icon name="edit" size={14} /></button>
       <button
         class="folder-action-btn danger"
         class:confirming-delete={confirmingDelete}
@@ -128,7 +129,7 @@
         onclick={(e) => { e.stopPropagation(); deleteFolder(); }}
         aria-label={confirmingDelete ? 'Confirm delete folder' : 'Delete folder'}
         title={confirmingDelete ? 'Click again to delete folder' : 'Delete folder'}
-      >🗑</button>
+      ><Icon name="trash" size={14} /></button>
     </div>
   {/if}
 
