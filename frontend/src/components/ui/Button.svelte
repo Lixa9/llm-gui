@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from './ControlLabel.svelte';
   interface Props {
     variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'icon' | 'dashed';
     size?: 'sm' | 'md';
@@ -22,7 +23,11 @@
   {#if loading}
     <span class="btn-spinner"></span>
   {/if}
-  {@render children()}
+  {#if variant === 'icon'}
+    {@render children()}
+  {:else}
+    <ControlLabel>{@render children()}</ControlLabel>
+  {/if}
 </button>
 
 <style>

@@ -80,7 +80,7 @@ marked.use({
       const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
       const highlighted = highlight(text, language);
       const langLabel = language !== 'plaintext' ? `<span class="code-lang">${language}</span>` : '';
-      const header = `<div class="code-header">${langLabel}<button class="copy-btn" aria-label="Copy code">Copy</button></div>`;
+      const header = `<div class="code-header">${langLabel}<button class="copy-btn" aria-label="Copy code"><span class="control-label"><span class="control-label-text">Copy</span></span></button></div>`;
       return `<div class="code-block">${header}<pre><code class="hljs language-${language}">${highlighted}</code></pre></div>`;
     },
   },

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerInlineText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import type { Message } from '$lib/types';
   import type { PendingMessage } from '../../stores/chat.svelte';
   import MessageContent from './MessageContent.svelte';
@@ -57,15 +59,15 @@
 <div class="msg-wrapper" class:msg-user={message.role === 'user'} class:msg-assistant={message.role === 'assistant'}>
   <div class="msg-avatar">
     {#if message.role === 'user'}
-      <div class="avatar user-avatar">U</div>
+      <div class="avatar user-avatar"><ControlLabel>U</ControlLabel></div>
     {:else}
-      <div class="avatar ai-avatar">AI</div>
+      <div class="avatar ai-avatar"><ControlLabel>AI</ControlLabel></div>
     {/if}
   </div>
 
   <div class="msg-body">
     <div class="msg-header">
-      <span class="msg-role">{senderName}</span>
+      <span class="msg-role" use:centerInlineText>{senderName}</span>
       {#if isFullMessage}
         {#if (message as Message).edited_at}
           <Badge variant="muted">edited</Badge>
@@ -84,7 +86,7 @@
         {:else if (message as Message).delivery_status === 'uncertain'}
           <Badge variant="warning">unverified</Badge>
         {/if}
-        <span class="msg-time">{formatRelativeDate((message as Message).timestamp)}</span>
+        <span class="msg-time" use:centerInlineText>{formatRelativeDate((message as Message).timestamp)}</span>
       {/if}
     </div>
 

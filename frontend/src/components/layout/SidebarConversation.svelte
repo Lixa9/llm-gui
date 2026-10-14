@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { centerControlText, centerInlineText } from '$lib/controlTextAlignment';
   import { onMount } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -104,6 +105,7 @@
   <form onsubmit={(e) => { e.preventDefault(); finishRename(); }}>
     <!-- svelte-ignore a11y_autofocus -->
     <input
+      use:centerControlText
       class="rename-input"
       bind:value={renameValue}
       autofocus
@@ -126,7 +128,7 @@
     title={conversation.title}
   >
     <span class="conv-pin" class:visible={conversation.pinned}><Icon name="pin" size={12} /></span>
-    <span class="conv-title">{truncateTitle(conversation.title)}</span>
+    <span class="conv-title" use:centerInlineText>{truncateTitle(conversation.title)}</span>
     {#if conversation.forked_from_id}
       <span class="conv-fork-icon" title="Forked conversation"><Icon name="fork" size={12} /></span>
     {/if}

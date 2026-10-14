@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import { onDestroy } from 'svelte';
   import MessageList from './MessageList.svelte';
   import Composer from './Composer.svelte';
@@ -196,15 +197,15 @@
 <div class="chat-view">
   <div class="chat-toolbar">
     <div class="picker-group">
-      <span class="picker-label">Prompt</span>
+      <span class="picker-label"><ControlLabel>Prompt</ControlLabel></span>
       <PromptPicker value={selectedPromptId} onchange={handlePromptChange} presetLabel={activePresetLabel} />
     </div>
     <div class="picker-group">
-      <span class="picker-label">Model</span>
+      <span class="picker-label"><ControlLabel>Model</ControlLabel></span>
       <ModelPicker value={selectedModel} onchange={handleModelChange} />
     </div>
     <div class="picker-group">
-      <span class="picker-label">Preset</span>
+      <span class="picker-label"><ControlLabel>Preset</ControlLabel></span>
       <PresetPicker value={selectedPresetId} onchange={handlePresetChange} />
     </div>
   </div>
@@ -274,6 +275,8 @@
     min-width: 0;
   }
   .picker-label {
+    display: flex;
+    align-items: center;
     font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;

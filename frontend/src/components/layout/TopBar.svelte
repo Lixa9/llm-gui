@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerInlineText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import { brandingStore } from '../../stores/branding.svelte';
   import { authStore } from '../../stores/auth.svelte';
   import { preferencesStore } from '../../stores/preferences.svelte';
@@ -50,7 +52,7 @@
           class:active={currentView === item.id || (currentView.startsWith('chat') && item.id === 'chat')}
           onclick={() => navigate(item.id)}
         >
-          {item.label}
+          <ControlLabel>{item.label}</ControlLabel>
         </button>
       {/each}
       {#if authStore.user?.role === 'admin'}
@@ -58,7 +60,7 @@
           class="nav-btn"
           class:active={currentView === 'admin'}
           onclick={() => navigate('admin')}
-        >Admin</button>
+        ><ControlLabel>Admin</ControlLabel></button>
       {/if}
     </nav>
   </div>
@@ -75,9 +77,9 @@
     <div class="user-menu-wrapper">
       <button class="user-btn" onclick={(e) => { e.stopPropagation(); userMenuOpen = !userMenuOpen; }}>
         <span class="user-initial">
-          {authStore.user?.name?.[0]?.toUpperCase() ?? authStore.user?.email?.[0]?.toUpperCase() ?? '?'}
+          <ControlLabel>{authStore.user?.name?.[0]?.toUpperCase() ?? authStore.user?.email?.[0]?.toUpperCase() ?? '?'}</ControlLabel>
         </span>
-        <span class="user-name">{authStore.user?.name ?? authStore.user?.email}</span>
+        <span class="user-name" use:centerInlineText>{authStore.user?.name ?? authStore.user?.email}</span>
       </button>
       {#if userMenuOpen}
         <div class="user-menu">
@@ -87,7 +89,7 @@
             <div class="user-menu-role">{authStore.user?.role}</div>
           </div>
           <hr class="user-menu-sep" />
-          <button class="user-menu-item" onclick={() => authStore.logout()}>Sign out</button>
+          <button class="user-menu-item" onclick={() => authStore.logout()}><ControlLabel>Sign out</ControlLabel></button>
         </div>
       {/if}
     </div>
@@ -203,7 +205,8 @@
   }
   .user-menu-sep { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
   .user-menu-item {
-    display: block;
+    display: flex;
+    justify-content: flex-start;
     width: 100%;
     padding: 7px 12px;
     font-size: 13px;

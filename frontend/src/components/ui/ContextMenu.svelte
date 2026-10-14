@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from './ControlLabel.svelte';
   import { onMount, untrack } from 'svelte';
   import Icon, { type IconName } from './Icon.svelte';
 
@@ -56,7 +57,7 @@
       onclick={() => { item.action(); onclose(); }}
     >
       {#if item.icon}<span class="ctx-icon"><Icon name={item.icon} /></span>{/if}
-      {item.label}
+      <ControlLabel>{item.label}</ControlLabel>
     </button>
   {/each}
 </menu>

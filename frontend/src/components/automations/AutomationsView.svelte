@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import { automationsStore } from '../../stores/automations.svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import ResourcePage from '../ui/ResourcePage.svelte';
@@ -117,7 +118,7 @@
               </div>
               <div class="auto-toggles">
                 <button class="runs-toggle" aria-expanded={expandedDetails.has(auto.id)} onclick={() => toggleDetails(auto.id)}>
-                  {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
+                  <span aria-hidden="true">{expandedDetails.has(auto.id) ? '▾' : '▸'}</span> <ControlLabel>Details</ControlLabel>
                 </button>
               </div>
               {#if expandedDetails.has(auto.id)}
@@ -160,10 +161,10 @@
               </div>
                 <div class="auto-toggles">
                   <button class="runs-toggle" aria-expanded={expandedDetails.has(auto.id)} onclick={() => toggleDetails(auto.id)}>
-                    {expandedDetails.has(auto.id) ? '▾' : '▸'} Details
+                    <span aria-hidden="true">{expandedDetails.has(auto.id) ? '▾' : '▸'}</span> <ControlLabel>Details</ControlLabel>
                   </button>
                   <button class="runs-toggle" aria-expanded={expandedRuns.has(auto.id)} onclick={() => toggleRuns(auto.id)}>
-                    {expandedRuns.has(auto.id) ? '▾' : '▸'} Run history
+                    <span aria-hidden="true">{expandedRuns.has(auto.id) ? '▾' : '▸'}</span> <ControlLabel>Run history</ControlLabel>
                   </button>
                 </div>
                 {#if expandedDetails.has(auto.id)}
@@ -212,6 +213,7 @@
 
   .auto-toggles { display: flex; gap: 16px; }
   .runs-toggle {
+    gap: 4px;
     font-size: 12px;
     color: var(--text-muted);
     background: transparent;

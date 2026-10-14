@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import Icon from '../ui/Icon.svelte';
   import { onMount } from 'svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
@@ -100,12 +102,13 @@
 <aside class="sidebar">
   <div class="sidebar-header">
     <button class="new-chat-btn" onclick={newChat}>
-      <Icon name="plus" size={14} /> <span>New Chat</span>
+      <Icon name="plus" size={14} /> <ControlLabel>New Chat</ControlLabel>
     </button>
   </div>
 
   <div class="sidebar-search">
     <input
+      use:centerControlText
       class="search-input"
       type="search"
       placeholder="Search conversations..."
@@ -153,10 +156,10 @@
     {#if creatingFolder}
       <form class="new-folder-form" onsubmit={(e) => { e.preventDefault(); finishNewFolder(); }}>
         <!-- svelte-ignore a11y_autofocus -->
-        <input class="new-folder-input" bind:value={newFolderName} placeholder="Folder name" autofocus onkeydown={(e) => { if (e.key === 'Escape') creatingFolder = false; }} />
+        <input use:centerControlText class="new-folder-input" bind:value={newFolderName} placeholder="Folder name" autofocus onkeydown={(e) => { if (e.key === 'Escape') creatingFolder = false; }} />
       </form>
     {:else}
-      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder"><Icon name="folder" size={14} /> <span>New folder</span></button>
+      <button class="sidebar-footer-btn" onclick={newFolder} title="New folder"><Icon name="folder" size={14} /> <ControlLabel>New folder</ControlLabel></button>
     {/if}
     <button
       class="sidebar-footer-btn danger"
@@ -165,7 +168,7 @@
       onclick={deleteAllChats}
       aria-label={confirmingDeleteAll ? 'Confirm delete all chats' : 'Delete all chats'}
       title={confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}
-    ><Icon name="trash" size={14} /> <span>{confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}</span></button>
+    ><Icon name="trash" size={14} /> <ControlLabel>{confirmingDeleteAll ? 'Click again to delete all chats' : 'Delete all chats'}</ControlLabel></button>
   </div>
 </aside>
 

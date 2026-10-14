@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import AdminPrompts from './AdminPrompts.svelte';
   import AdminAutomations from './AdminAutomations.svelte';
 
@@ -17,7 +18,7 @@
     <div class="tab-bar">
       {#each tabs as tab}
         <button class="tab-btn" class:active={activeTab === tab.id} onclick={() => activeTab = tab.id}>
-          {tab.label}
+          <ControlLabel>{tab.label}</ControlLabel>
         </button>
       {/each}
     </div>
@@ -45,9 +46,10 @@
 
   .tab-bar { display: flex; gap: 2px; }
   .tab-btn {
-    padding: 7px 14px;
+    padding: 6px 14px;
     background: transparent;
     border: none;
+    border-top: 2px solid transparent;
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
     font-size: 13px;

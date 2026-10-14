@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import Button from '../ui/Button.svelte';
   import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import Select from '../ui/Select.svelte';
@@ -93,13 +95,14 @@
 >
   {#snippet children()}
       <div class="field">
-        <label class="label" for="ae-name">Name</label>
-        <input class="input" id="ae-name" bind:value={name} placeholder="Automation name…" required maxlength="200" />
+        <label class="label" for="ae-name"><ControlLabel>Name</ControlLabel></label>
+        <input use:centerControlText class="input" id="ae-name" bind:value={name} placeholder="Automation name…" required maxlength="200" />
       </div>
       <div class="field">
-        <label class="label" for="ae-interval">Run every</label>
+        <label class="label" for="ae-interval"><ControlLabel>Run every</ControlLabel></label>
         <div class="interval-row">
           <input
+            use:centerControlText
             id="ae-interval"
             class="input interval-input"
             type="number"
@@ -115,15 +118,15 @@
         </div>
       </div>
       <div class="field">
-        <label class="label" for="ae-model">Model</label>
+        <label class="label" for="ae-model"><ControlLabel>Model</ControlLabel></label>
         <ModelPicker bind:value={model} required />
       </div>
       <div class="field">
-        <label class="label" for="ae-sysprompt">System prompt</label>
+        <label class="label" for="ae-sysprompt"><ControlLabel>System prompt</ControlLabel></label>
         <textarea class="textarea" id="ae-sysprompt" bind:value={systemPrompt} rows={3} placeholder="Optional…"></textarea>
       </div>
       <div class="field">
-        <label class="label" for="ae-userprompt">User prompt</label>
+        <label class="label" for="ae-userprompt"><ControlLabel>User prompt</ControlLabel></label>
         <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…" required maxlength="100000"></textarea>
       </div>
   {/snippet}

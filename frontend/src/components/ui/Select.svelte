@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
   interface Option { value: string; label: string; }
   interface Props {
     value?: string;
@@ -18,6 +19,7 @@
 </script>
 
 <select
+  use:centerControlText
   {id}
   bind:value
   {disabled}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import { authStore } from '../../stores/auth.svelte';
   import Spinner from '../ui/Spinner.svelte';
 
@@ -39,11 +41,11 @@
         <path d="M10 2C5.58 2 2 5.58 2 10C2 14.42 5.58 18 10 18C14.42 18 18 14.42 18 10C18 5.58 14.42 2 10 2Z" stroke="currentColor" stroke-width="1.5"/>
         <path d="M6 10H14M10 6L14 10L10 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      Continue with SSO
+      <ControlLabel>Continue with SSO</ControlLabel>
     </a>
 
     {#if authStore.localAuthEnabled}
-      <div class="divider"><span>or</span></div>
+      <div class="divider"><ControlLabel>or</ControlLabel></div>
 
       <div class="local-warning-banner">
         <svg class="warning-icon" viewBox="0 0 20 20" fill="currentColor">
@@ -54,8 +56,9 @@
 
       <form class="local-form" onsubmit={handleLocalLogin}>
         <div class="field">
-          <label for="login-username">Username</label>
+          <label for="login-username"><ControlLabel>Username</ControlLabel></label>
           <input
+            use:centerControlText
             id="login-username"
             type="text"
             bind:value={username}
@@ -65,8 +68,9 @@
           />
         </div>
         <div class="field">
-          <label for="login-password">Password</label>
+          <label for="login-password"><ControlLabel>Password</ControlLabel></label>
           <input
+            use:centerControlText
             id="login-password"
             type="password"
             bind:value={password}
@@ -84,7 +88,7 @@
           {#if submitting}
             <Spinner size={16} />
           {:else}
-            Sign in
+            <ControlLabel>Sign in</ControlLabel>
           {/if}
         </button>
       </form>

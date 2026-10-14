@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import Button from '../ui/Button.svelte';
   import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import Select from '../ui/Select.svelte';
@@ -65,15 +67,15 @@
 >
   {#snippet children()}
       <div class="field">
-        <label class="label" for="pr-name">Preset name</label>
-        <input class="input" id="pr-name" bind:value={name} placeholder="My preset…" required maxlength="200" />
+        <label class="label" for="pr-name"><ControlLabel>Preset name</ControlLabel></label>
+        <input use:centerControlText class="input" id="pr-name" bind:value={name} placeholder="My preset…" required maxlength="200" />
       </div>
       <div class="field">
-        <label class="label" for="pr-model">Model</label>
+        <label class="label" for="pr-model"><ControlLabel>Model</ControlLabel></label>
         <Select id="pr-model" bind:value={base_model_id} options={modelOptions} required />
       </div>
       <div class="field">
-        <label class="label" for="pr-sysprompt">System prompt</label>
+        <label class="label" for="pr-sysprompt"><ControlLabel>System prompt</ControlLabel></label>
         <textarea class="textarea" id="pr-sysprompt" bind:value={system_prompt} rows={7} maxlength="100000" placeholder="Optional system prompt…"></textarea>
       </div>
   {/snippet}

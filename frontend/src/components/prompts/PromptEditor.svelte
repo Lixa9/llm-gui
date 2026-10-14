@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import Button from '../ui/Button.svelte';
   import ResourceEditorShell from '../ui/ResourceEditorShell.svelte';
   import type { SystemPrompt } from '$lib/types';
@@ -55,11 +57,11 @@
 >
   {#snippet children()}
       <div class="field">
-        <label class="label" for="pe-name">Name</label>
-        <input class="input" id="pe-name" bind:value={name} placeholder="Prompt name…" required maxlength="200" />
+        <label class="label" for="pe-name"><ControlLabel>Name</ControlLabel></label>
+        <input use:centerControlText class="input" id="pe-name" bind:value={name} placeholder="Prompt name…" required maxlength="200" />
       </div>
       <div class="field">
-        <label class="label" for="pe-content">Content</label>
+        <label class="label" for="pe-content"><ControlLabel>Content</ControlLabel></label>
         <textarea class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
       </div>
   {/snippet}

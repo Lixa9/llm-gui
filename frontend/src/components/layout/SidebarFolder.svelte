@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { centerControlText, centerInlineText } from '$lib/controlTextAlignment';
   import Icon from '../ui/Icon.svelte';
   import { onMount } from 'svelte';
   import type { ConversationFolder } from '$lib/types';
@@ -96,7 +97,7 @@
   {#if renaming}
     <form onsubmit={(e) => { e.preventDefault(); finishRename(); }}>
       <!-- svelte-ignore a11y_autofocus -->
-      <input class="rename-input" bind:value={renameValue} autofocus onblur={finishRename}
+      <input use:centerControlText class="rename-input" bind:value={renameValue} autofocus onblur={finishRename}
         onkeydown={(e) => { if (e.key === 'Escape') renaming = false; }} />
     </form>
   {:else}
@@ -115,7 +116,7 @@
     >
       <span class="folder-arrow">{open ? '▾' : '▸'}</span>
       <span class="folder-icon"><Icon name="folder" size={14} /></span>
-      <span class="folder-name">{folder.name}</span>
+      <span class="folder-name" use:centerInlineText>{folder.name}</span>
       <button
         class="folder-action-btn"
         onclick={(e) => { e.stopPropagation(); startRename(); }}

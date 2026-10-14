@@ -120,6 +120,26 @@ button {
   font-family: inherit;
 }
 
+/* Keep the original line box, but center the visible text using font metrics.
+   A separate block is needed because flex containers do not trim their items.
+   Older browsers use a font-metric correction on the regular line box. */
+.control-label {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 1em;
+  min-block-size: 1lh;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  vertical-align: middle;
+}
+
+.control-label-text {
+  display: block;
+  min-inline-size: 0;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -260,6 +280,12 @@ select:disabled {
 input[type="checkbox"] {
   accent-color: var(--color-primary);
   cursor: pointer;
+}
+
+/* Standalone form labels use the same alignment as button labels. */
+label {
+  display: flex;
+  align-items: center;
 }
 
 /* --- Cards --- */

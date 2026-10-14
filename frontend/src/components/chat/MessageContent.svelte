@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerLabelText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import { api } from '$lib/api';
   import { renderMarkdown } from '$lib/markdown';
   import { createRenderScheduler } from '$lib/renderScheduler';
@@ -33,6 +35,7 @@ const text = $derived(
   );
 
   let rendered = $state(untrack(() => role === 'assistant' ? renderMarkdown(text) : ''));
+  let proseElement: HTMLDivElement | undefined = $state();
   const render = createRenderScheduler(value => { rendered = renderMarkdown(value); });
   $effect(() => {
     const value = text;
@@ -40,6 +43,14 @@ const text = $derived(
     if (role === 'assistant') untrack(() => render.update(value, active));
   });
   onDestroy(() => render.destroy());
+
+  $effect(() => {
+    rendered;
+    if (!proseElement || CSS.supports('text-box-trim', 'trim-both')) return;
+    const labels = proseElement.querySelectorAll<HTMLElement>('.copy-btn .control-label-text');
+    const actions = [...labels].map(label => centerLabelText(label));
+    return () => { for (const action of actions) action?.destroy(); };
+  });
 
   let coverage=$state<{warning?:string;page_count?:number;served_pages?:number;sheet_names?:string[];entries?:Array<{name:string;status:string;reason?:string}>;error?:string}|null>(null);
   async function showCoverage(url:string){try{const result=await api.uploads.metadata(url.split('/').pop()!);coverage=result.coverage;}catch(error){coverage={error:(error as Error).message};}}
@@ -50,9 +61,10 @@ const text = $derived(
     if (!btn) return;
     const code = btn.closest('.code-block')?.querySelector('pre code');
     if (!code) return;
+    const label = btn.querySelector('.control-label-text') ?? btn;
     navigator.clipboard.writeText(code.textContent ?? '').then(() => {
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      label.textContent = 'Copied!';
+      setTimeout(() => { label.textContent = 'Copy'; }, 1500);
     });
   }
 </script>
@@ -67,7 +79,7 @@ const text = $derived(
 
 {#if coverage}
   <div class="coverage-panel" aria-label="Attachment coverage">
-    <button onclick={()=>coverage=null}>Close coverage</button>
+    <button onclick={()=>coverage=null}><ControlLabel>Close coverage</ControlLabel></button>
     {#if coverage.error}<p>{coverage.error}</p>{:else}
       {#if coverage.page_count}<p>Included {coverage.served_pages ?? coverage.page_count} of {coverage.page_count} pages.</p>{/if}
       {#if coverage.sheet_names?.length}<p>Sheets: {coverage.sheet_names.join(', ')}</p>{/if}
@@ -90,7 +102,7 @@ const text = $derived(
           title={img._warning ?? img._filename}
           onclick={() => lightboxSrc = img.image_url.url.startsWith('/api/uploads/') ? `${img.image_url.url}/preview` : img.image_url.url}
         />
-        {#if img.image_url.url.startsWith('/api/uploads/')}<a href={img.image_url.url} download={img._filename}>Download original</a><button onclick={()=>void showCoverage(img.image_url.url)}>Coverage</button>{/if}
+        {#if img.image_url.url.startsWith('/api/uploads/')}<a href={img.image_url.url} download={img._filename}>Download original</a><button onclick={()=>void showCoverage(img.image_url.url)}><ControlLabel>Coverage</ControlLabel></button>{/if}
         {#if img._warning}<span class="coverage-warning">{img._warning}</span>{/if}
       {/each}
     </div>
@@ -101,7 +113,7 @@ const text = $derived(
         <a class="file-chip" href={fp.file.url} download={fp._filename} title={fp._warning ?? fp._filename}>
           {fileIcon(fp._mime_type)}&nbsp;{fp._filename ?? 'Attached file'}
         </a>
-        {#if fp.file.url.startsWith('/api/uploads/')}<button onclick={()=>void showCoverage(fp.file.url)}>Coverage</button>{/if}
+        {#if fp.file.url.startsWith('/api/uploads/')}<button onclick={()=>void showCoverage(fp.file.url)}><ControlLabel>Coverage</ControlLabel></button>{/if}
         {#if fp._warning}<span class="coverage-warning">{fp._warning}</span>{/if}
       {/each}
     </div>
@@ -109,7 +121,7 @@ const text = $derived(
   {#if role === 'assistant'}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="prose" class:streaming onclick={onProseClick}>{@html rendered}</div>
+    <div class="prose" bind:this={proseElement} class:streaming onclick={onProseClick}>{@html rendered}</div>
   {:else if text}
     <span class="user-text">{text}</span>
   {/if}

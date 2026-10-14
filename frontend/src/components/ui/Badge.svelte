@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlLabel from './ControlLabel.svelte';
   interface Props {
     variant?: 'default' | 'accent' | 'success' | 'danger' | 'warning' | 'muted';
     children: import('svelte').Snippet;
@@ -15,4 +16,4 @@
   };
 </script>
 
-<span class="badge {classMap[variant]}">{@render children()}</span>
+<span class="badge {classMap[variant]}"><ControlLabel>{@render children()}</ControlLabel></span>

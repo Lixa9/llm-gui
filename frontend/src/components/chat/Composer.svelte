@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { centerInlineText } from '$lib/controlTextAlignment';
+  import ControlLabel from '../ui/ControlLabel.svelte';
   import Icon from '../ui/Icon.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { modelsStore } from '../../stores/models.svelte';
@@ -245,7 +247,7 @@
           {#if att.warning}
             <span class="chip-warn" title={att.warning}>⚠</span>
           {/if}
-          <span class="chip-name" title={att.status === 'error' ? att.errorMsg : att.filename}>
+          <span class="chip-name" use:centerInlineText title={att.status === 'error' ? att.errorMsg : att.filename}>
             {att.filename}
           </span>
           <button class="chip-remove" onclick={() => removeAttachment(i)} title="Remove" aria-label="Remove" disabled={streaming || submitting || !draftReady}><Icon name="close" size={12} /></button>
@@ -277,10 +279,10 @@
         aria-label={expanded ? 'Collapse' : 'Expand'}
       ><Icon name={expanded ? 'collapse' : 'expand'} /></button>
       {#if streaming}
-        <button class="send-btn stop-btn" onclick={onStop} title="Stop generation"><Icon name="stop" /> <span>Stop</span></button>
+        <button class="send-btn stop-btn" onclick={onStop} title="Stop generation"><Icon name="stop" /> <ControlLabel>Stop</ControlLabel></button>
       {:else}
         <button class="send-btn" onclick={() => void send()} disabled={!canSend} title="Send">
-          <Icon name="send" /> <span>Send</span>
+          <Icon name="send" /> <ControlLabel>Send</ControlLabel>
         </button>
       {/if}
     </div>

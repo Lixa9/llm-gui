@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { centerControlText, centerInlineText } from '$lib/controlTextAlignment';
   import { modelsStore } from '../../stores/models.svelte';
 
   interface Props {
@@ -37,6 +38,7 @@
 
 <div class="picker">
   <input
+    use:centerControlText
     class="picker-input"
     required={required}
     value={open ? query : (selected?.display_name ?? '')}
@@ -53,8 +55,8 @@
           class:active={m.id === value}
           onmousedown={() => pick(m.id)}
         >
-          <span class="opt-name">{m.display_name}</span>
-          <span class="opt-id">{m.id}</span>
+          <span class="opt-name" use:centerInlineText>{m.display_name}</span>
+          <span class="opt-id" use:centerInlineText>{m.id}</span>
         </button>
       {:else}
         <div class="picker-empty">No matches</div>
