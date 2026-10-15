@@ -20,6 +20,8 @@
   --radius-sm: var(--radius-sm);
   --radius-lg: var(--radius-lg);
   --font-sans: var(--font-family);
+  --font-input-sans: 'LLM Input Sans', var(--font-sans);
+  --font-input-mono: 'LLM Input Mono', var(--font-mono);
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   --sidebar-width: 260px;
   --topbar-height: 48px;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { centerControlText, centerInlineText } from '$lib/controlTextAlignment';
+  import { centerInlineText } from '$lib/controlTextAlignment';
   import ControlLabel from '../ui/ControlLabel.svelte';
   import Icon from '../ui/Icon.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
@@ -256,7 +256,7 @@
     </div>
   {/if}
   <div class="composer-row">
-    <textarea use:centerControlText
+    <textarea
       class="composer-textarea"
       bind:value={text}
       placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
@@ -412,7 +412,7 @@
     border-radius: var(--radius);
     color: var(--text-primary);
     font-size: 14px;
-    font-family: var(--font-sans);
+    font-family: var(--font-input-sans);
     line-height: 1.5;
     resize: none;
     outline: none;

@@ -62,7 +62,7 @@
       </div>
       <div class="field">
         <label class="label" for="pe-content"><ControlLabel>Content</ControlLabel></label>
-        <textarea use:centerControlText class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
+        <textarea class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
       </div>
   {/snippet}
   {#snippet actions()}
@@ -92,7 +92,7 @@
     border-radius: var(--radius-sm);
     color: var(--text-primary);
     font-size: 13px;
-    font-family: var(--font-mono);
+    font-family: var(--font-input-mono);
     resize: vertical;
     outline: none;
     line-height: 1.5;

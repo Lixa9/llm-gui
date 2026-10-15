@@ -1,7 +1,5 @@
-import { editableTextMetrics } from './editableTextMetrics';
-
-// Native controls cannot trim their internal text box. Keep their caret and
-// glyph metrics together, then balance single-line padding like control labels.
+// Balance native single-line padding around visible cap height, like labels.
+// Editable controls share the bundled font metrics defined in control-fonts.css.
 let context: CanvasRenderingContext2D | null = null;
 const corrections = new Map<string, number>();
 const updates = new Set<() => void>();
@@ -68,37 +66,20 @@ function preserve(node: HTMLElement, property: string) {
   };
 }
 
-export function centerControlText(node: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) {
+export function centerControlText(node: HTMLInputElement | HTMLSelectElement) {
   const restoreTop = preserve(node, 'padding-top');
   const restoreBottom = preserve(node, 'padding-bottom');
-  const restoreFamily = preserve(node, 'font-family');
-  const restoreLineHeight = preserve(node, 'line-height');
   const unwatch = watch(node, () => {
     restoreTop();
     restoreBottom();
-    restoreFamily();
-    restoreLineHeight();
-    let style = getComputedStyle(node);
-    // Password masking glyphs use browser-specific metrics, not the cap height
-    // of the characters being entered. Keep their original native face.
-    if (node instanceof HTMLTextAreaElement || (node instanceof HTMLInputElement && node.type !== 'password')) {
-      const metrics = editableTextMetrics(style, schedule);
-      if (metrics) {
-        const normalLineHeight = style.lineHeight === 'normal';
-        node.style.fontFamily = metrics.family;
-        if (normalLineHeight) node.style.lineHeight = `${metrics.lineHeight}px`;
-        style = getComputedStyle(node);
-      }
-    }
-    // Multiline controls keep their existing line spacing and padding.
-    if (node instanceof HTMLTextAreaElement) return;
+    const style = getComputedStyle(node);
     const top = parseFloat(style.paddingTop);
     const bottom = parseFloat(style.paddingBottom);
     const offset = Math.max(-top, Math.min(bottom, correction(style)));
     node.style.paddingTop = `${top + offset}px`;
     node.style.paddingBottom = `${bottom - offset}px`;
   });
-  return { destroy() { unwatch(); restoreTop(); restoreBottom(); restoreFamily(); restoreLineHeight(); } };
+  return { destroy() { unwatch(); restoreTop(); restoreBottom(); } };
 }
 
 // Keep existing clipping/ellipsis behavior for text that already has a box.

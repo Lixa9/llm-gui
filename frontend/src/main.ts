@@ -1,4 +1,5 @@
 import './design-system.css';
+import './control-fonts.css';
 import './app.css';
 import 'highlight.js/styles/github-dark.css';
 import App from './App.svelte';
