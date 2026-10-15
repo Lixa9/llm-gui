@@ -62,7 +62,7 @@
       </div>
       <div class="field">
         <label class="label" for="pe-content"><ControlLabel>Content</ControlLabel></label>
-        <textarea class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
+        <textarea use:centerControlText class="textarea" id="pe-content" bind:value={content} rows={10} placeholder="System prompt content…" required maxlength="100000"></textarea>
       </div>
   {/snippet}
   {#snippet actions()}

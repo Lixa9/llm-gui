@@ -123,11 +123,11 @@
       </div>
       <div class="field">
         <label class="label" for="ae-sysprompt"><ControlLabel>System prompt</ControlLabel></label>
-        <textarea class="textarea" id="ae-sysprompt" bind:value={systemPrompt} rows={3} placeholder="Optional…"></textarea>
+        <textarea use:centerControlText class="textarea" id="ae-sysprompt" bind:value={systemPrompt} rows={3} placeholder="Optional…"></textarea>
       </div>
       <div class="field">
         <label class="label" for="ae-userprompt"><ControlLabel>User prompt</ControlLabel></label>
-        <textarea class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…" required maxlength="100000"></textarea>
+        <textarea use:centerControlText class="textarea" id="ae-userprompt" bind:value={userPrompt} rows={5} placeholder="The prompt to send…" required maxlength="100000"></textarea>
       </div>
   {/snippet}
   {#snippet actions()}

@@ -76,7 +76,7 @@
       </div>
       <div class="field">
         <label class="label" for="pr-sysprompt"><ControlLabel>System prompt</ControlLabel></label>
-        <textarea class="textarea" id="pr-sysprompt" bind:value={system_prompt} rows={7} maxlength="100000" placeholder="Optional system prompt…"></textarea>
+        <textarea use:centerControlText class="textarea" id="pr-sysprompt" bind:value={system_prompt} rows={7} maxlength="100000" placeholder="Optional system prompt…"></textarea>
       </div>
   {/snippet}
   {#snippet actions()}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { centerControlText } from '$lib/controlTextAlignment';
   import Modal from '../ui/Modal.svelte';
   import Button from '../ui/Button.svelte';
   import type { Message } from '$lib/types';
@@ -27,7 +28,7 @@
 
 <Modal {open} {onclose} title={message?.role === 'user' ? 'Edit message' : 'Edit response'} width="560px">
   <!-- svelte-ignore a11y_autofocus -->
-  <textarea
+  <textarea use:centerControlText
     class="edit-area"
     bind:value
     rows={6}

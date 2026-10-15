@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { centerInlineText } from '$lib/controlTextAlignment';
+  import { centerControlText, centerInlineText } from '$lib/controlTextAlignment';
   import ControlLabel from '../ui/ControlLabel.svelte';
   import Icon from '../ui/Icon.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
@@ -256,7 +256,7 @@
     </div>
   {/if}
   <div class="composer-row">
-    <textarea
+    <textarea use:centerControlText
       class="composer-textarea"
       bind:value={text}
       placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
