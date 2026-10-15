@@ -146,7 +146,6 @@
   .msg-user { flex-direction: row-reverse; }
   .msg-user .msg-body {
     flex: 0 1 auto;
-    max-width: 72%;
     align-items: flex-end;
   }
   .msg-user .msg-header { flex-direction: row-reverse; }
@@ -168,7 +167,7 @@
   .user-avatar { background: var(--bg-elevated); color: var(--text-secondary); }
   .ai-avatar { background: var(--accent-subtle); color: var(--accent); }
 
-  .msg-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .msg-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 72%; }
 
   .msg-header {
     display: flex;
