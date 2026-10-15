@@ -5,9 +5,11 @@
   import type { PendingMessage } from '../../stores/chat.svelte';
   import MessageContent from './MessageContent.svelte';
   import MessageActions from './MessageActions.svelte';
+  import MessageEditor from './MessageEditor.svelte';
   import StreamingCursor from './StreamingCursor.svelte';
   import Badge from '../ui/Badge.svelte';
-  import { formatRelativeDate } from '$lib/utils';
+  import { extractTextFromContent, formatRelativeDate } from '$lib/utils';
+  import { messageEditsStore } from '../../stores/messageEdits.svelte';
   import { modelsStore } from '../../stores/models.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
 
@@ -16,16 +18,18 @@
     conversationId?: string;
     isStreaming?: boolean;
     isPending?: boolean;
-    onEdit: (msg: Message) => void;
+    onSave: (msg: Message, content: string) => Promise<void>;
     onRegenerate: (msg: Message) => void;
     onDelete: (msg: Message) => void;
     onFork: (msg: Message) => void;
   }
-  let { message, conversationId, isStreaming = false, isPending = false, onEdit, onRegenerate, onDelete, onFork }: Props = $props();
+  let { message, conversationId, isStreaming = false, isPending = false, onSave, onRegenerate, onDelete, onFork }: Props = $props();
 
   const isFullMessage = $derived('id' in message && !isPending);
   const isPersistedStreaming = $derived(isFullMessage && (message as Message).status === 'streaming');
   const isActionable = $derived(isFullMessage && !isPersistedStreaming && !(message as Message).delivery_status);
+  const editConversationId = $derived(isFullMessage ? (message as Message).conversation_id : undefined);
+  const editDraft = $derived(editConversationId ? messageEditsStore.get(editConversationId, (message as Message).id) : undefined);
 
 
 
@@ -56,7 +60,7 @@
   });
 </script>
 
-<div class="msg-wrapper" class:msg-user={message.role === 'user'} class:msg-assistant={message.role === 'assistant'}>
+<div class="msg-wrapper" class:msg-user={message.role === 'user'} class:msg-assistant={message.role === 'assistant'} class:editing={editDraft !== undefined}>
   <div class="msg-avatar">
     {#if message.role === 'user'}
       <div class="avatar user-avatar"><ControlLabel>U</ControlLabel></div>
@@ -96,22 +100,34 @@
       <p class="incomplete-notice">This incomplete response will not be included in subsequent requests.</p>
     {/if}
 
-    <MessageContent
-      role={message.role}
-      {content}
-      streaming={(isPending || isPersistedStreaming) && isStreaming}
-      streamingText={isPending ? (message as PendingMessage).content : undefined}
-    />
+    {#if isActionable && editConversationId && editDraft !== undefined}
+      <MessageContent role={message.role} content={content.filter(part => part.type !== 'text')} />
+      <MessageEditor
+        message={message as Message}
+        value={editDraft}
+        disabled={isStreaming}
+        onchange={(value) => messageEditsStore.set(editConversationId!, (message as Message).id, value)}
+        oncancel={() => messageEditsStore.remove(editConversationId!, (message as Message).id)}
+        onsave={onSave}
+      />
+    {:else}
+      <MessageContent
+        role={message.role}
+        {content}
+        streaming={(isPending || isPersistedStreaming) && isStreaming}
+        streamingText={isPending ? (message as PendingMessage).content : undefined}
+      />
+    {/if}
 
     {#if (isPending || isPersistedStreaming) && isStreaming}
       <StreamingCursor />
     {/if}
 
-    {#if isActionable}
+    {#if isActionable && editDraft === undefined}
       <MessageActions
         message={message as Message}
         {isStreaming}
-        onEdit={() => onEdit(message as Message)}
+        onEdit={() => messageEditsStore.set(editConversationId!, (message as Message).id, extractTextFromContent(content))}
         onRegenerate={() => onRegenerate(message as Message)}
         onDelete={() => onDelete(message as Message)}
         onFork={() => onFork(message as Message)}
@@ -134,6 +150,7 @@
     align-items: flex-end;
   }
   .msg-user .msg-header { flex-direction: row-reverse; }
+  .msg-user.editing .msg-body { flex: 1; }
   .msg-assistant .msg-body { flex: 1; min-width: 0; }
 
   .msg-avatar { flex-shrink: 0; padding-top: 2px; }

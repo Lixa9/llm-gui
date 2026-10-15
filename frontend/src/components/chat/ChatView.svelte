@@ -3,11 +3,11 @@
   import { onDestroy } from 'svelte';
   import MessageList from './MessageList.svelte';
   import Composer from './Composer.svelte';
-  import EditMessageModal from './EditMessageModal.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import PromptPicker from './PromptPicker.svelte';
   import PresetPicker from './PresetPicker.svelte';
   import { draftsStore } from '../../stores/drafts.svelte';
+  import { messageEditsStore } from '../../stores/messageEdits.svelte';
   import { chatStore } from '../../stores/chat.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import { modelsStore } from '../../stores/models.svelte';
@@ -20,7 +20,6 @@
   interface Props { conversationId: string | null; }
   let { conversationId }: Props = $props();
 
-  let editingMessage = $state<Message | null>(null);
   let composerExpanded = $state(false);
 
   // Override state — null means "use derived/auto value"
@@ -158,20 +157,21 @@
   }
 
   async function handleEdit(msg: Message, newContent: string) {
-    if (!conversationId) return;
+    const convId = msg.conversation_id;
     try {
       if (msg.role === 'user') {
         const payload: ChatPayload = {
-          conversation_id: conversationId,
+          conversation_id: convId,
           edit_message_id: msg.id,
           model: selectedModel,
           system_prompt: systemPromptText,
           system_prompt_id: systemPromptId,
           new_user_message: { content: [{ type: 'text', text: newContent }] },
         };
-        await chatStore.send(payload);
+        await chatStore.send(payload, () => messageEditsStore.remove(convId, msg.id));
       } else {
-        await chatStore.editAssistantMessage(conversationId, msg.id, newContent);
+        await chatStore.editAssistantMessage(convId, msg.id, newContent);
+        messageEditsStore.remove(convId, msg.id);
       }
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -214,7 +214,7 @@
     {#if conversationId}
       <MessageList
         {conversationId}
-        onEdit={(msg) => editingMessage = msg}
+        onSave={handleEdit}
         onRegenerate={handleRegenerate}
       />
     {:else}
@@ -237,16 +237,6 @@
     bind:expanded={composerExpanded}
   />
 </div>
-
-<EditMessageModal
-  open={editingMessage !== null}
-  message={editingMessage}
-  onclose={() => editingMessage = null}
-  onsave={(id, content) => {
-    const msg = chatStore.messages.find(m => m.id === id);
-    if (msg) handleEdit(msg, content);
-  }}
-/>
 
 <style>
   .chat-view {

@@ -14,6 +14,7 @@
   let noFolderDragOver = $state(false);
   let creatingFolder = $state(false);
   let newFolderName = $state('');
+  let newFolderForm: HTMLFormElement | undefined = $state();
   let confirmingDeleteAll = $state(false);
   let deleteAllButton: HTMLButtonElement | undefined = $state();
 
@@ -24,13 +25,17 @@
   const doSearch = debounce((q: string) => conversationsStore.search(q), 250);
 
   onMount(() => {
-    const cancelDeleteAllConfirmation = (event: PointerEvent) => {
+    const dismissTransientControls = (event: PointerEvent) => {
       if (confirmingDeleteAll && deleteAllButton && !deleteAllButton.contains(event.target as Node)) {
         confirmingDeleteAll = false;
       }
+      if (creatingFolder && newFolderForm && !newFolderForm.contains(event.target as Node)) {
+        creatingFolder = false;
+        newFolderName = '';
+      }
     };
-    document.addEventListener('pointerdown', cancelDeleteAllConfirmation);
-    return () => document.removeEventListener('pointerdown', cancelDeleteAllConfirmation);
+    document.addEventListener('pointerdown', dismissTransientControls);
+    return () => document.removeEventListener('pointerdown', dismissTransientControls);
   });
 
   function handleSearchInput() {
@@ -154,7 +159,7 @@
 
   <div class="sidebar-footer">
     {#if creatingFolder}
-      <form class="new-folder-form" onsubmit={(e) => { e.preventDefault(); finishNewFolder(); }}>
+      <form class="new-folder-form" bind:this={newFolderForm} onsubmit={(e) => { e.preventDefault(); finishNewFolder(); }}>
         <!-- svelte-ignore a11y_autofocus -->
         <input use:centerControlText class="new-folder-input" bind:value={newFolderName} placeholder="Folder name" autofocus onkeydown={(e) => { if (e.key === 'Escape') creatingFolder = false; }} />
       </form>

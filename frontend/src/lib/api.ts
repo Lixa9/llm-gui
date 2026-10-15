@@ -49,6 +49,13 @@ export const api = {
     get: (key:string) => get<{text:string;attachments:UploadResult[]}>(`/api/drafts/${key}`),
     save: (key:string,data:{text:string;attachments:Array<{id:string}>}) => put<void>(`/api/drafts/${key}`,data),
   },
+  messageDrafts: {
+    list: (conversationId: string) => get<Record<string, string>>(`/api/conversations/${conversationId}/message-drafts`),
+    save: (conversationId: string, messageId: string, text: string) =>
+      put<void>(`/api/conversations/${conversationId}/message-drafts/${messageId}`, { text }),
+    remove: (conversationId: string, messageId: string) =>
+      del<void>(`/api/conversations/${conversationId}/message-drafts/${messageId}`),
+  },
   auth: {
     me: () => get<User>('/api/auth/me'),
     logout: () => post<void>('/api/auth/logout'),

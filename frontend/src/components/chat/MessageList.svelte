@@ -1,20 +1,37 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import MessageItem from './MessageItem.svelte';
   import type { Message } from '$lib/types';
   import { chatStore } from '../../stores/chat.svelte';
+  import { messageEditsStore } from '../../stores/messageEdits.svelte';
+  import { toast } from '../ui/Toast.svelte';
   import { conversationsStore } from '../../stores/conversations.svelte';
   import Spinner from '../ui/Spinner.svelte';
   import { navigateTo } from '$lib/router';
 
   interface Props {
     conversationId: string;
-    onEdit: (msg: Message) => void;
+    onSave: (msg: Message, content: string) => Promise<void>;
     onRegenerate: (msg: Message) => void;
   }
-  let { conversationId, onEdit, onRegenerate }: Props = $props();
+  let { conversationId, onSave, onRegenerate }: Props = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let atBottom = $state(true);
+  let draftsReady = $state(false);
+
+  $effect(() => {
+    const id = conversationId;
+    let active = true;
+    draftsReady = false;
+    void untrack(() => messageEditsStore.load(id)).catch(error => {
+      toast(`Message drafts could not be loaded: ${(error as Error).message}`, 'error');
+    }).finally(() => { if (active) draftsReady = true; });
+    return () => {
+      active = false;
+      messageEditsStore.flush(id);
+    };
+  });
 
   function scrollToBottom() {
     if (container) container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
@@ -43,7 +60,7 @@
 </script>
 
 <div class="message-list" bind:this={container} onscroll={onScroll}>
-  {#if chatStore.loadingMessages}
+  {#if chatStore.loadingMessages || !draftsReady}
     <div class="list-center"><Spinner /></div>
   {:else if chatStore.allMessages.length === 0}
     <div class="list-empty">
@@ -57,7 +74,7 @@
         {conversationId}
         isStreaming={chatStore.streaming}
         isPending={!('id' in message)}
-        {onEdit}
+        {onSave}
         onRegenerate={onRegenerate}
         onDelete={handleDelete}
         onFork={handleFork}

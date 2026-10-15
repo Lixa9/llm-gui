@@ -511,6 +511,47 @@ conversation:
     const app=new Hono();app.route('/api/chat',relayRouter);app.route('/api/drafts',draftsRouter);app.route('/api/conversations',conversationsRouter);app.route('/api/uploads',uploadsRouter);
     const headers={cookie:`session=${sessionToken}`,'content-type':'application/json'};
 
+    // Message editing drafts are account-owned, independent of composer drafts,
+    // and disappear with their source messages without changing chat history.
+    const draftConversation = generateId(), draftUser = generateId(), draftAssistant = generateId();
+    await db.prepare('INSERT INTO conversations (id,owner_sub) VALUES (?,?)').run(draftConversation,owner);
+    for (const [id,role] of [[draftUser,'user'],[draftAssistant,'assistant']]) {
+      await db.prepare("INSERT INTO messages (id,conversation_id,role,content,content_text) VALUES (?,?,?,?,'original')")
+        .run(id,draftConversation,role,JSON.stringify([{type:'text',text:'original'}]));
+      const saved = await app.request(`/api/conversations/${draftConversation}/message-drafts/${id}`, {
+        method:'PUT',headers,body:JSON.stringify({text:`# Draft ${role}\n**raw** 👋`}),
+      });
+      assert.equal(saved.status,204,await saved.text());
+    }
+    const readMessageDrafts = async () => (await app.request(`/api/conversations/${draftConversation}/message-drafts`,{headers})).json();
+    assert.deepEqual(await readMessageDrafts(),{[draftUser]:'# Draft user\n**raw** 👋',[draftAssistant]:'# Draft assistant\n**raw** 👋'});
+    assert.deepEqual(await db.prepare('SELECT content_text FROM messages WHERE conversation_id=?').all(draftConversation),[{content_text:'original'},{content_text:'original'}]);
+    assert.equal((await app.request(`/api/drafts/${draftConversation}`,{method:'PUT',headers,body:JSON.stringify({text:'Composer draft',attachments:[]})})).status,204);
+    assert.equal(Object.keys(await readMessageDrafts() as object).length,2);
+    assert.equal((await app.request(`/api/conversations/${normal.conversationId}/message-drafts/${draftUser}`,{method:'PUT',headers,body:JSON.stringify({text:'Wrong chat'})})).status,404);
+    assert.equal((await app.request(`/api/conversations/${draftConversation}/message-drafts/not-a-uuid`,{method:'PUT',headers,body:JSON.stringify({text:'Invalid'})})).status,400);
+    assert.equal((await app.request(`/api/conversations/${draftConversation}/message-drafts/${draftUser}`,{method:'PUT',headers,body:JSON.stringify({text:'x'.repeat(1_000_001)})})).status,400);
+    assert.equal((await app.request(`/api/conversations/${draftConversation}/message-drafts`)).status,401);
+    assert.equal((await app.request(`/api/conversations/${draftConversation}/message-drafts/${draftUser}`,{method:'PUT',headers,body:JSON.stringify({text:''})})).status,204);
+    assert.equal((await readMessageDrafts() as Record<string,string>)[draftUser],'');
+    assert.equal((await app.request(`/api/conversations/${draftConversation}/message-drafts/${draftUser}`,{method:'DELETE',headers})).status,204);
+    assert.deepEqual(await readMessageDrafts(),{[draftAssistant]:'# Draft assistant\n**raw** 👋'});
+    await db.prepare('DELETE FROM messages WHERE id=?').run(draftAssistant);
+    assert.deepEqual(await readMessageDrafts(),{});
+    const otherOwner = `draft-other:${generateId()}`, otherConversation = generateId(), otherMessage = generateId();
+    await db.prepare("INSERT INTO users (sub,email) VALUES (?,'')").run(otherOwner);
+    try {
+      await db.prepare('INSERT INTO conversations (id,owner_sub) VALUES (?,?)').run(otherConversation,otherOwner);
+      await db.prepare("INSERT INTO messages (id,conversation_id,role) VALUES (?,?,'user')").run(otherMessage,otherConversation);
+      for (const method of ['GET','PUT','DELETE']) {
+        const path = `/api/conversations/${otherConversation}/message-drafts${method==='GET'?'':`/${otherMessage}`}`;
+        const response = await app.request(path,{method,headers,...(method==='PUT'?{body:JSON.stringify({text:'Unauthorized'})}:{})});
+        assert.equal(response.status,404);
+      }
+    } finally {
+      await db.prepare('DELETE FROM users WHERE sub=?').run(otherOwner);
+    }
+
     const rawImageId = generateId();
     await db.prepare("INSERT INTO uploads (id,owner_sub,sha256,filename,mime_type,size,data,derived_images) VALUES (?,?,'hash','legacy.png','image/png',3,?,'null'::jsonb)")
       .run(rawImageId,owner,Buffer.from([0,0,0]));

@@ -24,7 +24,7 @@
   const route = $derived(parseHashRoute(hash));
 
   function navigate(view: string) {
-    navigateTo(view);
+    navigateTo(view, view === 'chat' ? conversationsStore.activeId : undefined);
   }
 
   onMount(() => {

@@ -26,6 +26,8 @@ async function mockApp(page) {
     else if (path.startsWith('/api/drafts/')) data = { text: '', attachments: [] };
     else if (path === '/api/uploads/formats') data = [];
     else if (path === '/api/conversations/chat-1/messages') data = messages;
+    else if (path === '/api/conversations/chat-1/message-drafts') data = {};
+    else if (path.startsWith('/api/conversations/chat-1/message-drafts/')) return route.fulfill({ status: 204 });
     else if (path === '/api/conversations/chat-1') data = conversation;
     else {
       unexpected.push(`${route.request().method()} ${path}`);
@@ -202,7 +204,7 @@ for (const scenario of cases) test(`all editable fields: ${scenario.name}`, asyn
   for (const role of ['user', 'assistant']) {
     await page.locator(`.msg-${role}`).getByRole('button', { name: 'Edit', exact: true }).click();
     await probe('.edit-area', `edit ${role} message`);
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByRole('button', { name: 'Cancel editing', exact: true }).click();
   }
   for (const [button, selector, label] of [
     ['Rename conversation', '.rename-input', 'rename chat'],

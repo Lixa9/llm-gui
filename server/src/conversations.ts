@@ -242,6 +242,54 @@ conversationsRouter.get('/:id/messages', async (c) => {
   return c.json(rows.map(serializeMessage));
 });
 
+conversationsRouter.get('/:id/message-drafts', async (c) => {
+  const id = c.req.param('id'), owner = c.get('user').sub;
+  if (!z.string().uuid().safeParse(id).success) return c.json({ error: 'Invalid conversation ID' }, 400);
+  if (!await getDb().prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(id, owner))
+    return c.json({ error: 'Not found' }, 404);
+  const rows = await getDb().prepare(`
+    SELECT d.message_id, d.text FROM message_edit_drafts d
+    JOIN messages m ON m.id=d.message_id
+    WHERE d.user_sub=? AND m.conversation_id=?
+  `).all<{ message_id: string; text: string }>(owner, id);
+  return c.json(Object.fromEntries(rows.map(row => [row.message_id, row.text])));
+});
+
+conversationsRouter.put('/:id/message-drafts/:msgId', async (c) => {
+  const id = c.req.param('id'), msgId = c.req.param('msgId'), owner = c.get('user').sub;
+  if (![id, msgId].every(value => z.string().uuid().safeParse(value).success))
+    return c.json({ error: 'Invalid message ID' }, 400);
+  const parsed = z.object({ text: z.string().max(1_000_000) }).safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: 'Invalid message draft' }, 400);
+  const saved = await runTransaction(async db => {
+    await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(id);
+    const message = await db.prepare(`
+      SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
+      WHERE m.id=? AND c.id=? AND c.owner_sub=?
+    `).get(msgId, id, owner);
+    if (!message) return false;
+    await db.prepare(`
+      INSERT INTO message_edit_drafts (user_sub,message_id,text,updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(user_sub,message_id) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at
+    `).run(owner, msgId, parsed.data.text, Date.now());
+    return true;
+  });
+  return saved ? c.body(null, 204) : c.json({ error: 'Not found' }, 404);
+});
+
+conversationsRouter.delete('/:id/message-drafts/:msgId', async (c) => {
+  const id = c.req.param('id'), msgId = c.req.param('msgId'), owner = c.get('user').sub;
+  if (![id, msgId].every(value => z.string().uuid().safeParse(value).success))
+    return c.json({ error: 'Invalid message ID' }, 400);
+  if (!await getDb().prepare('SELECT id FROM conversations WHERE id=? AND owner_sub=?').get(id, owner))
+    return c.json({ error: 'Not found' }, 404);
+  await getDb().prepare(`
+    DELETE FROM message_edit_drafts d USING messages m
+    WHERE d.message_id=m.id AND d.user_sub=? AND m.id=? AND m.conversation_id=?
+  `).run(owner, msgId, id);
+  return c.body(null, 204);
+});
+
 conversationsRouter.patch('/:id/messages/:msgId', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');

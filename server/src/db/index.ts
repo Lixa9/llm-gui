@@ -253,6 +253,14 @@ async function applySchema(db: Db): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp, id);
     CREATE INDEX IF NOT EXISTS idx_msg_search ON messages USING GIN (to_tsvector('simple', content_text));
 
+    CREATE TABLE IF NOT EXISTS message_edit_drafts (
+      user_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+      message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (user_sub, message_id)
+    );
+
     CREATE TABLE IF NOT EXISTS chat_generations (
       id UUID PRIMARY KEY,
       conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
