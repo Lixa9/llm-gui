@@ -2,6 +2,8 @@
 
 A self-hosted chat application built with Svelte 5, a Hono server running on Node.js 26, and PostgreSQL. It connects to an OpenAI-compatible API for inference; it does not run models, tools, embeddings, RAG, or agent loops locally.
 
+This Frontend is designed for IaC, with user and model/intelligence management within the app being as minimal as possible. The App is expected to be set up with an LLM gateway, and for eventual agents to be deployed as a separate service. It is for that reason that reasonning and tool use is hidden from the user. That way, the particularities of agents vs simple llm don't have to be handled by the app, and the interface is simplified for the user.
+
 ## Features
 
 - Streaming chat with cancellation, regeneration, editing, forking, copying, and deletion.
