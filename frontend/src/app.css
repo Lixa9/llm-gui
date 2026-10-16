@@ -37,8 +37,8 @@
 
 /* Selection */
 ::selection {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
+  background: #93c5fd;
+  color: #0f172a;
 }
 
 /* Typography elements defaults */
